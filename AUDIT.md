@@ -89,14 +89,22 @@ inconsistent). This is the "here is your player profile" deliverable.
 ---
 
 ## Verification
-- Full file compiles cleanly (esbuild JSX bundle, 0 errors).
-- Importer logic proven in Node against a realistic SC4 Pro export — 14 assertions
-  covering title-row skipping, column detection, club recognition across messy
-  labels, mishit/impossible/duplicate/blank filtering, robust median carries,
-  dispersion, and 52°-wedge routing — plus a second suite run against the code as
-  actually inlined in `CaddieOS.jsx`. All pass.
-- Could not exercise the full React runtime in this environment (needs a browser +
-  `window.storage`); UI wiring was kept to the file's existing patterns.
+- Importer logic proven in Node against realistic SC4 Pro exports — column
+  detection, title-row skipping, club recognition across messy labels,
+  mishit/impossible/duplicate/blank filtering, robust median carries, dispersion,
+  52°-wedge routing, and signed left/right parsing (tracing + spin-axis fallback).
+  Suites run against the code as actually inlined in `CaddieOS.jsx`. All pass.
+- **End-to-end browser test** (headless Chromium on `caddie.html`): app renders with
+  no console/page errors; uploading a sample SC4 CSV shows the "We found N shots"
+  confirmation with the correct side-miss, and IMPORT produces the Caddie Profile.
+  This caught a real bundling bug — `CaddieOS.jsx` never imports `React`, so the
+  classic JSX transform left `React` undefined and the page rendered blank; fixed by
+  building with esbuild's automatic JSX runtime.
+
+## `caddie.html` (runnable build)
+Fully self-contained — React and the app are bundled and inlined (no CDN, no runtime
+transpile, works offline). `window.storage` is shimmed over `localStorage`.
+Regenerate with `npm run build` after editing `src/CaddieOS.jsx`.
 
 ## Recommended next steps (not done — would be scope creep here)
 1. Feed imported **dispersion** into the live decision engine (e.g. widen "center

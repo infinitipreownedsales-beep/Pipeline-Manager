@@ -1,50 +1,47 @@
-// Generates a self-contained, double-clickable caddie.html from src/CaddieOS.jsx.
-// No bundler needed: React 18 (UMD) + Babel-standalone from CDN transpile the JSX
-// in the browser, and window.storage is shimmed over localStorage so the app's
-// save/load works exactly like it does in the Claude artifact runtime.
+// Builds a fully self-contained, double-clickable caddie.html from src/CaddieOS.jsx.
+// React + ReactDOM + the app are bundled and INLINED — no CDN, no runtime Babel, no
+// network at all. Works offline, on any phone or desktop browser, and on GitHub Pages.
+// window.storage is shimmed over localStorage inside the bundle.
 //
 //   node build/gen-html.mjs   →   writes ./caddie.html
 //
+import esbuild from "esbuild";
 import fs from "fs";
 import path from "path";
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
-let src = fs.readFileSync(path.join(root, "src/CaddieOS.jsx"), "utf8");
 
-// The artifact imports React and default-exports the component. In a UMD/global
-// setup neither works, so rewrite both to the standalone equivalents.
-src = src.replace(/^\s*import\s*\{([^}]*)\}\s*from\s*["']react["'];?\s*$/m,
-                  "const {$1} = React;");
-src = src.replace(/export\s+default\s+function\s+CaddieOS/, "function CaddieOS");
+const result = await esbuild.build({
+  entryPoints: [path.join(root, "build/entry.jsx")],
+  bundle: true,
+  minify: true,
+  format: "iife",
+  target: ["es2018"],
+  loader: { ".jsx": "jsx" },
+  jsx: "automatic",   // inject react/jsx-runtime per file — CaddieOS.jsx never imports React itself
+  define: { "process.env.NODE_ENV": '"production"' },
+  write: false,
+});
+const js = result.outputFiles[0].text;
 
 const html = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="theme-color" content="#1a3a2e"/>
 <title>CaddieOS</title>
-<style>html,body{margin:0;background:#f2f2f7;-webkit-tap-highlight-color:transparent}</style>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+<style>html,body{margin:0;background:#f2f2f7;-webkit-tap-highlight-color:transparent}
+#root{min-height:100vh}</style>
 </head>
 <body>
 <div id="root">Loading your caddie…</div>
-<script>
-// Persist across sessions in this browser, matching the artifact's storage API.
-window.storage = window.storage || {
-  get: async (k) => { try { const v = localStorage.getItem(k); return v != null ? { value: v } : null; } catch (e) { return null; } },
-  set: async (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} }
-};
-</script>
-<script type="text/babel" data-presets="react">
-${src}
-const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(React.createElement(CaddieOS));
-</script>
+<script>${js}</script>
 </body>
 </html>
 `;
 
 fs.writeFileSync(path.join(root, "caddie.html"), html);
-console.log("Wrote caddie.html (" + (html.length / 1024).toFixed(0) + " kb). Open it in any browser.");
+console.log("Wrote caddie.html (" + (html.length / 1024).toFixed(0) + " kb, fully self-contained). Open it in any browser.");

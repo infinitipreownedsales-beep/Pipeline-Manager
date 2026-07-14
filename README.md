@@ -20,11 +20,18 @@ and get shot-by-shot calls that reflect how *you* actually hit it.
 - **Trends.** Rounds, ratings, and a per-club report over your whole history.
 
 ## Run it
-- **In a browser:** open `caddie.html` (double-click, or host it — e.g. GitHub Pages).
-  It loads React from a CDN and persists to `localStorage`. Regenerate it after
-  editing the source with `node build/gen-html.mjs`.
+- **In a browser (easiest):** open `caddie.html` — double-click it, or host it (e.g.
+  GitHub Pages). It's fully self-contained: React is bundled in, no internet needed,
+  and it persists to `localStorage`. On a phone, open the file and "Add to Home
+  Screen" for an app-like launch.
 - **As a Claude artifact:** paste `src/CaddieOS.jsx` into a Claude chat; it renders
   live using the `window.storage` API.
+
+### Rebuilding `caddie.html` after editing the source
+```
+npm install      # one time (esbuild + react + react-dom)
+npm run build    # regenerates caddie.html from src/CaddieOS.jsx
+```
 
 ## Files
 - `src/CaddieOS.jsx` — the app (canonical source).
