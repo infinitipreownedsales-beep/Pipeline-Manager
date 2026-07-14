@@ -19,11 +19,21 @@ and get shot-by-shot calls that reflect how *you* actually hit it.
   recalibration).
 - **Trends.** Rounds, ratings, and a per-club report over your whole history.
 
+## Run it
+- **In a browser:** open `caddie.html` (double-click, or host it — e.g. GitHub Pages).
+  It loads React from a CDN and persists to `localStorage`. Regenerate it after
+  editing the source with `node build/gen-html.mjs`.
+- **As a Claude artifact:** paste `src/CaddieOS.jsx` into a Claude chat; it renders
+  live using the `window.storage` API.
+
 ## Files
-- `src/CaddieOS.jsx` — the app.
+- `src/CaddieOS.jsx` — the app (canonical source).
+- `caddie.html` — self-contained runnable build (generated).
+- `build/gen-html.mjs` — regenerates `caddie.html` from the source.
 - `AUDIT.md` — engineering audit: bugs fixed, the importer, and what's next.
 
 ## Note on data
-The SC4 Pro is a Doppler radar behind the ball: it measures distance/ball/club data,
-not left/right offline. The app reports distance reliability honestly and only shows
-side-miss when the uploaded file actually contains an offline column.
+The app reads **distance and left/right**: it learns each club's stock carry, its
+reliability (dispersion), and its miss side from your export's side-carry tracing or
+spin axis. If a file lacks side data entirely, side-miss is simply omitted — never
+fabricated.

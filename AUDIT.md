@@ -67,11 +67,14 @@ What it does, all automatic:
   into the profile the decision engine already runs on. The 52° scoring wedge is
   routed into the app's `w52` full-smooth window instead of a plain carry.
 
-### Data-honesty note (important for trust)
-The **Swing Caddie SC4 Pro is a Doppler radar behind the ball — it does not measure
-left/right offline.** So the importer reports *distance* reliability and short/long
-tendency, and only shows a side-miss if the file actually contains an offline column.
-We do not fabricate left/right data the device never recorded.
+### Left/right miss (SC4 Pro side tracing + spin axis)
+SC4 Pro exports include **side-carry tracing** and **spin axis (left/right spin)**, so
+the importer learns each club's **miss side** too. It prefers measured offline yards
+(tracing) and falls back to spin-axis direction (curve) when only that is present.
+Per club we compute a dominant miss side and how often (e.g. *"misses right 68%"*),
+shown in the confirmation screen, the Caddie Profile, and the club report. Right is
+positive, left is negative; the parser handles `R12` / `L8` / `-8` / `+3` codings.
+If a file has neither side nor axis, we simply omit it — we never invent a direction.
 
 ---
 

@@ -1,5 +1,25 @@
-import { useState, useEffect } from "react";
-
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>CaddieOS</title>
+<style>html,body{margin:0;background:#f2f2f7;-webkit-tap-highlight-color:transparent}</style>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+</head>
+<body>
+<div id="root">Loading your caddie…</div>
+<script>
+// Persist across sessions in this browser, matching the artifact's storage API.
+window.storage = window.storage || {
+  get: async (k) => { try { const v = localStorage.getItem(k); return v != null ? { value: v } : null; } catch (e) { return null; } },
+  set: async (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} }
+};
+</script>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
 // CADDIE OS v10 — DYNAMIC ROUND ENGINE
 // Every shot logs the club actually used (tap to change, layups tappable).
 // Hot/cold detection per club · one-tap bench from the alert ·
@@ -303,7 +323,7 @@ const S = {
   pill:(bg,fg)=>({display:"inline-block",background:bg,color:fg,borderRadius:20,padding:"3px 10px",fontSize:11,fontWeight:800}),
 };
 
-export default function CaddieOS(){
+function CaddieOS(){
   const [tab,setTab]=useState("play");
   const [P,setP]=useState(DEF_PROFILE);
   const [rounds,setRounds]=useState([]);
@@ -1012,3 +1032,9 @@ export default function CaddieOS(){
     </div>
   );
 }
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(CaddieOS));
+</script>
+</body>
+</html>
