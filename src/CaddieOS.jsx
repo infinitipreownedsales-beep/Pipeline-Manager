@@ -88,7 +88,7 @@ const famOf = c => (c.includes("52")||c.includes("½")||c.includes("¾"))?"52":(
 const clubFlags = (shots=[],fams=["52"]) => {
   const out={cold:[],hot:[],adj:{}};
   fams.forEach(f=>{
-    const mine=shots.filter(x=>famOf(x.c)===f&&(!x.lie||x.lie==="FW")&&(x.g||x.from>x.exp+8));
+    const mine=shots.filter(x=>famOf(x.c)===f&&!x.p&&(!x.lie||x.lie==="FW")&&(x.g||x.from>x.exp+8));
     if(mine.length<2) return;
     const last2=mine.slice(-2);
     const errOf=x=>x.g?0:(x.gain-x.exp);
@@ -144,6 +144,121 @@ const store = {
   async set(k,v){try{await window.storage.set(k,JSON.stringify(v));}catch(e){}}
 };
 
+// ================= SC4 PRO / LAUNCH-MONITOR IMPORTER =================
+// Upload a CSV → we auto-detect the columns, recognize the clubs, drop bad data
+// and duplicates, and derive stock carries + reliability. The golfer never has to
+// think "what format is this?" — they plug in their data and the caddie learns.
+// NOTE: the Swing Caddie SC4 Pro is a Doppler radar behind the ball — it records
+// distance/ball/club numbers but NOT left/right offline. We only surface a side
+// tendency if the file actually contains an offline column; we never invent one.
+const IMP_FIELDS={
+  club:["club","club type","clubtype","club name","selected club"],
+  carry:["carry","carry distance","carry dist"],
+  total:["total","total distance","distance","swing distance","dist"],
+  ball:["ball speed","ballspeed","ball","bs"],
+  clubspd:["club speed","clubspeed","club head speed","swing speed","chs"],
+  smash:["smash","smash factor","efficiency"],
+  spin:["spin","spin rate","backspin"],
+  side:["side","side carry","offline","lateral","l/r"],
+  date:["date","time","timestamp","datetime","date/time","shot time"]
+};
+const impNorm=h=>String(h||"").toLowerCase().replace(/[()]/g," ").replace(/[_\-]/g," ")
+  .replace(/\b(yds|yards|yard|mph|rpm|deg|degrees|ft|feet|m)\b/g," ")
+  .replace(/[^a-z0-9 /]/g," ").replace(/\s+/g," ").trim();
+function impLoftWedge(deg){
+  if(deg>=44&&deg<=48) return "PW";
+  if(deg>=49&&deg<=53) return {money:true};   // the 52° scoring-wedge family (w52)
+  if(deg>=54&&deg<=57) return "SW";
+  if(deg>=58&&deg<=64) return "LW";
+  return null;
+}
+function impRecognizeClub(raw){
+  if(raw==null) return null;
+  let s=String(raw).trim().toLowerCase().replace(/°/g,"").replace(/\s+/g," ");
+  if(!s) return null;
+  const a={"driver":"Dr","dr":"Dr","d":"Dr","1w":"Dr","1 wood":"Dr","3 wood":"3W","3w":"3W",
+    "5 wood":"5W","5w":"5W","7 wood":"7W","7w":"7W","pw":"PW","pitching wedge":"PW",
+    "gw":"52m","gap wedge":"52m","aw":"52m","a":"52m","approach":"52m",
+    "sw":"SW","sand wedge":"SW","lw":"LW","lob wedge":"LW"};
+  if(a[s]) return a[s]==="52m"?{money:true}:a[s];
+  let m=s.match(/^(\d{1,2})$/);
+  if(m){const n=+m[1]; if(n>=1&&n<=9) return n+"i"; return impLoftWedge(n);}
+  m=s.match(/^(\d{1,2})\s*(i|iron|irons|h|hy|hyb|hybrid|w|wd|wood|woods)?$/);
+  if(m){const n=+m[1],t=m[2]||"i";
+    const suf=/^(h|hy|hyb|hybrid)/.test(t)?"H":/^(w|wd|wood)/.test(t)?"W":"i";
+    if(suf==="W"&&n===1) return "Dr"; return n+suf;}
+  m=s.match(/^(\d{2})\s*(deg|degree|degrees)$/);
+  if(m) return impLoftWedge(+m[1]);
+  return null;
+}
+function impSplit(line){const out=[];let cur="",q=false;
+  for(let i=0;i<line.length;i++){const ch=line[i];
+    if(q){ if(ch==='"'){ if(line[i+1]==='"'){cur+='"';i++;} else q=false; } else cur+=ch; }
+    else { if(ch==='"') q=true; else if(ch===","||ch==="\t"||ch===";"){out.push(cur);cur="";} else cur+=ch; }}
+  out.push(cur); return out;}
+const impNum=v=>{if(v==null)return null;const s=String(v).replace(/[^0-9.\-]/g,"");
+  if(s===""||s==="-"||s===".")return null;const n=parseFloat(s);return isNaN(n)?null:n;};
+function impParse(text){
+  if(!text||!text.trim()) return {ok:false,error:"That file looks empty."};
+  const lines=text.split(/\r\n|\r|\n/).filter(l=>l.trim()!=="");
+  if(lines.length<2) return {ok:false,error:"No shots found — the file has no data rows."};
+  const grid=lines.map(impSplit);
+  let hIdx=0,hScore=0;
+  for(let r=0;r<Math.min(grid.length,8);r++){let sc=0;
+    grid[r].forEach(c=>{const n=impNorm(c);for(const f in IMP_FIELDS){if(IMP_FIELDS[f].includes(n)){sc++;break;}}});
+    if(sc>hScore){hScore=sc;hIdx=r;}}
+  const header=grid[hScore>=2?hIdx:0];
+  const cols={}; header.forEach((c,idx)=>{const n=impNorm(c);
+    for(const f in IMP_FIELDS){if(cols[f]===undefined&&IMP_FIELDS[f].includes(n))cols[f]=idx;}});
+  if(cols.carry===undefined&&cols.total===undefined)
+    return {ok:false,error:"Couldn't find a distance column (carry or total). Columns seen: "+header.join(", ")};
+  const rows=[];
+  for(let i=(hScore>=2?hIdx:0)+1;i<grid.length;i++){const c=grid[i];
+    if(c.length===1&&c[0].trim()==="")continue;
+    let carry=cols.carry!==undefined?impNum(c[cols.carry]):null;
+    let total=cols.total!==undefined?impNum(c[cols.total]):null;
+    if(carry===null&&total!==null)carry=total; if(total===null&&carry!==null)total=carry;
+    const rawClub=cols.club!==undefined?String(c[cols.club]||"").trim():"";
+    rows.push({rawClub,club:impRecognizeClub(rawClub),carry,total,
+      ball:cols.ball!==undefined?impNum(c[cols.ball]):null,
+      smash:cols.smash!==undefined?impNum(c[cols.smash]):null,
+      side:cols.side!==undefined?impNum(c[cols.side]):null,
+      date:cols.date!==undefined?String(c[cols.date]||"").trim():""});}
+  return {ok:true,rows,columns:cols,hasSide:cols.side!==undefined};
+}
+const impMed=a=>{const s=a.slice().sort((x,y)=>x-y);const m=s.length>>1;return s.length%2?s[m]:(s[m-1]+s[m])/2;};
+const impQ=(a,q)=>{const s=a.slice().sort((x,y)=>x-y);const p=(s.length-1)*q,b=Math.floor(p),r=p-b;
+  return s[b+1]!==undefined?s[b]+r*(s[b+1]-s[b]):s[b];};
+function impClean(rows){
+  const removed={unusable:0,impossible:0,duplicate:0,mishit:0};
+  const seen=new Set(); const step=[];
+  for(const r of rows){
+    if(r.carry===null||r.carry<=0){removed.unusable++;continue;}
+    if(r.carry>400||(r.ball!==null&&r.ball>240)||(r.smash!==null&&(r.smash>1.7||r.smash<0.5))){removed.impossible++;continue;}
+    const key=[r.date,r.rawClub,r.carry,r.ball].join("|");
+    if(seen.has(key)){removed.duplicate++;continue;} seen.add(key); step.push(r);}
+  const keyOf=c=>c==null?null:(typeof c==="object"?"52m":c);
+  const groups={},unknown=[];
+  for(const r of step){const k=keyOf(r.club); if(k===null){unknown.push(r.rawClub);continue;} (groups[k]=groups[k]||[]).push(r);}
+  const clubs={};
+  for(const k in groups){const arr=groups[k];const med=impMed(arr.map(r=>r.carry));
+    const kept=arr.filter(r=>{const bad=r.carry<0.55*med; if(bad)removed.mishit++; return !bad;});
+    if(!kept.length)continue; const cs=kept.map(r=>r.carry);const m2=impMed(cs);
+    clubs[k]={n:kept.length,carry:Math.round(m2),lowN:Math.round(impQ(cs,0.2)),hiN:Math.round(impQ(cs,0.8)),
+      sd:Math.round(Math.sqrt(cs.reduce((a,b)=>a+(b-m2)*(b-m2),0)/cs.length)),
+      shortRate:Math.round(cs.filter(c=>c<m2-8).length/cs.length*100),
+      side:kept.some(r=>r.side!=null)?Math.round(impMed(kept.filter(r=>r.side!=null).map(r=>r.side))):null};}
+  return {clubs,removed,unknownLabels:[...new Set(unknown.filter(Boolean))],kept:step.length};
+}
+const IMP_ORDER=["Dr","2W","3W","4W","5W","7W","9W","1H","2H","3H","4H","5H","6H",
+  "2i","3i","4i","5i","6i","7i","8i","9i","PW","SW","LW"];
+function impToProfile(clubs){
+  const carries={}; for(const k of IMP_ORDER){if(clubs[k])carries[k]=clubs[k].carry;}
+  const w52fs=clubs["52m"]?[clubs["52m"].lowN,clubs["52m"].hiN]:null;
+  return {carries,w52fs};
+}
+// ====================================================================
+
 const mapCarry=(c,P)=>{const fm=famOf(c);if(fm==="52")return c.includes("½")?62:c.includes("¾")?82:88;if(fm==="chip")return 22;return P.carries[fm]||100;};
 const MiniMap=({h,P,plan})=>{const uw=268;const tx=d=>16+Math.min(d/h.y,1)*uw;
   const hz=h.hz.toUpperCase();const bands=[];
@@ -194,6 +309,9 @@ export default function CaddieOS(){
   const [wind,setWind]=useState("NONE");
   const [dir,setDir]=useState(null);
   const [showRep,setShowRep]=useState(false);
+  const [imp,setImp]=useState(null);        // staged import awaiting confirmation
+  const [impErr,setImpErr]=useState("");
+  const [dragOver,setDragOver]=useState(false);
   const undoShot=()=>{
     if(live.onGreen&&live.putts>0){saveLive({...live,putts:live.putts-1});return;}
     const hs=live.shots||[];let idx=-1;
@@ -226,16 +344,47 @@ export default function CaddieOS(){
     setLoaded(true);})();},[]);
   const saveLive=l=>{setLive(l);store.set("caddie:live",l);};
 
+  // --- Launch-monitor import: read file → parse → clean → stage for confirmation ---
+  const handleImportFiles=fileList=>{
+    setImpErr(""); setImp(null);
+    const file=fileList&&fileList[0];
+    if(!file) return;
+    if(!/\.(csv|txt|tsv)$/i.test(file.name)){setImpErr("Please drop a .csv export from your launch monitor.");return;}
+    const reader=new FileReader();
+    reader.onload=()=>{
+      const parsed=impParse(String(reader.result));
+      if(!parsed.ok){setImpErr(parsed.error);return;}
+      const cleaned=impClean(parsed.rows);
+      if(!Object.keys(cleaned.clubs).length){setImpErr("Found rows, but no clubs we could recognize. Check the Club column.");return;}
+      setImp({fileName:file.name,raw:parsed.rows.length,hasSide:parsed.hasSide,
+        clubs:cleaned.clubs,removed:cleaned.removed,unknownLabels:cleaned.unknownLabels,
+        patch:impToProfile(cleaned.clubs)});
+    };
+    reader.onerror=()=>setImpErr("Couldn't read that file.");
+    reader.readAsText(file);
+  };
+  const applyImport=()=>{
+    if(!imp) return;
+    const carries={...P.carries,...imp.patch.carries};
+    const w52=imp.patch.w52fs?{...P.w52,fs:imp.patch.w52fs}:P.w52;
+    const clubStats={...(P.clubStats||{}),...imp.clubs};
+    const p={...P,carries,w52,clubStats,updated:new Date().toISOString()};
+    setP(p); store.set("caddie:profile",p);
+    const n=Object.keys(imp.patch.carries).length+(imp.patch.w52fs?1:0);
+    setMeMsg(`Imported ${imp.raw} shots — ${n} clubs learned. Your caddie now runs on your real numbers.`);
+    setImp(null); setImpErr("");
+  };
+
   const CH=(live&&COURSES[live.course]?COURSES[live.course]:COURSES[courseSel]).holes;
   const flags=clubFlags((live&&live.shots)||[],["52",...Object.keys(P.carries)]);
   const E=engine(P,(live&&live.bench)||[],flags.adj);
   const chips=["52½","52¾","52FS",...Object.keys(P.carries).sort((a,b)=>P.carries[a]-P.carries[b]),"CHIP"];
   const allShots=[...rounds.flatMap(r=>r.shots||[]),...((live&&live.shots)||[])];
-  const disp=fm=>{const e=allShots.filter(x=>famOf(x.c)===fm&&!x.g&&(!x.lie||x.lie==="FW")&&x.from>x.exp+8).map(x=>x.gain-x.exp);if(e.length<2)return null;const avg=Math.round(e.reduce((a,b)=>a+b,0)/e.length);const sd=Math.round(Math.sqrt(e.reduce((a,b)=>a+(b-avg)*(b-avg),0)/e.length));return{n:e.length,avg,sd};};
+  const disp=fm=>{const e=allShots.filter(x=>famOf(x.c)===fm&&!x.g&&!x.p&&(!x.lie||x.lie==="FW")&&x.from>x.exp+8).map(x=>x.gain-x.exp);if(e.length<2)return null;const avg=Math.round(e.reduce((a,b)=>a+b,0)/e.length);const sd=Math.round(Math.sqrt(e.reduce((a,b)=>a+(b-avg)*(b-avg),0)/e.length));return{n:e.length,avg,sd};};
   const ncdf=z=>1/(1+Math.exp(-1.702*z));
   const greenProb=fm=>{const d=disp(fm);if(!d)return null;const sd=Math.max(d.sd,4);return Math.round((ncdf((12-d.avg)/sd)-ncdf((-12-d.avg)/sd))*100);};
   const conf=fm=>{const d=disp(fm);if(!d)return null;const da=Math.max(0,100-Math.abs(d.avg)*4),di=Math.max(0,100-d.sd*4);
-    const rec2=allShots.filter(x=>famOf(x.c)===fm&&(!x.lie||x.lie==="FW")&&(x.g||x.from>x.exp+8)).slice(-2);
+    const rec2=allShots.filter(x=>famOf(x.c)===fm&&!x.p&&(!x.lie||x.lie==="FW")&&(x.g||x.from>x.exp+8)).slice(-2);
     const rf=rec2.length<2?70:rec2.every(x=>x.g||Math.abs(x.gain-x.exp)<=8)?100:rec2.some(x=>!x.g&&x.gain-x.exp<=-15)?35:65;
     return Math.round(da*0.35+di*0.35+rf*0.3);};
   const dirBias=fm=>{const dd=allShots.filter(x=>famOf(x.c)===fm&&x.dir);if(dd.length<3)return null;const r=dd.filter(x=>x.dir==="R").length;const pct=Math.round(r/dd.length*100);return pct>=65?"R "+pct+"%":pct<=35?"L "+(100-pct)+"%":null;};
@@ -255,8 +404,8 @@ export default function CaddieOS(){
   },[live?live.hole:-1,live?live.strokes:-1,live?live.onGreen:false,live&&live.bench?live.bench.join(","):""]);
 
   const startRound=()=>saveLive({course:courseSel,hole:0,strokes:0,rem:CH[0].y,onGreen:false,putts:0,i35At:null,teeAck:false,bench:[],shots:[],scores:Array(18).fill(null),puttsArr:Array(18).fill(null),convs:Array(18).fill(null)});
-  const logShot=(gain,g)=>{
-    const shot={c:sel||"?",from:live.rem,gain,exp:E.chipCarry(sel||"CHIP"),g:g?1:0,h:live.hole+1,lie,dir};
+  const logShot=(gain,g,syn)=>{
+    const shot={c:sel||"?",from:live.rem,gain,exp:E.chipCarry(sel||"CHIP"),g:g?1:0,p:syn?1:0,h:live.hole+1,lie,dir};
     let l={...live,strokes:live.strokes+1,shots:[...(live.shots||[]),shot]};
     const nr=live.rem-gain;
     if(g||nr<=0){l.onGreen=true;}
@@ -326,6 +475,7 @@ export default function CaddieOS(){
               <button key={k} onClick={()=>setCourseSel(k)} style={{...S.btn,flex:1,fontSize:13,background:courseSel===k?"#1a3a2e":"#f2f2f7",color:courseSel===k?"#86efac":"#111"}}>{c.name}</button>))}
           </div>
           <button onClick={startRound} style={{...S.btn,background:"#1a3a2e",color:"#86efac",width:"100%",fontSize:17}}>START ROUND</button>
+          {!P.clubStats&&<button onClick={()=>setTab("me")} style={{...S.btn,background:"transparent",color:"#1a3a2e",width:"100%",fontSize:13,marginTop:6,textDecoration:"underline"}}>📥 First time? Upload your launch-monitor data → get your caddie profile</button>}
         </div>}
 
         {inspecting&&(()=>{const i=viewHole,h=CH[i],sc=live.scores[i];return (<>
@@ -463,7 +613,7 @@ export default function CaddieOS(){
             </div>
             <div style={{display:"flex",gap:8,marginBottom:8}}>
               <button onClick={()=>logShot(live.rem,true)} style={{...S.btn,flex:1,background:"#30d158",color:"white"}}>ON GREEN</button>
-              <button onClick={()=>{const b=E.chipCarry(sel||"CHIP");const g=lie==="DEEP"?75:Math.round(b*(lie==="ROUGH"?0.9:lie==="TREES"?0.62:1));if(g>=live.rem){logShot(live.rem,true);}else{logShot(g);}}} style={{...S.btn,flex:1,background:"#1a3a2e",color:"#86efac"}}>ON PLAN</button>
+              <button onClick={()=>{const b=E.chipCarry(sel||"CHIP");const g=lie==="DEEP"?75:Math.round(b*(lie==="ROUGH"?0.9:lie==="TREES"?0.62:1));if(g>=live.rem){logShot(live.rem,true);}else{logShot(g,false,true);}}} style={{...S.btn,flex:1,background:"#1a3a2e",color:"#86efac"}}>ON PLAN</button>
             </div>
             <div style={{display:"flex",gap:8}}>
               <input type="number" value={atInput} onChange={e=>setAtInput(e.target.value)} placeholder="yards left" style={{...S.inp,flex:1,fontSize:19}}/>
@@ -592,7 +742,7 @@ export default function CaddieOS(){
             {h.gap&&<span style={S.pill("#ff453a","white")}>🔴 GAP HOLE</span>}
             <div style={{...S.sub,margin:"8px 0",background:"#f7f7fa",borderRadius:10,padding:"9px 11px"}}>{h.vibe}</div>
             <MiniMap h={h} P={P} plan={getPlan(h)}/>
-            {h.plan.map((s,i)=>(
+            {getPlan(h).map((s,i)=>(
               <div key={i} style={{display:"flex",gap:10,padding:"9px 0",borderTop:"1px solid #f2f2f7"}}>
                 <div style={{minWidth:26,height:26,borderRadius:13,background:"#1a3a2e",color:"#86efac",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:12,flexShrink:0}}>{i+1}</div>
                 <div style={{minWidth:0}}><div style={{fontSize:14,fontWeight:800}}>{s.c} — {s.a}</div><div style={{fontSize:12,color:"#6e6e73"}}>{s.t}</div></div>
@@ -682,7 +832,8 @@ export default function CaddieOS(){
       <div style={S.card}>
         <div style={S.h}>Club report — every tracked shot</div>
         {(()=>{const all=rounds.flatMap(r=>r.shots||[]);if(!all.length)return <div style={S.sub}>Play a round — every club selection is logged automatically and reported here.</div>;
-          const rows=["52","PW","9i","7i","8i","3W"].map(f=>{const mine=all.filter(x=>famOf(x.c)===f);if(!mine.length)return null;const errs=mine.filter(x=>!x.g&&(!x.lie||x.lie==="FW")&&x.from>x.exp+8).map(x=>x.gain-x.exp);const m=errs.length?Math.round(errs.reduce((a,b)=>a+b,0)/errs.length):0;const sd=errs.length>1?Math.round(Math.sqrt(errs.reduce((a,b)=>a+(b-m)*(b-m),0)/errs.length)):0;const gpct=Math.round(mine.filter(x=>x.g||Math.abs(x.gain-x.exp)<=8).length/mine.length*100);return {f,n:mine.length,m,sd,gpct};}).filter(Boolean);
+          const fams=["52",...Object.keys(P.carries)];
+          const rows=fams.map(f=>{const mine=all.filter(x=>famOf(x.c)===f&&!x.p);if(!mine.length)return null;const errs=mine.filter(x=>!x.g&&(!x.lie||x.lie==="FW")&&x.from>x.exp+8).map(x=>x.gain-x.exp);const m=errs.length?Math.round(errs.reduce((a,b)=>a+b,0)/errs.length):0;const sd=errs.length>1?Math.round(Math.sqrt(errs.reduce((a,b)=>a+(b-m)*(b-m),0)/errs.length)):0;const gpct=Math.round(mine.filter(x=>x.g||Math.abs(x.gain-x.exp)<=8).length/mine.length*100);return {f,n:mine.length,m,sd,gpct};}).filter(Boolean);
           return rows.map((r,i)=>(<div key={i} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid #f2f2f7"}}>
             <span style={{fontSize:14,fontWeight:800}}>{r.f}</span>
             <span style={{fontSize:12,color:"#3a3a3c"}}>{r.n} shots · {r.m>=0?"+":""}{r.m}y · ±{r.sd}y{(()=>{const b=dirBias(r.f);return b?" · miss "+b:"";})()} · {r.gpct}% on <span style={{fontWeight:800,color:r.gpct>=60?"#1a7f37":r.gpct>=40?"#ff9f0a":"#ff453a"}}>{r.gpct>=60?"HOT":r.gpct>=40?"OK":"COLD"}</span></span>
@@ -699,6 +850,85 @@ export default function CaddieOS(){
           <div style={S.h}>Player</div>
           <input value={P.name} onChange={e=>setP({...P,name:e.target.value})} style={{...S.inp,width:"100%"}}/>
         </div>
+
+        {P.clubStats&&Object.keys(P.clubStats).length>0&&(()=>{
+          const lbl=k=>k==="52m"?"52° wedge":k==="Dr"?"Driver":k;
+          const cs=P.clubStats;const keys=Object.keys(cs).sort((a,b)=>cs[b].carry-cs[a].carry);
+          const scoring=keys.filter(k=>cs[k].carry<=140);
+          const best=scoring.slice().sort((a,b)=>cs[a].sd-cs[b].sd)[0];
+          const longest=keys[0];
+          const shaky=keys.slice().sort((a,b)=>cs[b].sd-cs[a].sd)[0];
+          const shortMiss=keys.filter(k=>cs[k].shortRate>=60).sort((a,b)=>cs[b].shortRate-cs[a].shortRate)[0];
+          const rel=sd=>sd<=5?["ROCK SOLID","#1a7f37"]:sd<=9?["reliable","#1a7f37"]:sd<=14?["variable","#ff9f0a"]:["inconsistent","#ff453a"];
+          const attack=keys.filter(k=>cs[k].carry>=175&&cs[k].carry<=260).slice(-1)[0];
+          return (<div style={{...S.card,background:"#1a3a2e"}}>
+            <div style={{color:"#86efac",fontSize:10,letterSpacing:2,fontWeight:800,marginBottom:2}}>{(P.name||"YOUR").toUpperCase()}'S CADDIE PROFILE</div>
+            <div style={{color:"white",fontSize:12,marginBottom:10,opacity:0.75}}>Built from your uploaded shots — {Object.values(cs).reduce((a,c)=>a+c.n,0)} strikes analyzed.</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+              <div style={{background:"rgba(255,255,255,0.08)",borderRadius:10,padding:"8px 10px"}}>
+                <div style={{color:"#6b9e7a",fontSize:9,fontWeight:800,letterSpacing:1}}>LONGEST</div>
+                <div style={{color:"white",fontSize:15,fontWeight:800}}>{lbl(longest)} · {cs[longest].carry}y</div>
+              </div>
+              {best&&<div style={{background:"rgba(255,255,255,0.08)",borderRadius:10,padding:"8px 10px"}}>
+                <div style={{color:"#6b9e7a",fontSize:9,fontWeight:800,letterSpacing:1}}>BEST SCORING CLUB</div>
+                <div style={{color:"white",fontSize:15,fontWeight:800}}>{lbl(best)} · ±{cs[best].sd}y</div>
+              </div>}
+              {shaky&&cs[shaky].sd>10&&<div style={{background:"rgba(255,69,58,0.18)",borderRadius:10,padding:"8px 10px"}}>
+                <div style={{color:"#ffb3ad",fontSize:9,fontWeight:800,letterSpacing:1}}>LEAST TRUSTED</div>
+                <div style={{color:"white",fontSize:15,fontWeight:800}}>{lbl(shaky)} · ±{cs[shaky].sd}y</div>
+              </div>}
+              {attack&&<div style={{background:"rgba(255,255,255,0.08)",borderRadius:10,padding:"8px 10px"}}>
+                <div style={{color:"#6b9e7a",fontSize:9,fontWeight:800,letterSpacing:1}}>SMART TARGET</div>
+                <div style={{color:"white",fontSize:15,fontWeight:800}}>Middle greens {cs[attack].carry}+</div>
+              </div>}
+            </div>
+            {shortMiss&&<div style={{color:"#fcd34d",fontSize:12,fontWeight:700,marginBottom:8}}>⚠ {lbl(shortMiss)} finishes short {cs[shortMiss].shortRate}% of the time — the engine already plays it one club up.</div>}
+            <div style={{borderTop:"1px solid rgba(255,255,255,0.12)",paddingTop:6}}>
+              {keys.map(k=>{const c=cs[k],[word,col]=rel(c.sd);
+                return <div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 0"}}>
+                  <span style={{color:"white",fontSize:13,fontWeight:800,minWidth:74}}>{lbl(k)}</span>
+                  <span style={{color:"#9fd6b4",fontSize:12,flex:1,textAlign:"right"}}>{c.carry}y · plays {c.lowN}–{c.hiN} · {c.n} shots</span>
+                  <span style={{fontSize:11,fontWeight:800,color:col==="#1a7f37"?"#86efac":col,minWidth:74,textAlign:"right"}}>±{c.sd}y {word}</span>
+                </div>;})}
+            </div>
+          </div>);})()}
+
+        <div style={{...S.card,border:dragOver?"2.5px dashed #30d158":"2.5px dashed #c7c7cc"}}
+          onDragOver={e=>{e.preventDefault();setDragOver(true);}}
+          onDragLeave={()=>setDragOver(false)}
+          onDrop={e=>{e.preventDefault();setDragOver(false);handleImportFiles(e.dataTransfer.files);}}>
+          <div style={S.h}>Upload launch-monitor data</div>
+          {!imp&&<>
+            <div style={{...S.sub,fontSize:12,marginBottom:10}}>Drop your <b>SC4 Pro</b> (or any launch-monitor) <b>.csv</b> export here — or tap to browse. We detect the format automatically, recognize your clubs, drop mishits and duplicates, and set your stock carries. No formatting required.</div>
+            <label htmlFor="lm-file" style={{...S.btn,display:"block",textAlign:"center",background:"#1a3a2e",color:"#86efac",cursor:"pointer"}}>📥 Choose CSV file</label>
+            <input id="lm-file" type="file" accept=".csv,.txt,.tsv" style={{display:"none"}} onChange={e=>handleImportFiles(e.target.files)}/>
+            {impErr&&<div style={{marginTop:8,fontSize:12,fontWeight:700,color:"#ff453a"}}>⚠ {impErr}</div>}
+            <div style={{fontSize:11,color:"#8a8a8e",marginTop:8}}>Note: the SC4 Pro measures distance, not left/right — so we report distance reliability, and only show side-miss if your file includes an offline column.</div>
+          </>}
+          {imp&&(()=>{const lbl=k=>k==="52m"?"52° wedge":k==="Dr"?"Driver":k;
+            const rm=imp.removed,dropped=rm.unusable+rm.impossible+rm.duplicate+rm.mishit;
+            const keys=Object.keys(imp.clubs).sort((a,b)=>imp.clubs[b].carry-imp.clubs[a].carry);
+            return (<>
+              <div style={{...S.big,fontSize:20,color:"#1a7f37"}}>We found {imp.raw} shots{imp.fileName?" in "+imp.fileName:""}.</div>
+              <div style={{...S.sub,fontSize:12,margin:"4px 0 10px"}}>Here's what your caddie will learn. Review, then import.</div>
+              <div style={{border:"1px solid #eee",borderRadius:10,overflow:"hidden",marginBottom:10}}>
+                {keys.map((k,i)=>{const c=imp.clubs[k];const isNew=P.carries[k]===undefined&&k!=="52m";
+                  return <div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 10px",background:i%2?"#fafafa":"white",gap:8}}>
+                    <span style={{fontSize:14,fontWeight:800,minWidth:70}}>{lbl(k)}</span>
+                    <span style={{fontSize:12,color:"#3a3a3c",flex:1,textAlign:"right"}}>{c.n} shots → <b>{c.carry}y</b> (plays {c.lowN}–{c.hiN}) · ±{c.sd}y{c.shortRate>=60?" · misses short "+c.shortRate+"%":""}{c.side!=null?" · side "+(c.side>0?"R":"L")+Math.abs(c.side)+"y":""}</span>
+                    <span style={S.pill(isNew?"#e7f7ec":"#eef2ff",isNew?"#1a7f37":"#3730a3")}>{isNew?"NEW":"UPDATE"}</span>
+                  </div>;})}
+              </div>
+              {dropped>0&&<div style={{fontSize:11,color:"#8a8a8e",marginBottom:6}}>Filtered out {dropped}: {[rm.mishit&&rm.mishit+" mishits",rm.duplicate&&rm.duplicate+" duplicates",rm.impossible&&rm.impossible+" impossible readings",rm.unusable&&rm.unusable+" blank rows"].filter(Boolean).join(" · ")}.</div>}
+              {imp.unknownLabels.length>0&&<div style={{fontSize:11,color:"#c2410c",marginBottom:6}}>⚠ Couldn't recognize {imp.unknownLabels.length} label(s): {imp.unknownLabels.slice(0,6).join(", ")} — those shots were skipped.</div>}
+              {imp.patch.w52fs&&<div style={{fontSize:11,color:"#1a7f37",marginBottom:8}}>Your 52° full-smooth window set to {imp.patch.w52fs[0]}–{imp.patch.w52fs[1]}y.</div>}
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={applyImport} style={{...S.btn,flex:1,background:"#1a3a2e",color:"#86efac"}}>IMPORT — LEARN MY GAME</button>
+                <button onClick={()=>{setImp(null);setImpErr("");}} style={{...S.btn,background:"#f2f2f7",color:"#111"}}>Cancel</button>
+              </div>
+            </>);})()}
+        </div>
+
         <div style={S.card}>
           <div style={S.h}>Your bag — add every club you carry</div>
           {Object.keys(P.carries).sort((a,b)=>P.carries[a]-P.carries[b]).map(k=>(
