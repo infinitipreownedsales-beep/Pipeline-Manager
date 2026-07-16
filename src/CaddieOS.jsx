@@ -14,11 +14,11 @@ const DEF_PROFILE = {
 };
 const BP_HOLES = [
  {n:1,par:4,y:360,tgt:5,gap:false,r3:null,star:false,vibe:"Opening statement. Tight corridor, water breathing on the left — but this hole folds to three smooth swings. Set the tone: unhurried, left-center, rotation wedge to the middle.",hz:"Water LEFT full length · elevated green",cue:"Two smooth 7-irons, ¾ wedge, two putts.",plan:[{c:"7i",a:"Left-center corridor",t:"Smooth 74, stand closer. Corridor first, distance second."},{c:"7i",a:"Left-center advance",t:"Same swing again. Leaves 80y — a number you own."},{c:"52° ¾",a:"CENTER green",t:"80–84 window. Glove logo down, rotation stops the club."}]},
- {n:2,par:4,y:381,tgt:5,gap:false,r3:null,star:false,vibe:"The gut check. One committed 3W over the creek is the whole hole — everything after is routine. You've cleared it before. Left edge, full send, then back to smooth.",hz:"MUST CARRY creek 191y · water L · pond R of green",cue:"One committed swing, then smooth home.",plan:[{c:"3W",a:"LEFT EDGE — full commit",t:"Governor suspended for ONE swing. Right bias 22–42y, so left edge. Step off if not 100% in."},{c:"9i",a:"Center advance",t:"Back to smooth 74. Leaves 66y."},{c:"52° firm ½",a:"Center-LEFT",t:"Mid-gap number: firm half, one pick, zero doubt. Pond right — never right."}]},
+ {n:2,par:4,y:381,carry:191,carryLabel:"the creek",tgt:5,gap:false,r3:null,star:false,vibe:"The gut check. One committed 3W over the creek is the whole hole — everything after is routine. You've cleared it before. Left edge, full send, then back to smooth.",hz:"MUST CARRY creek 191y · water L · pond R of green",cue:"One committed swing, then smooth home.",plan:[{c:"3W",a:"LEFT EDGE — full commit",t:"Governor suspended for ONE swing. Right bias 22–42y, so left edge. Step off if not 100% in."},{c:"9i",a:"Center advance",t:"Back to smooth 74. Leaves 66y."},{c:"52° firm ½",a:"Center-LEFT",t:"Mid-gap number: firm half, one pick, zero doubt. Pond right — never right."}]},
  {n:3,par:3,y:110,tgt:4,gap:true,r3:null,star:false,vibe:"The island of discipline. 110 yards of pure temptation to reach for the 52 — don't. PW smooth to dead center, take your two putts, walk off smiling.",hz:"🔴 GAP 110y · water surrounds",cue:"PW smooth dead center — the 112 was a flyer.",plan:[{c:"PW",a:"CENTER — never the flag",t:"115 carry = 5 past center = safe. Long-center beats short-wet by two strokes. Full finish."}]},
  {n:4,par:5,y:516,tgt:6,gap:true,r3:"3-PUTT",star:false,vibe:"The long march. Water owns the right for 516 yards — so you never look right. Four disciplined shots, PW long-center, and redemption on the green where R3 leaked three putts.",hz:"Water RIGHT all hole · 3W banned · 🔴 gap approach",cue:"Never right, PW long-center, no 3-putt this time.",plan:[{c:"7i",a:"CENTER — never right",t:"Stand closer, smooth 74. Left rough is a friend here."},{c:"7i",a:"Center-left",t:"Identical swing. →236y."},{c:"8i",a:"Center-left",t:"Fairway lie only (rough → 9i). Leaves 91y."},{c:"PW",a:"CENTER — never flag",t:"🔴 Gap zone. PW finishes long-center — that IS the plan, not a miss."}]},
  {n:5,par:4,y:374,tgt:5,gap:true,r3:null,star:false,vibe:"Thread the needle, cash the gap. Tight trees force patience, then the PW gap protocol turns 109 awkward yards into 6-feet-past-center routine.",hz:"Trees tight · water front-left of green · 🔴 gap approach",cue:"9i, 7i, PW long-center — gap covered when you aim center.",plan:[{c:"9i",a:"Center corridor",t:"125 into the neck. Nothing fancy."},{c:"7i",a:"Center-left",t:"Leaves 109y."},{c:"PW",a:"Center-LEFT",t:"🔴 Gap. 115 carry = 6 past center. Water front-left — center-left aim only."}]},
- {n:6,par:3,y:150,tgt:4,gap:false,r3:null,star:false,vibe:"The commitment test. All carry, all water, and the ONLY bad miss is short. Long is rough. Free your swing — this is the one green where over is applauded.",hz:"Water fronts — full carry ~145y · over back = SAFE",cue:"Commit through it — the only bad miss is short.",plan:[{c:"8i",a:"Center green — COMMIT",t:"Governor suspended. Full through-swing, finish high. Over back = safe rough."}]},
+ {n:6,par:3,y:150,carry:145,carryLabel:"the water",tgt:4,gap:false,r3:null,star:false,vibe:"The commitment test. All carry, all water, and the ONLY bad miss is short. Long is rough. Free your swing — this is the one green where over is applauded.",hz:"Water fronts — full carry ~145y · over back = SAFE",cue:"Commit through it — the only bad miss is short.",plan:[{c:"8i",a:"Center green — COMMIT",t:"Governor suspended. Full through-swing, finish high. Over back = safe rough."}]},
  {n:7,par:5,y:483,tgt:6,gap:false,r3:"3-PUTT",star:false,vibe:"The corridor test. Dogleg RIGHT into a tight tree-walled chute that bends gently the rest of the way home. Nobody cuts this corner and survives — position, position, position, then your best number: 88, full smooth. Two putts this time.",hz:"Trees LEFT and RIGHT — walls · dogleg RIGHT, never cut the corner · narrow corridor after the turn · uphill green",cue:"Three smooth shots, full-smooth wedge — two putts, not three.",plan:[{c:"7i",a:"CENTER — never cut right",t:"Smooth 74 to the corner. Short of the turn is fine; through the trees is not."},{c:"7i",a:"Dead center of the corridor",t:"Tree walls both sides — corridor discipline, one target. →203y."},{c:"PW",a:"Center corridor",t:"Leaves 88y — the sweetest number in the bag."},{c:"52° FS",a:"CENTER green",t:"85–90 confirmed. Uphill green — firm first putt, back of cup."}]},
  {n:8,par:4,y:328,tgt:5,gap:false,r3:null,star:false,vibe:"The clean machine. Three numbers that all exist: 7i, 9i, half rotation. No hero shots available, none needed. This is what the system looks like when it hums.",hz:"Trees tight · 9i off tee banned (short of fairway)",cue:"7i, 9i, half rotation — three numbers that all exist.",plan:[{c:"7i",a:"Left-center fairway",t:"9i doesn't reach the fairway — 7i every time."},{c:"9i",a:"Center",t:"Leaves 63y."},{c:"52° ½",a:"CENTER",t:"60–64 confirmed. Rotation only."}]},
  {n:9,par:4,y:323,tgt:5,gap:false,r3:null,star:false,vibe:"The vigilance hole. OB left, and the new pull-draw would love to visit. Center, never left, provisional out loud on any doubt — then a stock ¾ wedge closes the front nine.",hz:"OB LEFT — provisional immediately · pull-draw watch",cue:"Center never left — say provisional out loud on doubt.",plan:[{c:"9i",a:"CENTER — never left",t:"Residual right-miss helps here. If it starts left, provisional NOW."},{c:"PW",a:"Center",t:"Leaves 83y."},{c:"52° ¾",a:"Center, bias right",t:"80–84 confirmed. OB left = right-of-center is correct here only."}]},
@@ -231,6 +231,7 @@ function impParse(text){
     const rawClub=cols.club!==undefined?String(c[cols.club]||"").trim():"";
     rows.push({rawClub,club:impRecognizeClub(rawClub),carry,total,
       ball:cols.ball!==undefined?impNum(c[cols.ball]):null,
+      clubspd:cols.clubspd!==undefined?impNum(c[cols.clubspd]):null,
       smash:cols.smash!==undefined?impNum(c[cols.smash]):null,
       side:cols.side!==undefined?impSide(c[cols.side]):null,
       axis:cols.axis!==undefined?impSide(c[cols.axis]):null,
@@ -265,9 +266,12 @@ function impClean(rows){
       if(tot>=3){const dir=right>=left?"R":"L";
         side={dir,pct:Math.round(Math.max(right,left)/tot*100),med:Math.round(impMed(src)),
           unit:useYds?"y":"°",basis:useYds?"tracing":"spin axis",n:tot};}}
+    const spds=kept.map(r=>r.clubspd).filter(v=>v!=null&&v>0);
+    const spd=spds.length>=3?{lo:Math.round(impQ(spds,0.2)),hi:Math.round(impQ(spds,0.8))}:null;
     clubs[k]={n:kept.length,carry:Math.round(m2),lowN:Math.round(impQ(cs,0.2)),hiN:Math.round(impQ(cs,0.8)),
       sd:Math.round(Math.sqrt(cs.reduce((a,b)=>a+(b-m2)*(b-m2),0)/cs.length)),
-      shortRate:Math.round(cs.filter(c=>c<m2-8).length/cs.length*100),side};}
+      shortRate:Math.round(cs.filter(c=>c<m2-8).length/cs.length*100),side,
+      spdLo:spd?spd.lo:null,spdHi:spd?spd.hi:null};}
   return {clubs,removed,unknownLabels:[...new Set(unknown.filter(Boolean))],kept:step.length};
 }
 const IMP_ORDER=["Dr","2W","3W","4W","5W","7W","9W","1H","2H","3H","4H","5H","6H",
@@ -338,6 +342,7 @@ export default function CaddieOS(){
     for(let k=hs.length-1;k>=0;k--){if(hs[k].h===live.hole+1){idx=k;break;}}
     if(idx<0){if(live.onGreen)saveLive({...live,onGreen:false});return;}
     const shot=hs[idx];const shots=hs.slice(0,idx).concat(hs.slice(idx+1));
+    if(shot.pen){saveLive({...live,shots,pen:Math.max(0,(live.pen||0)-1)});return;}
     const hh=shots.filter(x=>x.h===live.hole+1);let a=null;hh.forEach((x,k)=>{const left=x.g?0:x.from-x.gain;if(left<=35&&a===null)a=k+1;});
     saveLive({...live,shots,strokes:Math.max(0,live.strokes-1),rem:shot.from,onGreen:false,i35At:a});
   };
@@ -345,7 +350,7 @@ export default function CaddieOS(){
   const editLiveHole=(hi,d)=>{const sc=[...live.scores];sc[hi]=Math.max(1,(sc[hi]||CH[hi].tgt)+d);saveLive({...live,scores:sc});};
   const editLivePutts=(hi,d)=>{const pa=[...live.puttsArr];pa[hi]=Math.max(0,(pa[hi]||0)+d);saveLive({...live,puttsArr:pa});};
   const convCycle=hi=>{const cv=[...live.convs];cv[hi]=cv[hi]===true?false:cv[hi]===false?null:true;saveLive({...live,convs:cv});};
-  const playHoleNow=i=>{saveLive({...live,hole:i,strokes:0,rem:(live.teeAdj&&live.teeAdj[i])||CH[i].y,onGreen:false,putts:0,i35At:null,teeAck:false});setViewHole(null);};
+  const playHoleNow=i=>{saveLive({...live,hole:i,strokes:0,rem:(live.teeAdj&&live.teeAdj[i])||CH[i].y,onGreen:false,putts:0,pen:0,i35At:null,teeAck:false});setViewHole(null);};
   const endSave=()=>{const idx=live.scores.map((sc,i)=>sc!==null?i:-1).filter(i=>i>=0);
     if(idx.length){const rd={date:new Date().toLocaleDateString(),course:COURSES[live.course]?COURSES[live.course].name:"",holes:idx.length,total:idx.reduce((a,i)=>a+live.scores[i],0),plan:idx.reduce((a,i)=>a+CH[i].tgt,0),scores:live.scores.map(sc=>sc===null?0:sc),putts:live.puttsArr.reduce((a,b)=>a+(b||0),0),convMade:live.convs.filter(c=>c===true).length,convTried:live.convs.filter(c=>c!==null).length,benched:live.bench||[],shots:live.shots||[]};saveRounds([...rounds,rd]);}
     saveLive(null);store.set("caddie:live",null);setEndArm(false);setTab("trends");};
@@ -400,6 +405,19 @@ export default function CaddieOS(){
   const E=engine(P,(live&&live.bench)||[],flags.adj);
   const chips=["52½","52¾","52FS",...Object.keys(P.carries).sort((a,b)=>P.carries[a]-P.carries[b]),"CHIP"];
   const allShots=[...rounds.flatMap(r=>r.shots||[]),...((live&&live.shots)||[])];
+  // Real club data present → the live engine drives every call; the scripted book is retired.
+  const learned=!!(P.clubStats&&Object.keys(P.clubStats).length>0)||allShots.some(x=>!x.pen);
+  const csKey=fm=>fm==="52"?"52m":fm;
+  const cstat=fm=>P.clubStats?P.clubStats[csKey(fm)]:null;
+  // Data-driven tips for a club family (only when sample size supports it — no generic lines).
+  const clubTips=fm=>{const c=cstat(fm),t=[];if(!c)return t;
+    if(c.spdLo&&c.spdHi&&c.spdLo!==c.spdHi)t.push(`${fm} dials in ${c.spdLo}–${c.spdHi} mph club speed`);
+    if(c.n>=5&&c.sd<=7)t.push(`${fm} ±${c.sd}y — trust it`);
+    return t.slice(0,2);};
+  // Lateral aim-off from measured side bias: aim half the bias the opposite way.
+  const aimOff=fm=>{const c=cstat(fm);if(!c||!c.side||c.side.med==null||Math.abs(c.side.med)<2)return null;
+    const off=Math.round(Math.abs(c.side.med)/2);const bias=c.side.med>0?"right":"left";const aim=c.side.med>0?"left":"right";
+    return {off,bias,aim,text:`Biases ${Math.abs(c.side.med)}y ${bias} — aim ${off}y ${aim}`};};
   const disp=fm=>{const e=allShots.filter(x=>famOf(x.c)===fm&&!x.g&&!x.p&&(!x.lie||x.lie==="FW")&&x.from>x.exp+8).map(x=>x.gain-x.exp);if(e.length<2)return null;const avg=Math.round(e.reduce((a,b)=>a+b,0)/e.length);const sd=Math.round(Math.sqrt(e.reduce((a,b)=>a+(b-avg)*(b-avg),0)/e.length));return{n:e.length,avg,sd};};
   const ncdf=z=>1/(1+Math.exp(-1.702*z));
   const greenProb=fm=>{const d=disp(fm);if(!d)return null;const sd=Math.max(d.sd,4);return Math.round((ncdf((12-d.avg)/sd)-ncdf((-12-d.avg)/sd))*100);};
@@ -410,6 +428,11 @@ export default function CaddieOS(){
   const dirBias=fm=>{const dd=allShots.filter(x=>famOf(x.c)===fm&&x.dir);if(dd.length<3)return null;const r=dd.filter(x=>x.dir==="R").length;const pct=Math.round(r/dd.length*100);return pct>=65?"R "+pct+"%":pct<=35?"L "+(100-pct)+"%":null;};
   const pullDraw=(()=>{const dd=allShots.filter(x=>x.dir).slice(-3);return dd.length===3&&dd.filter(x=>x.dir==="L").length>=2;})();
   const H=live?CH[live.hole]:null;
+  // Live distances to key marks (carry hazard / dogleg corner) from the ball's spot.
+  const holeMarks=(()=>{if(!H||!live)return [];const covered=H.y-live.rem;const m=[];
+    if(H.carry&&H.carry-covered>0)m.push(`${H.carry-covered} yds to clear ${H.carryLabel||"the hazard"}`);
+    if(H.corner&&H.corner-covered>0)m.push(`${H.corner-covered} yds to the ${H.cornerLabel||"corner"}`);
+    return m;})();
   const getPlan=h=>h.plan||genPlan(h,P,(live&&live.bench)||[]);
   const GP=live?getPlan(H):[];
   const effRem=live?(wind==="INTO"?Math.round(live.rem*1.08):wind==="DOWN"?Math.round(live.rem*0.94):live.rem):0;
@@ -418,12 +441,13 @@ export default function CaddieOS(){
 
   useEffect(()=>{ if(!live||live.onGreen){setSel(null);return;}
     const hp=getPlan(CH[live.hole]);
-    const bk=live.strokes<hp.length?bookChipOf(hp[live.strokes].c,P):null;
+    const bk=(!learned&&live.strokes<hp.length)?bookChipOf(hp[live.strokes].c,P):null;
     const bkOk=bk&&!(live.bench||[]).includes(famOf(bk));
     setSel(bkOk?bk:(R?R.chip:(L&&L[0]?L[0].k:Object.keys(P.carries)[0])));setTeeIn("");setLie("FW");setObIn("");setDir(null);setWind("NONE");
   },[live?live.hole:-1,live?live.strokes:-1,live?live.onGreen:false,live&&live.bench?live.bench.join(","):""]);
 
-  const startRound=()=>saveLive({course:courseSel,hole:0,strokes:0,rem:CH[0].y,onGreen:false,putts:0,i35At:null,teeAck:false,bench:[],shots:[],scores:Array(18).fill(null),puttsArr:Array(18).fill(null),convs:Array(18).fill(null)});
+  const startRound=()=>saveLive({course:courseSel,hole:0,strokes:0,rem:CH[0].y,onGreen:false,putts:0,pen:0,i35At:null,teeAck:false,bench:[],shots:[],scores:Array(18).fill(null),puttsArr:Array(18).fill(null),convs:Array(18).fill(null)});
+  const addPenalty=()=>saveLive({...live,pen:(live.pen||0)+1,shots:[...(live.shots||[]),{pen:1,from:live.rem,c:"Penalty",h:live.hole+1}]});
   const logShot=(gain,g,syn)=>{
     const shot={c:sel||"?",from:live.rem,gain,exp:E.chipCarry(sel||"CHIP"),g:g?1:0,p:syn?1:0,h:live.hole+1,lie,dir};
     let l={...live,strokes:live.strokes+1,shots:[...(live.shots||[]),shot]};
@@ -433,7 +457,8 @@ export default function CaddieOS(){
     saveLive(l);setAtInput("");
   };
   const holeOut=()=>{
-    const total=live.strokes+live.putts+1,h=live.hole;
+    const pen=live.pen||0;
+    const total=live.strokes+live.putts+pen+1,h=live.hole;
     const conv=live.i35At!==null?(total-live.i35At)<=3:null;
     const sc=[...live.scores];sc[h]=total;
     const pa=[...live.puttsArr];pa[h]=live.putts+1;
@@ -443,7 +468,7 @@ export default function CaddieOS(){
       const nr=[...rounds,rd];setRounds(nr);store.set("caddie:rounds",nr);
       saveLive(null);store.set("caddie:live",null);setTab("trends");
     } else {const nxt=(()=>{let n=(h+1)%18;while(sc[n]!==null&&n!==h)n=(n+1)%18;return n;})();
-      saveLive({...live,hole:nxt,strokes:0,rem:(live.teeAdj&&live.teeAdj[nxt])||CH[nxt].y,onGreen:false,putts:0,i35At:null,teeAck:false,scores:sc,puttsArr:pa,convs:cv});}
+      saveLive({...live,hole:nxt,strokes:0,rem:(live.teeAdj&&live.teeAdj[nxt])||CH[nxt].y,onGreen:false,putts:0,pen:0,i35At:null,teeAck:false,scores:sc,puttsArr:pa,convs:cv});}
   };
 
   const TabBtn=({id,icon,label})=>(
@@ -529,7 +554,7 @@ export default function CaddieOS(){
             </div>
             {(live.shots||[]).filter(x=>x.h===i+1).length>0&&<div style={{borderTop:"1px solid #f2f2f7",paddingTop:8}}>
               <div style={S.h}>Shot progression</div>
-              {(live.shots||[]).filter(x=>x.h===i+1).map((x,k)=>(<div key={k} style={{fontSize:12,color:"#3a3a3c",padding:"2px 0"}}>{k+1}. <b>{x.c}</b> from {x.from}y → {x.g?"GREEN":(x.from-x.gain)+"y left"}{x.g?"":" ("+(x.gain-x.exp>=0?"+":"")+(x.gain-x.exp)+" vs number)"}</div>))}
+              {(live.shots||[]).filter(x=>x.h===i+1).map((x,k)=>(<div key={k} style={{fontSize:12,color:x.pen?"#c2410c":"#3a3a3c",padding:"2px 0"}}>{k+1}. {x.pen?<><b>Penalty</b> +1 stroke (stroke &amp; distance, still {x.from}y)</>:<><b>{x.c}</b> from {x.from}y → {x.g?"GREEN":(x.from-x.gain)+"y left"}{x.g?"":" ("+(x.gain-x.exp>=0?"+":"")+(x.gain-x.exp)+" vs number)"}</>}</div>))}
             </div>}
             <button onClick={()=>playHoleNow(i)} style={{...S.btn,width:"100%",marginTop:10,background:"#fff4ec",color:"#c2410c",fontSize:13}}>REPLAY THIS HOLE (overwrites score)</button>
           </div>
@@ -547,9 +572,10 @@ export default function CaddieOS(){
             <div style={{color:"#86efac",fontSize:11,letterSpacing:2,fontWeight:800}}>HOLE {H.n} · PAR {H.par} · {H.y} YDS</div>
             <span style={S.pill("rgba(255,255,255,0.18)","#fcd34d")}>TARGET {H.tgt}</span>
           </div>
-          <div style={{color:"white",fontSize:16,lineHeight:1.5,fontWeight:600,marginBottom:10}}>{H.vibe}</div>
-          {H.r3&&<div style={{color:"#d8b4fe",fontSize:12,fontWeight:700,marginBottom:4}}>◆ R3 leaked here: {H.r3} — today it comes back.</div>}
-          {H.gap&&<div style={{color:"#ffb3ad",fontSize:12,fontWeight:700,marginBottom:4}}>🔴 Gap-zone hole — PW smooth center, never the flag.</div>}
+          {!learned&&<div style={{color:"white",fontSize:16,lineHeight:1.5,fontWeight:600,marginBottom:10}}>{H.vibe}</div>}
+          {!learned&&H.r3&&<div style={{color:"#d8b4fe",fontSize:12,fontWeight:700,marginBottom:4}}>◆ R3 leaked here: {H.r3} — today it comes back.</div>}
+          {!learned&&H.gap&&<div style={{color:"#ffb3ad",fontSize:12,fontWeight:700,marginBottom:4}}>🔴 Gap-zone hole — PW smooth center, never the flag.</div>}
+          {holeMarks.length>0&&<div style={{color:"#fcd34d",fontSize:12,fontWeight:700,marginBottom:6}}>{holeMarks.map((m,i)=><div key={i}>▸ {m}</div>)}</div>}
           <MiniMap h={H} P={P} plan={getPlan(H)}/>
           <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8}}>
             <span style={{color:"#6b9e7a",fontSize:10,fontWeight:800,letterSpacing:1}}>TEE DISTANCE</span>
@@ -557,7 +583,7 @@ export default function CaddieOS(){
             <button onClick={()=>{const v=parseInt(teeIn)||live.rem;saveLive({...live,rem:v,teeAdj:{...(live.teeAdj||{}),[live.hole]:v}});setTeeIn("");}} style={{...S.btn,padding:"8px 12px",fontSize:12,background:"rgba(255,255,255,0.18)",color:"#86efac"}}>SET</button>
             <span style={{color:"#6b9e7a",fontSize:9}}>different tees / closed holes</span>
           </div>
-          <div style={{color:"#6b9e7a",fontSize:12,marginBottom:12}}>{H.plan?"The book":"Caddie plan"}: {getPlan(H).map(p=>p.c).join(" → ")} · ⚠ {H.hz}</div>
+          <div style={{color:"#6b9e7a",fontSize:12,marginBottom:12}}>{learned?<>⚠ {H.hz}</>:<>{H.plan?"The book":"Caddie plan"}: {getPlan(H).map(p=>p.c).join(" → ")} · ⚠ {H.hz}</>}</div>
           <button onClick={()=>saveLive({...live,teeAck:true})} style={{...S.btn,width:"100%",background:"#86efac",color:"#1a3a2e",fontSize:16}}>STEP TO THE TEE →</button>
         </div>}
 
@@ -582,20 +608,21 @@ export default function CaddieOS(){
             {R&&<button onClick={()=>setSel(R.chip)} style={{display:"block",width:"100%",textAlign:"left",background:sel===R.chip?"#eafff1":"white",border:sel===R.chip?"2.5px solid #30d158":"2.5px solid #e5e5ea",borderRadius:14,padding:"11px 13px",cursor:"pointer",boxSizing:"border-box"}}>
               <div style={{fontSize:10,letterSpacing:1.4,fontWeight:800,color:sel===R.chip?"#1a7f37":"#8a8a8e"}}>SUGGESTED{sel===R.chip?" · SELECTED ✓":" — TAP TO SELECT"}</div>
               <div style={{...S.big,color:R.color==="#30d158"?"#1a7f37":R.color}}>{R.club}</div>
-              <div style={{fontSize:13,fontWeight:800,color:"#1a3a2e",margin:"5px 0 3px"}}>💭 {(P.feels&&P.feels[famOf(R.chip)])||R.cue}</div>
+              {(()=>{const ao=aimOff(famOf(R.chip));return ao?<div style={{fontSize:12,fontWeight:800,color:"#c2410c",margin:"5px 0 3px"}}>⟵⟶ {ao.text}</div>:null;})()}
               {wind!=="NONE"&&wind!=="CROSS"&&<div style={{fontSize:11,fontWeight:800,color:"#0a84ff",marginBottom:3}}>🌬 {live.rem}y plays like ~{effRem}y {wind==="INTO"?"into the wind":"downwind"}</div>}
               {wind==="CROSS"&&<div style={{fontSize:11,fontWeight:800,color:"#0a84ff",marginBottom:3}}>🌬 Crosswind — aim the upwind edge; expect a wider spread.</div>}
-              {(()=>{const d=disp(famOf(R.chip));return d?<div style={{fontSize:11,fontWeight:700,color:"#6e6e73",marginBottom:3}}>📊 {d.n} tracked · avg {d.avg>=0?"+":""}{d.avg}y ({d.avg>4?"runs long":d.avg<-4?"runs short — engine already compensating":"on your number"}) · ±{d.sd}y{d.sd>=12?" — wide: center only":""}</div>:null;})()}
+              {(()=>{const d=disp(famOf(R.chip));return d?<div style={{fontSize:11,fontWeight:700,color:"#6e6e73",marginBottom:3}}>📏 Distance vs your number: {d.avg>=0?"+":""}{d.avg}y avg · ±{d.sd}y{d.sd>=12?" — wide: center only":""}</div>:null;})()}
+              {(()=>{const t=clubTips(famOf(R.chip));return t.length?<div style={{fontSize:11,fontWeight:700,color:"#1a7f37",marginBottom:3}}>{t.map((x,i)=><div key={i}>📊 {x}</div>)}</div>:null;})()}
               {(()=>{const gp=greenProb(famOf(R.chip)),cf=conf(famOf(R.chip));return (gp!==null||cf!==null)?<div style={{fontSize:11,fontWeight:800,color:"#1a7f37",marginBottom:3}}>{gp!==null?"🎯 On-target probability ~"+gp+"%":""}{gp!==null&&cf!==null?" · ":""}{cf!==null?"Confidence "+cf+"/100":""}</div>:null;})()}
               <div style={S.sub}>{R.note}</div>
             </button>}
-            {!tourn&&L&&L.length>0&&<>
-              <div style={{...S.h,marginTop:6}}>Positioning alternatives — tap to choose</div>
-              {L.map((o,i)=>(<button key={i} onClick={()=>setSel(o.k)} style={{display:"block",width:"100%",textAlign:"left",background:sel===o.k?"#eafff1":"white",border:sel===o.k?"2px solid #30d158":"2px solid #e5e5ea",borderRadius:12,padding:"10px 12px",marginTop:8,cursor:"pointer"}}>
+            {!tourn&&L&&L[0]&&(()=>{const o=L[0];return <>
+              <div style={{...S.h,marginTop:6}}>Alternative — tap to choose</div>
+              <button onClick={()=>setSel(o.k)} style={{display:"block",width:"100%",textAlign:"left",background:sel===o.k?"#eafff1":"white",border:sel===o.k?"2px solid #30d158":"2px solid #e5e5ea",borderRadius:12,padding:"10px 12px",marginTop:8,cursor:"pointer"}}>
                 <div style={{fontSize:15,fontWeight:800}}>{sel===o.k?"✅ ":""}{o.k} ({o.carry}y) → leaves {o.rem}y</div>
                 <div style={{fontSize:12,color:o.r.color==="#30d158"?"#1a7f37":o.r.color,fontWeight:700}}>then: {o.r.club}</div>
-              </button>))}
-            </>}
+              </button>
+            </>;})()}
             <div style={{display:"flex",gap:5,marginTop:10,flexWrap:"wrap"}}>
               <span style={{fontSize:10,fontWeight:800,color:"#8a8a8e",letterSpacing:1,alignSelf:"center"}}>LIE</span>
               {["FW","ROUGH","DEEP","SAND","TREES"].map(v=>(<button key={v} onClick={()=>{setLie(v);if(v==="DEEP")setSel("52FS");else if(v==="TREES")setSel("PW");else if(v==="ROUGH"&&sel&&famOf(sel)==="8i")setSel("9i");}} style={{...S.btn,padding:"7px 10px",fontSize:11,background:lie===v?"#1a3a2e":"#f2f2f7",color:lie===v?"#86efac":"#111"}}>{v==="FW"?"FAIRWAY":v}</button>))}
@@ -618,7 +645,7 @@ export default function CaddieOS(){
                   return <button key={c} onClick={()=>setSel(c)} style={{flexShrink:0,border:"none",borderRadius:10,padding:"9px 11px",fontSize:13,fontWeight:800,cursor:"pointer",background:on?"#1a3a2e":"#f2f2f7",color:on?"#86efac":"#111"}}>{c}{hot?"🔥":cold?"❄":""}<span style={{fontSize:9,fontWeight:700,opacity:0.65}}> {E.chipCarry(c)}</span></button>;})}
               </div>
             </div>
-            {!tourn&&live.strokes<GP.length&&<div style={{marginTop:8,background:"#eaf4ff",borderRadius:10,padding:"8px 10px"}}>
+            {!tourn&&!learned&&live.strokes<GP.length&&<div style={{marginTop:8,background:"#eaf4ff",borderRadius:10,padding:"8px 10px"}}>
               <div style={{fontSize:10,fontWeight:800,color:"#0a84ff",letterSpacing:1}}>{H.plan?"THE BOOK":"CADDIE CALL"} · SHOT {live.strokes+1} · AUTO-SELECTED</div>
               <div style={{fontSize:13,fontWeight:800}}>{GP[step].c} — {GP[step].a}</div>
               <div style={{fontSize:12,color:"#3a3a3c"}}>{GP[step].t}</div>
@@ -639,6 +666,7 @@ export default function CaddieOS(){
               <input type="number" value={atInput} onChange={e=>setAtInput(e.target.value)} placeholder="yards left" style={{...S.inp,flex:1,fontSize:19}}/>
               <button onClick={()=>atInput&&logShot(live.rem-parseInt(atInput))} style={{...S.btn,background:"#0a84ff",color:"white"}}>REPLAN</button>
             </div>
+            <button onClick={addPenalty} style={{...S.btn,width:"100%",marginTop:8,background:"#fff1f0",color:"#c2410c",fontSize:13}}>+ PENALTY (stroke &amp; distance){live.pen>0?" — "+live.pen+" this hole":""}</button>
             <div style={{display:"flex",gap:5,marginTop:8,flexWrap:"wrap",alignItems:"center"}}>
               <span style={{fontSize:9,fontWeight:800,color:"#8a8a8e",letterSpacing:1}}>WIND</span>
               {[["NONE","—"],["INTO","INTO"],["DOWN","DOWN"],["CROSS","CROSS"]].map(([k,l])=>(
@@ -656,7 +684,7 @@ export default function CaddieOS(){
               <button onClick={undoShot} style={{border:"none",background:"#f2f2f7",color:"#3a3a3c",borderRadius:8,padding:"5px 10px",fontSize:11,fontWeight:800,cursor:"pointer",marginBottom:6}}>↩ UNDO</button>
             </div>
             <div style={{...S.big,color:"#1a7f37"}}>BACK OF CUP</div>
-            <div style={{...S.sub,marginBottom:10}}>Two-putt ceiling. Putts: <b>{live.putts}</b> · holing now = <b>{live.strokes+live.putts+1}</b>{live.i35At!==null?(live.strokes+live.putts+1-live.i35At)<=3?" · 🎯 conversion ✓":" · 🎯 conversion ✗":""}</div>
+            <div style={{...S.sub,marginBottom:10}}>Two-putt ceiling. Putts: <b>{live.putts}</b>{live.pen>0?<> · penalties: <b>{live.pen}</b></>:null} · holing now = <b>{live.strokes+live.putts+(live.pen||0)+1}</b>{live.i35At!==null?(live.strokes+live.putts+(live.pen||0)+1-live.i35At)<=3?" · 🎯 conversion ✓":" · 🎯 conversion ✗":""}</div>
             <div style={{display:"flex",gap:8}}>
               <button onClick={()=>saveLive({...live,putts:live.putts+1})} style={{...S.btn,flex:1,background:"#f2f2f7",color:"#111"}}>+ PUTT missed</button>
               <button onClick={holeOut} style={{...S.btn,flex:1,background:"#1a3a2e",color:"#86efac"}}>HOLED ✓</button>
