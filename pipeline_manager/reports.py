@@ -1,0 +1,234 @@
+"""Turn an EngineResult into the five clean output tables (brief §19).
+
+    1. Order Priority       — ranked BUILD / alt / option worklist, NEED per config.
+    2. Overstock / Wholesale — over-target configs, wholesale-now counts, aged flags.
+    3. Wholesale VIN sheet   — printable, VIN-led list of aged eligible units.
+    4. Demo Dashboard        — suppressed units, ages, swap flags.
+    5. Pace Check            — actual vs predicted 60-day pace per model, with a read.
+
+Each builder returns plain dicts/lists so the same data can be rendered as text,
+markdown, CSV or JSON without recomputation.
+"""
+
+from __future__ import annotations
+
+from .engine import EngineResult
+from .keys import xround
+
+MODELS = ("QX80", "QX60", "QX65")
+
+
+# --------------------------------------------------------------------------- #
+# 1. Order Priority
+# --------------------------------------------------------------------------- #
+def order_priority(res: EngineResult) -> dict:
+    s = res.settings
+    out = {}
+    for model in MODELS:
+        ranked = sorted(
+            [l for l in res.lines if l.model == model and l.priority > -1],
+            key=lambda l: -l.priority,
+        )
+        alloc = s.allocations.get(model, 0)
+        cumulative = 0
+        rows = []
+        for i, l in enumerate(ranked, 1):
+            cumulative += l.need
+            if l.need == 0:
+                tier = "○ option"
+            elif cumulative <= alloc:
+                tier = "✓ BUILD"
+            else:
+                tier = "↑ alt"
+            rows.append({
+                "rank": i, "trim": l.trim, "ext": l.ext, "int": l.interior,
+                "dts": l.dts, "mom": l.momentum, "need": l.need,
+                "cumulative": cumulative, "tier": tier, "key": l.key,
+            })
+        out[model] = {"allocation": alloc, "rows": rows,
+                      "total_need": sum(l.need for l in res.lines if l.model == model)}
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# 2. Overstock / Wholesale
+# --------------------------------------------------------------------------- #
+def overstock(res: EngineResult) -> list:
+    rows = []
+    for l in res.lines:
+        pos = res.positions.get(l.key)
+        over = l.onlot - l.overstock_target
+        if l.suppressed or over < 1:
+            continue
+        aged = len(pos.aged_units) if pos else 0
+        rows.append({
+            "model": l.model, "trim": l.trim, "ext": l.ext, "int": l.interior,
+            "on_hand": l.onlot, "target": l.overstock_target, "over": over,
+            "wholesale_now": l.wholesale_now, "inbound": l.inbound,
+            "dts": l.dts, "aged": aged, "key": l.key,
+        })
+    rows.sort(key=lambda r: (MODELS.index(r["model"]) if r["model"] in MODELS else 9,
+                             -r["over"], -r["wholesale_now"]))
+    return rows
+
+
+# --------------------------------------------------------------------------- #
+# 3. Wholesale VIN sheet (VIN-led — some aged units have blank/mangled Stock#s)
+# --------------------------------------------------------------------------- #
+def wholesale_vins(res: EngineResult) -> list:
+    """Every wholesale-eligible unit: aged past its window, on-lot, non-demo.
+
+    Capped per config at that config's WHOLESALE_NOW so the sheet lists what
+    should actually move, not merely everything that is old.
+    """
+    rows = []
+    for l in res.lines:
+        pos = res.positions.get(l.key)
+        if not pos or l.wholesale_now <= 0:
+            continue
+        # Oldest units first; only as many as wholesale_now says to move.
+        units = sorted(pos.wholesale_eligible, key=lambda u: -u.dis)[:l.wholesale_now]
+        for u in units:
+            vin = u.serial or u.stock
+            rows.append({
+                "stock": u.stock or "—",
+                "vin": vin,
+                "vin_last6": vin[-6:] if vin else "—",
+                "year": u.model_year or u.my or "",
+                "model": u.model,
+                "trim": l.trim or u.description,
+                "ext_int": f"{u.ext}/{u.interior}",
+                "days_in_stock": int(u.dis),
+            })
+    rows.sort(key=lambda r: -r["days_in_stock"])
+    for i, r in enumerate(rows, 1):
+        r["num"] = i
+    return rows
+
+
+# --------------------------------------------------------------------------- #
+# 4. Demo Dashboard
+# --------------------------------------------------------------------------- #
+def demo_dashboard(res: EngineResult) -> list:
+    import datetime as _dt
+    s = res.settings
+    rows = []
+    for u in res.demo_units:
+        days_in_stock = int(u.dis)
+        # Days-as-demo from an explicit start date if we have one, else fall
+        # back to days-in-stock (the workbook's own fallback).
+        days_as_demo = days_in_stock
+        for prefix, start in s.demo_starts.items():
+            if prefix and u.stock.startswith(prefix):
+                try:
+                    d0 = _dt.date.fromisoformat(str(start))
+                    days_as_demo = (res.time.today - d0).days
+                except ValueError:
+                    pass
+                break
+        rows.append({
+            "stock": u.stock, "vehicle": u.description, "msrp": u.msrp,
+            "days_in_stock": days_in_stock, "days_as_demo": days_as_demo,
+            "swap": "⚠ SWAP" if days_as_demo > s.swap_threshold else "OK",
+        })
+    rows.sort(key=lambda r: -r["days_as_demo"])
+    return rows
+
+
+# --------------------------------------------------------------------------- #
+# 5. Pace Check
+# --------------------------------------------------------------------------- #
+def pace_check(res: EngineResult) -> list:
+    tb = res.time
+    rows = []
+    for model in MODELS:
+        model_sales = [s for s in res.sales if s.first_vin and s.model == model]
+        actual_90 = sum(1 for s in model_sales if s.midx > tb.latest_midx - 3)
+        act_60 = xround(actual_90 / tb.el90 * 2, 1)
+        pred_60 = xround(sum(m.hist60 for m in res.metrics.values() if m.model == model), 1)
+        variance = xround(act_60 - pred_60, 1)
+        band = max(2.0, 0.25 * pred_60)
+        if variance > band:
+            read = "AHEAD of forecast"
+        elif variance < -band:
+            read = "BEHIND forecast"
+        else:
+            read = "ON TARGET"
+        # Coverage = share of a model's sales the engine can actually parse into
+        # a config key. Legacy QX50/QX55 sales map to QX65 at the model level by
+        # design (brief §18), so they count as seen here; the orphan list in
+        # data_health separately flags configs that sell but have no order line.
+        total = len(model_sales)
+        mapped = sum(1 for s in model_sales if s.key in res.metrics)
+        coverage = (mapped / total) if total else 1.0
+        if coverage < 0.85:
+            read += "  (coverage <85% — read is soft)"
+        rows.append({
+            "model": model, "actual_90": actual_90, "act_60_pace": act_60,
+            "pred_60_pace": pred_60, "variance": variance, "read": read,
+            "coverage": round(coverage, 3),
+        })
+    return rows
+
+
+# --------------------------------------------------------------------------- #
+# Fleet 60-day target (context table) + orphans (data health)
+# --------------------------------------------------------------------------- #
+def fleet_targets(res: EngineResult) -> dict:
+    """Model 60-day stock target by month = this month's rate + next month's,
+    seasonally correct, from the live per-model monthly sell rate."""
+    out = {}
+    for model in MODELS:
+        # Reconstruct the monthly rate from seasonality * average rate.
+        # rate[m] = index[m] * avg_rate ; avg_rate recovered from hist60 sum.
+        rates = _monthly_rates(res, model)
+        out[model] = [xround(rates[m] + rates[(m + 1) % 12]) for m in range(12)]
+    return out
+
+
+def _monthly_rates(res: EngineResult, model: str) -> list:
+    """Per-calendar-month unit sell rate for a model (part-adjusted)."""
+    tb = res.time
+    import math
+    latest_calm = ((tb.latest_midx - 1) % 12) + 1 if tb.latest_midx else 0
+    sales_by_month = [0] * 12
+    for s in res.sales:
+        if s.first_vin and s.model == model and s.midx > 0:
+            sales_by_month[(s.midx - 1) % 12] += 1
+    rates = []
+    for m in range(1, 13):
+        occ = max(1, math.floor((tb.latest_midx - m) / 12)
+                  - math.ceil((tb.earliest_midx - m) / 12) + 1)
+        occ = max(0.1, occ - (1 - tb.part_frac if latest_calm == m else 0))
+        rates.append(sales_by_month[m - 1] / occ)
+    return rates
+
+
+def data_health(res: EngineResult) -> dict:
+    tb = res.time
+    orphans = []
+    for o in res.orphans:
+        m = res.metrics.get(o["key"])
+        orphans.append({"key": o["key"], "sales": o["sales"],
+                        "dts": m.dts if m else None})
+    return {
+        "latest_month": f"{tb.latest_midx // 12}-{tb.latest_midx % 12:02d}",
+        "latest_open": tb.latest_open,
+        "part_frac": round(tb.part_frac, 3),
+        "span_months": round(tb.span_months, 2),
+        "window_90_spans": round(tb.el90, 2),
+        "orphans": orphans,
+        "learned_configs": len(res.metrics),
+    }
+
+
+def build_all(res: EngineResult) -> dict:
+    return {
+        "order_priority": order_priority(res),
+        "overstock": overstock(res),
+        "wholesale_vins": wholesale_vins(res),
+        "demo_dashboard": demo_dashboard(res),
+        "pace_check": pace_check(res),
+        "fleet_targets": fleet_targets(res),
+        "data_health": data_health(res),
+    }

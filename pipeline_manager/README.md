@@ -1,0 +1,124 @@
+# Elite Pipeline Manager
+
+A new-car inventory **ordering engine** for a single INFINITI store (QX80, QX60,
+QX65), ported out of Excel into a small, deterministic Python program.
+
+> **The one hard requirement:** the app **recomputes everything from the two raw
+> exports on every run** — no hidden state, no stale caches, no frozen cells.
+> That reliability is the entire reason for the rebuild. Run it twice on the same
+> inputs and you get byte-identical output; change one number in an export and
+> everything downstream moves.
+
+It ingests the two dealer exports → runs the engine → emits five clean tables.
+
+## Quick start
+
+```bash
+# runs against the bundled sample exports
+python -m pipeline_manager
+
+# your own exports, ordering in September as a CPO factory order
+python -m pipeline_manager -i inventory.csv -s speed_to_sell.csv -m SEP --mode CPO
+
+# machine-readable
+python -m pipeline_manager --format json -o report.json
+```
+
+Inputs may be `.csv` or `.xlsx`. No third-party packages are needed for CSV; the
+one optional dependency, `openpyxl`, is used only to read `.xlsx` inputs.
+
+```
+python -m pipeline_manager --help
+```
+
+| flag | meaning |
+|------|---------|
+| `-i, --inventory` | Inventory Summary export (16 cols) |
+| `-s, --sales` | Speed-to-Sell export (sales history) |
+| `-m, --order-month` | month you **place** the order (`1..12` or `JAN..DEC`) |
+| `--mode` | `CPO` (future factory order) · `PPO` · `MID-MONTH` (both = right-now) |
+| `-c, --config` | optional `config.json` (control lists — see `config.example.json`) |
+| `--today` | override "today" (`YYYY-MM-DD`) for reproducible runs |
+| `--format` | `text` (default) or `json` |
+
+## The two inputs
+
+1. **Inventory Summary** — `Stock#, Serial, Status, MY, Model Line, Model Code,
+   Description, Trans, Ext, Int, MSRP, Inv, Location, DIS, ETA, Production Month`.
+   `Location = DLR-INV` is on-lot; `SIT`/`ONS`/`NNA-INV` are inbound pipeline.
+2. **Speed-to-Sell** — `Sales Month, Stock#, Model, VIN, DAYS TO SELL, MODEL CODE,
+   EXT CODE, INT CODE`, ~23 months of history.
+
+Everything a human turns to steer the engine — order month, mode, allocations,
+the suppress/demote/override lists, the demo roster, aged-unit brakes — is
+*control state*, not data. It lives in `config.json` (see `config.example.json`),
+defaulting to the state the source workbook shipped with.
+
+## The five outputs
+
+1. **Order Priority** — ranked `✓ BUILD` / `↑ alt` / `○ option` worklist with
+   NEED per config, cut over by each model's allocation.
+2. **Overstock / Wholesale** — over-target configs, wholesale-now counts, aged flags.
+3. **Wholesale VIN sheet** — printable, VIN-led list of aged eligible units.
+4. **Demo Dashboard** — units pulled from sellable inventory, ages, swap flags.
+5. **Pace Check** — actual vs predicted 60-day pace per model, with a read.
+
+## How the engine thinks (the short version)
+
+Every unit and every sale is reduced to one **config key**: `Model | 4-digit Code
+| Ext | Int` (e.g. `QX80|8381|QBE|D`). From the sales history it computes, per
+config: average **DTS**, lifetime **TOTAL**, **R90/R180** (recent windows), and
+**PRATE** — the backtested blend of the 90- and 180-day pace, each divided by
+*elapsed* time and expressed per 60 days. PRATE drives a velocity **floor**
+(gated by the 90-day "paperweight veto"), momentum bumps it to a **base**, and a
+merit-tested, momentum-earned **seasonality** multiplier (computed live per
+model) turns base into a **target** at the arrival month. **NEED** is the target
+minus what you'll actually hold when the order lands (a mode-dependent
+projection), plus loaner add-ons and manual overrides.
+
+Design notes that matter (learned the hard way, preserved here):
+
+- **Numeric fields arrive as text** — everything is coerced before comparison.
+- **Demo Stock#s are mangled** (real stock# + driver name) — matched by prefix.
+- **Not-found ≠ error.** A genuinely new combo → base 1 (stock one, watch it); a
+  known combo the math zeroes → base 0 (never order off nothing). Kept separate.
+- **Recent pace, not lifetime average** — sales counts measure supply, not demand.
+- **Seasonality must be earned by momentum**, or peak season inflates dead configs.
+- **Legacy QX50/QX55** feed QX65 at the model level only; they never drag the
+  fast new QX65 configs over the paperweight line.
+
+## Validating against the source workbook
+
+The engine is validated cell-for-cell against the original workbook
+(recalculated 2026-07-17). With the workbook's own settings it reproduces, with
+zero mismatches: every per-config metric, both seasonality curves, on-lot,
+projection-at-arrival, target, NEED, and the full ranked Order Priority list.
+
+```bash
+python pipeline_manager/tests/test_engine.py     # or: pytest pipeline_manager/tests
+```
+
+### One deliberate difference from the workbook
+
+- **CPO arrival window** defaults to the brief's canonical `QX80 +3 / QX60 +2 /
+  QX65 +2` months. The workbook additionally derived a live window from arrival
+  data; set `cpo_windows` in `config.json` to `{"QX80":5,"QX60":5,"QX65":1}` to
+  reproduce the workbook's exact numbers.
+- **Wholesale eligibility** uses the brief's `MAX(60, DTS)` age floor (the
+  workbook used 45); young inventory is never wholesale-flagged.
+
+## Files
+
+```
+pipeline_manager/
+  keys.py       key construction, model mapping, text→number coercion, Excel round
+  ingest.py     read inventory + sales (.csv/.xlsx), coerce, build keys
+  engine.py     the recompute: metrics → seasonality → position → base/target/NEED
+  reports.py    the five output tables
+  cli.py        argparse entry point + text/JSON rendering
+  config.py     Settings + control-state defaults + roster loader
+  roster_default.json   the orderable combo roster (74 configs)
+  config.example.json   documented control-state template
+  sample_data/  inventory.csv, sales.csv (a real anonymised snapshot)
+  tests/        validation against the workbook reference
+```

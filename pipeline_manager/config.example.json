@@ -1,0 +1,41 @@
+{
+  "_comment": "Optional control-state. Copy to config.json and pass with --config. Every field is optional; omitted fields fall back to the built-in defaults (which reproduce the source workbook). The two DATA files (inventory + sales) are passed on the command line, not here.",
+
+  "order_month": "SEP",
+  "mode": "CPO",
+
+  "allocations": { "QX80": 50, "QX60": 100, "QX65": 100 },
+
+  "cpo_windows": { "QX80": 3, "QX60": 2, "QX65": 2 },
+  "min_cpo_window": 1,
+
+  "suppress": [
+    { "code": "8461", "ext": "", "int": "" }
+  ],
+  "demote": [
+    { "model": "", "ext": "", "int": "N" }
+  ],
+  "overrides": [
+    { "key": "QX60|8411|QBE|K", "qty": 8 }
+  ],
+
+  "demo_stocks": ["N15106", "N15118", "N15126", "N15145"],
+  "demo_starts": {
+    "N15106": "2026-05-08",
+    "N15118": "2026-04-29",
+    "N15126": "2026-05-07",
+    "N15145": "2026-06-07"
+  },
+
+  "aged_memory": [
+    { "key": "QX80|8361|XLF|G", "active": 1 }
+  ],
+
+  "prove_bar": 2,
+  "swap_threshold": 90,
+  "rate_cap": 5.0,
+  "paperweight_dts": 90,
+  "wholesale_min_age": 60,
+  "stall_days": 120,
+  "aged_days": 60
+}

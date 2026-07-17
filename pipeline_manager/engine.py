@@ -1,0 +1,529 @@
+"""The engine: recompute every number from the raw exports on every run.
+
+There is no persistence, no cache, no incremental update.  `run()` takes the
+parsed inventory + sales + settings and returns a fully-derived result object.
+Call it twice with the same inputs and you get byte-identical output; change one
+input and everything downstream moves.  That determinism is the entire reason
+this exists as code instead of a spreadsheet.
+
+The pipeline, top to bottom:
+    time base  ->  per-config metrics  ->  seasonality  ->  inventory position
+    ->  demo suppression  ->  per-config order line (base, target, NEED, rank)
+"""
+
+from __future__ import annotations
+
+import calendar
+import datetime as _dt
+import math
+from dataclasses import dataclass, field
+
+from .config import Settings
+from .ingest import InventoryUnit, Sale
+from .keys import xround
+
+
+# --------------------------------------------------------------------------- #
+# Result records
+# --------------------------------------------------------------------------- #
+@dataclass
+class TimeBase:
+    today: _dt.date
+    latest_midx: int
+    earliest_midx: int
+    current_midx: int
+    part_frac: float          # fraction of the current month elapsed
+    span_months: float        # part-adjusted months of sales history
+    el90: float               # elapsed months inside the 90-day window
+    el180: float              # elapsed months inside the 180-day window
+    latest_open: bool         # is the newest sales month the current, partial month?
+
+
+@dataclass
+class ConfigMetrics:
+    key: str
+    model: str
+    code: str
+    ext: str
+    interior: str
+    total: int = 0
+    dts: float | None = None      # avg days-to-sell; None = never sold
+    hist60: float = 0.0           # lifetime rate normalised to 60 days
+    r90: int = 0
+    r180: int = 0
+    prate: float = 0.0            # blended sell-rate per 60 days (the key number)
+    momentum: str = "dormant"
+    floor: int = 0
+    mom_adj: int = 0
+    base: int = 0
+
+
+@dataclass
+class InvPosition:
+    onlot: int = 0                       # DLR-INV, non-demo units
+    inbound_total: int = 0               # every pipeline unit for this key
+    arrivals: dict = field(default_factory=dict)   # calendar-month -> count
+    stalled: int = 0                     # on-lot units aged past stall_days
+    aged_units: list = field(default_factory=list)  # on-lot units past aged_days
+    wholesale_eligible: list = field(default_factory=list)  # aged past MAX(min,DTS)
+
+
+@dataclass
+class OrderLine:
+    model: str
+    code: str
+    ext: str
+    interior: str
+    trim: str
+    key: str
+    dts: float | None
+    momentum: str
+    onlot: int
+    inbound: int
+    proj_at_arrival: float
+    base: int                 # base used for ordering (found -> metric, else 1)
+    found: bool               # was this key learned by the engine?
+    mom_factor: float
+    order_target: int         # momentum-earned, seasonal, at arrival month
+    overstock_target: int     # raw seasonal target at the order month
+    need: int
+    suppressed: bool
+    demoted: bool
+    eff_demote: bool
+    priority: float
+    wholesale_now: int
+
+
+@dataclass
+class EngineResult:
+    settings: Settings
+    time: TimeBase
+    metrics: dict              # key -> ConfigMetrics (learned configs only)
+    seasonality: dict          # model -> [12 indices]
+    positions: dict            # key -> InvPosition
+    lines: list                # OrderLine, one per roster config
+    demo_units: list           # InventoryUnit flagged as demo
+    inventory: list
+    sales: list
+    orphans: list              # keys sold/stocked but not on the roster
+
+
+# --------------------------------------------------------------------------- #
+# Time base
+# --------------------------------------------------------------------------- #
+def _days_in_month(d: _dt.date) -> int:
+    return calendar.monthrange(d.year, d.month)[1]
+
+
+def compute_time_base(sales: list[Sale], today: _dt.date) -> TimeBase:
+    midxs = [s.midx for s in sales if s.midx > 0]
+    current_midx = today.year * 12 + today.month
+    if not midxs:
+        return TimeBase(today, 0, 0, current_midx, 1.0, 1.0, 3.0, 6.0, False)
+    latest = max(midxs)
+    earliest = min(midxs)
+    latest_open = latest == current_midx
+    part_frac = max(0.05, today.day / _days_in_month(today)) if latest_open else 1.0
+    span = max(0.25, (latest - earliest + 1) - (1 - part_frac))
+    return TimeBase(
+        today=today,
+        latest_midx=latest,
+        earliest_midx=earliest,
+        current_midx=current_midx,
+        part_frac=part_frac,
+        span_months=span,
+        el90=2 + part_frac,
+        el180=5 + part_frac,
+        latest_open=latest_open,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Per-config metrics (learned from sales history)
+# --------------------------------------------------------------------------- #
+def compute_metrics(sales: list[Sale], tb: TimeBase, s: Settings,
+                    roster: list[dict]) -> dict:
+    """Build ConfigMetrics for every config the sales history has seen, plus a
+    zero entry for every roster combo it didn't (see the seeding note below).
+
+    Only the *first* row per VIN counts (exports double-list some VINs), so a
+    config's TOTAL is genuine unique units, not line count.
+    """
+    metrics: dict[str, ConfigMetrics] = {}
+    for sale in sales:
+        if not sale.first_vin or not sale.key or not sale.model:
+            continue
+        m = metrics.get(sale.key)
+        if m is None:
+            m = ConfigMetrics(sale.key, sale.model, sale.model_code[:4],
+                              sale.ext, sale.interior)
+            metrics[sale.key] = m
+        m.total += 1
+        if sale.days_to_sell is not None:
+            m._dts_sum = getattr(m, "_dts_sum", 0.0) + sale.days_to_sell
+            m._dts_cnt = getattr(m, "_dts_cnt", 0) + 1
+        if sale.midx > tb.latest_midx - 3:
+            m.r90 += 1
+        if sale.midx > tb.latest_midx - 6:
+            m.r180 += 1
+
+    # Seed every roster combo the sales history never mentioned as a *known*
+    # zero config.  This is the found-with-base-0 case (a dormant catalog combo),
+    # deliberately kept separate from the not-found case (a genuinely novel
+    # combination, base 1).  Without this seeding, dead roster combos would look
+    # "new" and phantom-order one unit each — exactly the bug the brief warns of.
+    for cfg in roster:
+        key = f"{cfg['model']}|{cfg['code']}|{cfg['ext']}|{cfg['int']}"
+        if key not in metrics:
+            metrics[key] = ConfigMetrics(key, cfg["model"], cfg["code"],
+                                         cfg["ext"], cfg["int"])
+
+    for m in metrics.values():
+        dts_cnt = getattr(m, "_dts_cnt", 0)
+        m.dts = xround(getattr(m, "_dts_sum", 0.0) / dts_cnt, 0) if dts_cnt else None
+        m.hist60 = xround(m.total / tb.span_months * 2, 2)
+        # PRATE — the blend: half the 90-day pace + half the 180-day pace, each
+        # divided by *elapsed* time and expressed per 60 days.  The halving and
+        # the per-60-day scaling cancel to R90/EL90 + R180/EL180.
+        m.prate = m.r90 / tb.el90 + m.r180 / tb.el180
+        _classify(m, tb, s)
+    return metrics
+
+
+def _recent_pace_60(m: ConfigMetrics, tb: TimeBase) -> float:
+    """Recent 90-day pace expressed per 60 days (R90 normalised by elapsed)."""
+    return m.r90 / tb.el90 * 2
+
+
+def _classify(m: ConfigMetrics, tb: TimeBase, s: Settings) -> None:
+    """Momentum, velocity floor and base — brief §6/§7/§8."""
+    recent60 = _recent_pace_60(m, tb)
+    dts_ok60 = m.dts is not None and m.dts <= 60
+
+    # Momentum. ACCEL needs two sales in 90 days (the "prove itself" bar).
+    if m.r90 >= 2 and recent60 > m.hist60 * 1.15 and dts_ok60:
+        m.momentum = "ACCEL"
+    elif m.r90 == 0 and m.r180 > 0:
+        m.momentum = "on cadence"
+    elif m.r90 > 0 and recent60 < m.hist60 * 0.6:
+        m.momentum = "cooling"
+    elif m.r90 > 0:
+        m.momentum = "steady"
+    else:
+        m.momentum = "dormant"
+
+    # Velocity floor. The DTS<=90 gate is the paperweight veto: a config that
+    # takes longer than that to sell can never earn a stocking base.
+    if m.prate >= 0.5 and m.dts is not None and m.dts <= s.paperweight_dts:
+        m.floor = max(1, xround(m.prate))
+    elif m.dts is not None and m.dts <= 60 and m.r180 > 0:
+        m.floor = 1
+    else:
+        m.floor = 0
+
+    m.mom_adj = 1 if m.momentum == "ACCEL" else (-1 if m.momentum == "cooling" else 0)
+    m.base = 0 if m.floor == 0 else max(1, m.floor + m.mom_adj)
+
+
+# --------------------------------------------------------------------------- #
+# Seasonality (per model, computed live from the sales history)
+# --------------------------------------------------------------------------- #
+def compute_seasonality(sales: list[Sale], tb: TimeBase) -> dict:
+    """12-month multiplier curve per model, normalised to average 1.0.
+
+    Each calendar month's raw sales are divided by how many times that month
+    *occurred* in the data span (part-adjusted for an open current month), which
+    turns supply into a comparable monthly rate; the curve is that rate indexed
+    to its own 12-month average.
+    """
+    latest_calm = ((tb.latest_midx - 1) % 12) + 1 if tb.latest_midx else 0
+    out: dict[str, list[float]] = {}
+    for model in ("QX80", "QX60", "QX65"):
+        sales_by_month = [0] * 12
+        for s in sales:
+            if s.first_vin and s.model == model and s.midx > 0:
+                cal_m = ((s.midx - 1) % 12)
+                sales_by_month[cal_m] += 1
+        rates = []
+        for m in range(1, 13):
+            occ = max(1, math.floor((tb.latest_midx - m) / 12)
+                      - math.ceil((tb.earliest_midx - m) / 12) + 1)
+            occ = occ - (1 - tb.part_frac if latest_calm == m else 0)
+            occ = max(0.1, occ)
+            rates.append(sales_by_month[m - 1] / occ)
+        avg = sum(rates) / 12 if rates else 0
+        out[model] = [1.0 if avg == 0 else r / avg for r in rates]
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Demo suppression (brief §14)
+# --------------------------------------------------------------------------- #
+def _is_demo(stock: str, demo_prefixes: list[str]) -> bool:
+    """Prefix match — demo Stock#s are name-mangled (real stock# + driver name)."""
+    return any(p and stock.startswith(p) for p in demo_prefixes)
+
+
+# --------------------------------------------------------------------------- #
+# Inventory position per config
+# --------------------------------------------------------------------------- #
+def compute_positions(inventory: list[InventoryUnit], metrics: dict, s: Settings) -> dict:
+    positions: dict[str, InvPosition] = {}
+    for u in inventory:
+        if not u.key:
+            continue
+        pos = positions.setdefault(u.key, InvPosition())
+        demo = _is_demo(u.stock, s.demo_stocks)
+        if u.is_dlr_inv:
+            if demo:
+                continue  # demo units are out of all sell/order/overstock math
+            pos.onlot += 1
+            if u.dis >= s.stall_days:
+                pos.stalled += 1
+            if u.dis > s.aged_days:
+                pos.aged_units.append(u)
+            met = metrics.get(u.key)
+            dts = met.dts if (met and met.dts is not None) else 9999
+            if u.dis > max(s.wholesale_min_age, dts):
+                pos.wholesale_eligible.append(u)
+        else:
+            pos.inbound_total += 1
+            if u.arrival_month:
+                pos.arrivals[u.arrival_month] = pos.arrivals.get(u.arrival_month, 0) + 1
+    return positions
+
+
+# --------------------------------------------------------------------------- #
+# Projection at arrival (brief §12)
+# --------------------------------------------------------------------------- #
+def _proj_rate(m: ConfigMetrics | None, dts: float | None, s: Settings) -> float:
+    """Monthly draw-down rate for the CPO chain, capped at rate_cap/month."""
+    prate_half = (m.prate / 2) if m else 0.0
+    dts_rate = (30.4 / dts) if (m and m.r90 > 0 and dts and dts > 0) else 0.0
+    return min(s.rate_cap, max(prate_half, dts_rate))
+
+
+def project_at_arrival(key, model, pos, metric, seas, s: Settings):
+    """Return (projection_at_arrival, order_month_target_projection).
+
+    CPO: forward sell-down, month by month, absorbing inbound as it lands.
+    proj_0 must swallow every unit arriving *before* the projection window opens
+    so pipeline metal already coming isn't ordered twice.
+    """
+    om = s.order_month  # 1..12
+    dts = metric.dts if metric else None
+    rate = _proj_rate(metric, dts, s)
+
+    def arrivals_at(offset: int) -> int:
+        cal = ((om - 1 + offset) % 12) + 1
+        return pos.arrivals.get(cal, 0)
+
+    if s.mode != "CPO":
+        # Right-now snapshot: on-lot + the whole pipeline.
+        proj = pos.onlot + pos.inbound_total
+        return xround(proj, 1), proj
+
+    later = sum(arrivals_at(k) for k in range(1, 6))
+    proj = [pos.onlot + max(0, pos.inbound_total - later)]  # proj_0
+    for k in range(1, 6):
+        seas_m = seas[model][(om - 1 + (k - 1)) % 12]
+        drawn = proj[k - 1] - rate * seas_m
+        proj.append(max(pos.stalled, drawn) + arrivals_at(k))
+    window = s.cpo_window(model)
+    proj_at_arr = xround(proj[window], 1)
+    return proj_at_arr, proj[0]
+
+
+# --------------------------------------------------------------------------- #
+# Order lines
+# --------------------------------------------------------------------------- #
+def _base_for_order(key, metrics) -> tuple[int, bool]:
+    """The critical not-found vs. error split (brief §13).
+
+    Found in the engine  -> use the learned base (0 is allowed; never order off
+                            a config the math zeroed out).
+    Genuinely not found  -> base 1: a brand-new combination, stock one and watch.
+    """
+    m = metrics.get(key)
+    if m is None:
+        return 1, False
+    return m.base, True
+
+
+def _mom_factor(m: ConfigMetrics | None, dts: float | None, s: Settings) -> float:
+    """Momentum-earned seasonality factor (brief §10), capped at 1.0."""
+    r90 = m.r90 if m else 0
+    r180 = m.r180 if m else 0
+    accel = m.momentum == "ACCEL" if m else False
+    if r90 >= 2 or accel:
+        base = 1.0
+    elif r90 == 1:
+        base = 0.6
+    elif r90 == 0 and r180 >= 2:
+        base = 0.35
+    elif r90 == 0 and r180 == 1:
+        base = 0.25
+    else:
+        base = 0.15
+    if dts is None:
+        pen = 1.0
+    elif dts > 90:
+        pen = 0.6
+    elif dts > 60:
+        pen = 0.85
+    else:
+        pen = 1.0
+    return min(1.0, base * pen)
+
+
+def _matches(entry: dict, model, ext, interior, key) -> bool:
+    """Match a suppress/demote entry; blank fields are wildcards."""
+    if "key" in entry:
+        return entry["key"] == key
+    def ok(field_val, actual):
+        fv = str(field_val or "").strip()
+        return fv == "" or fv == actual
+    code = key.split("|")[1] if "|" in key else ""
+    has_criterion = any(str(entry.get(f, "")).strip() for f in ("model", "code", "ext", "int"))
+    return has_criterion and ok(entry.get("model"), model) and ok(entry.get("code"), code) \
+        and ok(entry.get("ext"), ext) and ok(entry.get("int"), interior)
+
+
+def _suppressed(key, model, code, ext, interior, s: Settings) -> bool:
+    if code == "8461":  # hardcoded discontinued (brief §17)
+        return True
+    for e in s.suppress:
+        # suppress entries are code|ext|int
+        if str(e.get("code", "")).strip()[:4] == code and \
+           str(e.get("ext", "")).strip() == ext and \
+           str(e.get("int", "")).strip() == interior:
+            return True
+    return False
+
+
+def _dts_band(dts) -> int:
+    if dts is None:
+        return 0
+    if dts <= 20:
+        return 4
+    if dts <= 40:
+        return 3
+    if dts <= 70:
+        return 2
+    if dts <= 100:
+        return 1
+    return 0
+
+
+def _priority(line_key, model, dts, momentum, need, proj, order_tgt, seas_arr,
+              eff_demote, row_index) -> float:
+    """Rank score — velocity/DTS + momentum + seasonality (brief §16).
+
+    NEED>0 lines get a +1000 floor so a real need always outranks an option.
+    Options (NEED=0) only score if steady/accel/on-cadence AND DTS<=90.
+    """
+    mom_band = {"ACCEL": 4, "steady": 2, "on cadence": 1}.get(momentum, 0)
+    dts_band = _dts_band(dts)
+    seas_band = 2 if seas_arr >= 1.3 else (1 if seas_arr >= 1 else 0)
+    tiebreak = row_index / 100000.0
+    if need > 0:
+        proj_band = 4 if proj == 0 else (2 if proj < order_tgt else 0)
+        return 1000 + dts_band + mom_band + proj_band + seas_band - 1000 * eff_demote - tiebreak
+    if momentum in ("ACCEL", "steady", "on cadence") and (dts is not None and dts <= 90):
+        return dts_band + mom_band + seas_band - 1000 * eff_demote - tiebreak
+    return -1
+
+
+def build_lines(s, metrics, seas, positions, aged_brakes, override_map) -> list:
+    lines: list[OrderLine] = []
+    for i, cfg in enumerate(s.roster):
+        model, code, ext, interior = cfg["model"], cfg["code"], cfg["ext"], cfg["int"]
+        key = f"{model}|{code}|{ext}|{interior}"
+        metric = metrics.get(key)
+        pos = positions.get(key, InvPosition())
+        dts = metric.dts if metric else None
+
+        base, found = _base_for_order(key, metrics)
+        mf = _mom_factor(metric, dts, s)
+        seas_order = seas[model][(s.order_month - 1) % 12]
+        window = s.cpo_window(model) if s.mode == "CPO" else 0
+        seas_arr = seas[model][(s.order_month - 1 + window) % 12]
+
+        proj_at_arr, _ = project_at_arrival(key, model, pos, metric, seas, s)
+
+        suppressed = _suppressed(key, model, code, ext, interior, s)
+        demoted = any(_matches(e, model, ext, interior, key) for e in s.demote)
+        r90 = metric.r90 if metric else 0
+        eff_demote = demoted and r90 < s.prove_bar
+
+        # Momentum-earned seasonal target, at the arrival month.
+        need_floor = 0 if base == 0 else 1
+        order_target = max(need_floor, xround(base * (1 + (seas_arr - 1) * mf)))
+        # Raw seasonal target at the order month (for overstock comparison).
+        overstock_target = max(need_floor, xround(base * seas_order))
+
+        aged_brake = aged_brakes.get(key, 0)
+        override_qty = override_map.get(key, 0)
+        if suppressed or eff_demote:
+            need = 0
+        else:
+            need = max(0, xround(order_target - proj_at_arr - aged_brake)) + override_qty
+
+        # Overstock / wholesale-now (brief §15).
+        rate = _proj_rate(metric, dts, s)
+        excess = max(0, xround(pos.onlot + pos.inbound_total - 3 * rate - overstock_target))
+        wholesale_now = 0 if suppressed else min(excess, len(pos.wholesale_eligible))
+
+        prio = _priority(key, model, dts, metric.momentum if metric else "dormant",
+                         need, proj_at_arr, order_target, seas_arr, eff_demote, i)
+
+        lines.append(OrderLine(
+            model=model, code=code, ext=ext, interior=interior, trim=cfg.get("trim", ""),
+            key=key, dts=dts, momentum=metric.momentum if metric else "dormant",
+            onlot=pos.onlot, inbound=pos.inbound_total, proj_at_arrival=proj_at_arr,
+            base=base, found=found, mom_factor=mf,
+            order_target=order_target, overstock_target=overstock_target, need=need,
+            suppressed=suppressed, demoted=demoted, eff_demote=eff_demote,
+            priority=prio, wholesale_now=wholesale_now,
+        ))
+    return lines
+
+
+def _find_orphans(sales, inventory, roster) -> list:
+    roster_keys = {f"{c['model']}|{c['code']}|{c['ext']}|{c['int']}" for c in roster}
+    seen: dict[str, int] = {}
+    for s in sales:
+        if s.first_vin and s.key and s.key not in roster_keys:
+            seen[s.key] = seen.get(s.key, 0) + 1
+    return sorted(({"key": k, "sales": v} for k, v in seen.items()),
+                  key=lambda d: -d["sales"])
+
+
+# --------------------------------------------------------------------------- #
+# Orchestration
+# --------------------------------------------------------------------------- #
+def run(inventory, sales, settings: Settings, today: _dt.date | None = None) -> EngineResult:
+    today = today or _dt.date.today()
+    tb = compute_time_base(sales, today)
+    metrics = compute_metrics(sales, tb, settings, settings.roster)
+    seas = compute_seasonality(sales, tb)
+    positions = compute_positions(inventory, metrics, settings)
+
+    aged_brakes: dict[str, int] = {}
+    for e in settings.aged_memory:
+        if e.get("active", 1) in (1, True, "1"):
+            aged_brakes[e["key"]] = aged_brakes.get(e["key"], 0) + 1
+    override_map: dict[str, int] = {}
+    for e in settings.overrides:
+        override_map[e["key"]] = override_map.get(e["key"], 0) + int(e.get("qty", 0))
+
+    lines = build_lines(settings, metrics, seas, positions, aged_brakes, override_map)
+    demo_units = [u for u in inventory
+                  if u.is_dlr_inv and _is_demo(u.stock, settings.demo_stocks)]
+    orphans = _find_orphans(sales, inventory, settings.roster)
+
+    return EngineResult(
+        settings=settings, time=tb, metrics=metrics, seasonality=seas,
+        positions=positions, lines=lines, demo_units=demo_units,
+        inventory=inventory, sales=sales, orphans=orphans,
+    )

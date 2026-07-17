@@ -1,0 +1,1 @@
+openpyxl>=3.0  # optional: only needed to read .xlsx inputs

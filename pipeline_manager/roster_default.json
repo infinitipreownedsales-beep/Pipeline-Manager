@@ -1,0 +1,520 @@
+[
+{
+"model": "QX80",
+"code": "8311",
+"ext": "KH3",
+"int": "G",
+"trim": "PURE 2WD"
+},
+{
+"model": "QX80",
+"code": "8311",
+"ext": "QBE",
+"int": "C",
+"trim": "PURE 2WD"
+},
+{
+"model": "QX80",
+"code": "8311",
+"ext": "QBE",
+"int": "G",
+"trim": "PURE 2WD"
+},
+{
+"model": "QX80",
+"code": "8361",
+"ext": "GAT",
+"int": "A",
+"trim": "AUTOG"
+},
+{
+"model": "QX80",
+"code": "8361",
+"ext": "XKD",
+"int": "A",
+"trim": "AUTOG"
+},
+{
+"model": "QX80",
+"code": "8361",
+"ext": "XKD",
+"int": "G",
+"trim": "AUTOG"
+},
+{
+"model": "QX80",
+"code": "8361",
+"ext": "XKJ",
+"int": "A",
+"trim": "AUTOG"
+},
+{
+"model": "QX80",
+"code": "8361",
+"ext": "XKJ",
+"int": "G",
+"trim": "AUTOG"
+},
+{
+"model": "QX80",
+"code": "8361",
+"ext": "XLF",
+"int": "A",
+"trim": "AUTOG"
+},
+{
+"model": "QX80",
+"code": "8361",
+"ext": "XLF",
+"int": "G",
+"trim": "AUTOG"
+},
+{
+"model": "QX80",
+"code": "8331",
+"ext": "KH3",
+"int": "G",
+"trim": "LUXE 2WD"
+},
+{
+"model": "QX80",
+"code": "8331",
+"ext": "KH3",
+"int": "P",
+"trim": "LUXE 2WD"
+},
+{
+"model": "QX80",
+"code": "8331",
+"ext": "QBE",
+"int": "G",
+"trim": "LUXE 2WD"
+},
+{
+"model": "QX80",
+"code": "8331",
+"ext": "QBE",
+"int": "P",
+"trim": "LUXE 2WD"
+},
+{
+"model": "QX80",
+"code": "8321",
+"ext": "KH3",
+"int": "P",
+"trim": "LUXE 4WD"
+},
+{
+"model": "QX80",
+"code": "8381",
+"ext": "GAT",
+"int": "D",
+"trim": "Sport 4WD"
+},
+{
+"model": "QX80",
+"code": "8381",
+"ext": "KCN",
+"int": "D",
+"trim": "Sport 4WD"
+},
+{
+"model": "QX80",
+"code": "8381",
+"ext": "QBE",
+"int": "D",
+"trim": "Sport 4WD"
+},
+{
+"model": "QX80",
+"code": "8381",
+"ext": "XKJ",
+"int": "D",
+"trim": "Sport 4WD"
+},
+{
+"model": "QX80",
+"code": "8381",
+"ext": "XLF",
+"int": "D",
+"trim": "Sport 4WD"
+},
+{
+"model": "QX60",
+"code": "8411",
+"ext": "GAT",
+"int": "G",
+"trim": "PURE 2WD"
+},
+{
+"model": "QX60",
+"code": "8411",
+"ext": "GAT",
+"int": "K",
+"trim": "PURE 2WD"
+},
+{
+"model": "QX60",
+"code": "8411",
+"ext": "KAD",
+"int": "G",
+"trim": "PURE 2WD"
+},
+{
+"model": "QX60",
+"code": "8411",
+"ext": "KAD",
+"int": "K",
+"trim": "PURE FWD"
+},
+{
+"model": "QX60",
+"code": "8411",
+"ext": "KH3",
+"int": "G",
+"trim": "PURE FWD"
+},
+{
+"model": "QX60",
+"code": "8411",
+"ext": "KH3",
+"int": "K",
+"trim": "PURE FWD"
+},
+{
+"model": "QX60",
+"code": "8411",
+"ext": "QBE",
+"int": "K",
+"trim": "PURE FWD"
+},
+{
+"model": "QX60",
+"code": "8481",
+"ext": "GAQ",
+"int": "G",
+"trim": "Autograph AWD"
+},
+{
+"model": "QX60",
+"code": "8481",
+"ext": "GAQ",
+"int": "K",
+"trim": "Autograph AWD"
+},
+{
+"model": "QX60",
+"code": "8481",
+"ext": "GAQ",
+"int": "P",
+"trim": "Autograph AWD"
+},
+{
+"model": "QX60",
+"code": "8481",
+"ext": "GAT",
+"int": "G",
+"trim": "Autograph AWD"
+},
+{
+"model": "QX60",
+"code": "8481",
+"ext": "GAT",
+"int": "K",
+"trim": "Autograph AWD"
+},
+{
+"model": "QX60",
+"code": "8481",
+"ext": "GAT",
+"int": "P",
+"trim": "Autograph AWD"
+},
+{
+"model": "QX60",
+"code": "8481",
+"ext": "XHU",
+"int": "G",
+"trim": "Autograph AWD"
+},
+{
+"model": "QX60",
+"code": "8481",
+"ext": "XHU",
+"int": "P",
+"trim": "Autograph AWD"
+},
+{
+"model": "QX60",
+"code": "8481",
+"ext": "XKD",
+"int": "G",
+"trim": "Autograph AWD"
+},
+{
+"model": "QX60",
+"code": "8481",
+"ext": "XKD",
+"int": "P",
+"trim": "Autograph AWD"
+},
+{
+"model": "QX60",
+"code": "8481",
+"ext": "XKJ",
+"int": "K",
+"trim": "Autograph AWD"
+},
+{
+"model": "QX60",
+"code": "8481",
+"ext": "XKJ",
+"int": "P",
+"trim": "Autograph AWD"
+},
+{
+"model": "QX60",
+"code": "8461",
+"ext": "GAQ",
+"int": "G",
+"trim": "Autograph FWD"
+},
+{
+"model": "QX60",
+"code": "8461",
+"ext": "GAQ",
+"int": "K",
+"trim": "Autograph FWD"
+},
+{
+"model": "QX60",
+"code": "8461",
+"ext": "GAQ",
+"int": "P",
+"trim": "Autograph FWD"
+},
+{
+"model": "QX60",
+"code": "8461",
+"ext": "GAT",
+"int": "G",
+"trim": "Autograph FWD"
+},
+{
+"model": "QX60",
+"code": "8461",
+"ext": "GAT",
+"int": "P",
+"trim": "Autograph FWD"
+},
+{
+"model": "QX60",
+"code": "8461",
+"ext": "XHU",
+"int": "G",
+"trim": "Autograph FWD"
+},
+{
+"model": "QX60",
+"code": "8461",
+"ext": "XKD",
+"int": "G",
+"trim": "Autograph FWD"
+},
+{
+"model": "QX60",
+"code": "8461",
+"ext": "XKJ",
+"int": "K",
+"trim": "Autograph FWD"
+},
+{
+"model": "QX60",
+"code": "8461",
+"ext": "XKJ",
+"int": "P",
+"trim": "Autograph FWD"
+},
+{
+"model": "QX60",
+"code": "8421",
+"ext": "GAT",
+"int": "G",
+"trim": "LUXE AWD"
+},
+{
+"model": "QX60",
+"code": "8431",
+"ext": "GAT",
+"int": "G",
+"trim": "LUXE FWD"
+},
+{
+"model": "QX60",
+"code": "8431",
+"ext": "GAT",
+"int": "K",
+"trim": "LUXE FWD"
+},
+{
+"model": "QX60",
+"code": "8431",
+"ext": "KAD",
+"int": "K",
+"trim": "LUXE FWD"
+},
+{
+"model": "QX60",
+"code": "8431",
+"ext": "KBY",
+"int": "G",
+"trim": "LUXE FWD"
+},
+{
+"model": "QX60",
+"code": "8431",
+"ext": "KCF",
+"int": "K",
+"trim": "LUXE FWD"
+},
+{
+"model": "QX60",
+"code": "8431",
+"ext": "KCG",
+"int": "K",
+"trim": "LUXE FWD"
+},
+{
+"model": "QX60",
+"code": "8431",
+"ext": "QBE",
+"int": "G",
+"trim": "LUXE FWD"
+},
+{
+"model": "QX60",
+"code": "8431",
+"ext": "QBE",
+"int": "K",
+"trim": "LUXE FWD"
+},
+{
+"model": "QX60",
+"code": "8441",
+"ext": "GAT",
+"int": "G",
+"trim": "SPORT"
+},
+{
+"model": "QX60",
+"code": "8441",
+"ext": "KBY",
+"int": "G",
+"trim": "SPORT"
+},
+{
+"model": "QX60",
+"code": "8441",
+"ext": "QBE",
+"int": "G",
+"trim": "SPORT"
+},
+{
+"model": "QX60",
+"code": "8441",
+"ext": "XKJ",
+"int": "G",
+"trim": "SPORT"
+},
+{
+"model": "QX65",
+"code": "8521",
+"ext": "GAT",
+"int": "N",
+"trim": "AUTOG"
+},
+{
+"model": "QX65",
+"code": "8521",
+"ext": "XEX",
+"int": "G",
+"trim": "AUTOG"
+},
+{
+"model": "QX65",
+"code": "8521",
+"ext": "XKJ",
+"int": "G",
+"trim": "AUTOG"
+},
+{
+"model": "QX65",
+"code": "8521",
+"ext": "XKJ",
+"int": "K",
+"trim": "AUTOG"
+},
+{
+"model": "QX65",
+"code": "8521",
+"ext": "XKJ",
+"int": "N",
+"trim": "AUTOG"
+},
+{
+"model": "QX65",
+"code": "8521",
+"ext": "XJU",
+"int": "K",
+"trim": "Autograph AWD"
+},
+{
+"model": "QX65",
+"code": "8501",
+"ext": "KH3",
+"int": "G",
+"trim": "LUXE AWD"
+},
+{
+"model": "QX65",
+"code": "8501",
+"ext": "QBE",
+"int": "G",
+"trim": "LUXE AWD"
+},
+{
+"model": "QX65",
+"code": "8501",
+"ext": "QBE",
+"int": "K",
+"trim": "LUXE AWD"
+},
+{
+"model": "QX65",
+"code": "8511",
+"ext": "GAT",
+"int": "G",
+"trim": "SPORT AWD"
+},
+{
+"model": "QX65",
+"code": "8511",
+"ext": "KBY",
+"int": "G",
+"trim": "SPORT AWD"
+},
+{
+"model": "QX65",
+"code": "8511",
+"ext": "QBE",
+"int": "G",
+"trim": "SPORT AWD"
+},
+{
+"model": "QX65",
+"code": "8511",
+"ext": "XEX",
+"int": "G",
+"trim": "SPORT AWD"
+}
+]
