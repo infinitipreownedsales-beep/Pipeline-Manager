@@ -7,3 +7,6 @@ package-lock.json
 __pycache__/
 *.pyc
 config.json
+
+# playwright (dev-only)
+/node_modules/playwright*

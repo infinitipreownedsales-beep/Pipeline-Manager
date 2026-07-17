@@ -11,6 +11,16 @@ QX65), ported out of Excel into a small, deterministic Python program.
 
 It ingests the two dealer exports → runs the engine → emits five clean tables.
 
+## Easiest: the double-click app (no install, no terminal)
+
+Open **`Pipeline-Manager.html`** (in the repo root) by double-clicking it — it
+runs the entire engine in your web browser, fully offline. Paste your two
+exports, pick the order month, click **Compute**, and all five tables appear.
+Nothing is installed and nothing leaves your computer. Regenerate it after
+changing the engine with `python3 build/gen_pipeline_html.py`.
+
+Everything below is the same engine as a command-line tool, for scripting.
+
 ## Quick start
 
 ```bash
