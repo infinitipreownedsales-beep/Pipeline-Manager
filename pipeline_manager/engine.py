@@ -92,6 +92,8 @@ class OrderLine:
     eff_demote: bool
     priority: float
     wholesale_now: int
+    buy_grade: str = ""
+    monthly_plan: list = field(default_factory=list)
 
 
 @dataclass
@@ -303,35 +305,37 @@ def _proj_rate(m: ConfigMetrics | None, dts: float | None, s: Settings) -> float
     return min(s.rate_cap, max(prate_half, dts_rate))
 
 
-def project_at_arrival(key, model, pos, metric, seas, s: Settings):
-    """Return (projection_at_arrival, order_month_target_projection).
+def _proj_chain(model, pos, metric, seas, s: Settings) -> list:
+    """The six-month forward sell-down chain proj_0..proj_5.
 
-    CPO: forward sell-down, month by month, absorbing inbound as it lands.
-    proj_0 must swallow every unit arriving *before* the projection window opens
-    so pipeline metal already coming isn't ordered twice.
+    Each month: sell down at the config's pace × that month's seasonality, never
+    below the count of stalled units, then add whatever arrives that month.
+    proj_0 swallows every inbound unit landing *before* the window opens so
+    pipeline metal already coming isn't ordered twice. Computed the same way in
+    every mode (only the headline PROJ@ARR switches on mode).
     """
-    om = s.order_month  # 1..12
+    om = s.order_month
     dts = metric.dts if metric else None
     rate = _proj_rate(metric, dts, s)
 
-    def arrivals_at(offset: int) -> int:
-        cal = ((om - 1 + offset) % 12) + 1
-        return pos.arrivals.get(cal, 0)
-
-    if s.mode != "CPO":
-        # Right-now snapshot: on-lot + the whole pipeline.
-        proj = pos.onlot + pos.inbound_total
-        return xround(proj, 1), proj
+    def arrivals_at(offset):
+        return pos.arrivals.get(((om - 1 + offset) % 12) + 1, 0)
 
     later = sum(arrivals_at(k) for k in range(1, 6))
-    proj = [pos.onlot + max(0, pos.inbound_total - later)]  # proj_0
+    proj = [pos.onlot + max(0, pos.inbound_total - later)]
     for k in range(1, 6):
         seas_m = seas[model][(om - 1 + (k - 1)) % 12]
-        drawn = proj[k - 1] - rate * seas_m
-        proj.append(max(pos.stalled, drawn) + arrivals_at(k))
-    window = s.cpo_window(model)
-    proj_at_arr = xround(proj[window], 1)
-    return proj_at_arr, proj[0]
+        proj.append(max(pos.stalled, proj[k - 1] - rate * seas_m) + arrivals_at(k))
+    return proj
+
+
+def project_at_arrival(key, model, pos, metric, seas, s: Settings):
+    """Return (projection_at_arrival, full six-month proj chain)."""
+    chain = _proj_chain(model, pos, metric, seas, s)
+    if s.mode != "CPO":
+        proj = pos.onlot + pos.inbound_total
+        return xround(proj, 1), chain
+    return xround(chain[s.cpo_window(model)], 1), chain
 
 
 # --------------------------------------------------------------------------- #
@@ -434,6 +438,17 @@ def _priority(line_key, model, dts, momentum, need, proj, order_tgt, seas_arr,
     return -1
 
 
+def _buy_grade(momentum, mom_factor, need) -> str:
+    """A quick read on order conviction (mirrors the workbook's badge column)."""
+    if need <= 0:
+        return ""
+    if momentum == "ACCEL" or mom_factor >= 0.85:
+        return "💚 STRONG"
+    if mom_factor >= 0.35:
+        return "🔵 STEADY"
+    return "🟡 SPECULATIVE"
+
+
 def build_lines(s, metrics, seas, positions, aged_brakes, override_map) -> list:
     lines: list[OrderLine] = []
     for i, cfg in enumerate(s.roster):
@@ -449,7 +464,7 @@ def build_lines(s, metrics, seas, positions, aged_brakes, override_map) -> list:
         window = s.cpo_window(model) if s.mode == "CPO" else 0
         seas_arr = seas[model][(s.order_month - 1 + window) % 12]
 
-        proj_at_arr, _ = project_at_arrival(key, model, pos, metric, seas, s)
+        proj_at_arr, chain = project_at_arrival(key, model, pos, metric, seas, s)
 
         suppressed = _suppressed(key, model, code, ext, interior, s)
         demoted = any(_matches(e, model, ext, interior, key) for e in s.demote)
@@ -474,17 +489,33 @@ def build_lines(s, metrics, seas, positions, aged_brakes, override_map) -> list:
         excess = max(0, xround(pos.onlot + pos.inbound_total - 3 * rate - overstock_target))
         wholesale_now = 0 if suppressed else min(excess, len(pos.wholesale_eligible))
 
-        prio = _priority(key, model, dts, metric.momentum if metric else "dormant",
+        momentum = metric.momentum if metric else "dormant"
+        prio = _priority(key, model, dts, momentum,
                          need, proj_at_arr, order_target, seas_arr, eff_demote, i)
+
+        # Six-month rolling plan: per month, the seasonal target (always shown,
+        # even for demoted combos), what arrives, and what to order. A manual
+        # override lands once, on the first order month.
+        blocked = suppressed or eff_demote
+        monthly_plan = []
+        for k in range(6):
+            cal = (s.order_month - 1 + k) % 12
+            tgt = max(need_floor, xround(base * seas[model][cal]))
+            arr = pos.arrivals.get(cal + 1, 0)
+            order_k = 0 if blocked else max(0, xround(tgt - chain[k]))
+            if k == 0 and not blocked:
+                order_k += override_qty
+            monthly_plan.append({"month": cal + 1, "tgt": tgt, "arr": arr, "ord": order_k})
 
         lines.append(OrderLine(
             model=model, code=code, ext=ext, interior=interior, trim=cfg.get("trim", ""),
-            key=key, dts=dts, momentum=metric.momentum if metric else "dormant",
+            key=key, dts=dts, momentum=momentum,
             onlot=pos.onlot, inbound=pos.inbound_total, proj_at_arrival=proj_at_arr,
             base=base, found=found, mom_factor=mf,
             order_target=order_target, overstock_target=overstock_target, need=need,
             suppressed=suppressed, demoted=demoted, eff_demote=eff_demote,
             priority=prio, wholesale_now=wholesale_now,
+            buy_grade=_buy_grade(momentum, mf, need), monthly_plan=monthly_plan,
         ))
     return lines
 

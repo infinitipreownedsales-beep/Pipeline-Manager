@@ -138,6 +138,17 @@ def test_projection_need_target_match_grid():
         assert l.overstock_target == (g["tgt_m"] or 0), f"{key} target"
 
 
+def test_six_month_plan_matches_grid():
+    res = _run()
+    plan = _load("plan_ref.json")
+    lines = {l.key: l for l in res.lines}
+    for key, months in plan.items():
+        got = lines[key].monthly_plan
+        for i, exp in enumerate(months):
+            for f in ("tgt", "arr", "ord"):
+                assert (got[i][f] or 0) == (exp[f] or 0), f"{key} month {i} {f}"
+
+
 def test_order_priority_ranking_matches_workbook():
     res = _run()
     op = reports.order_priority(res)

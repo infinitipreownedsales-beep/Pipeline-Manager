@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Elite Pipeline Manager</title>
+<style>
+  :root{
+    --bg:#0a0e16; --panel:#111823; --panel2:#161f2e; --panel3:#1c2738;
+    --ink:#e8eef6; --ink2:#c3ccd9; --muted:#8492a6; --line:#243044; --line2:#2f3d54;
+    --accent:#3b82f6; --accent2:#2563eb;
+    --teal:#5eead4; --teal-bg:#0e3b38; --teal-hd:#0f766e;
+    --orange:#fb923c; --orange-bg:#5a2410; --orange-hd:#c2410c;
+    --build:#34d399; --alt:#fbbf24; --option:#60a5fa; --over:#f87171;
+    --good:#34d399; --warn:#fbbf24; --bad:#f87171;
+    --shadow:0 1px 3px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.25);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:radial-gradient(1200px 600px at 70% -10%,#132036 0,var(--bg) 60%);
+    color:var(--ink);min-height:100vh;
+    font:14.5px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;}
+  header{position:sticky;top:0;z-index:20;backdrop-filter:blur(10px);
+    background:linear-gradient(180deg,rgba(11,17,28,.96),rgba(11,17,28,.82));
+    border-bottom:1px solid var(--line);padding:14px 22px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  header .brand{display:flex;flex-direction:column}
+  header h1{margin:0;font-size:16px;letter-spacing:2px;font-weight:800}
+  header h1 .thin{color:var(--muted);font-weight:500}
+  header .sub{color:var(--muted);font-size:11.5px;letter-spacing:.3px}
+  header .ctrls{margin-left:auto;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+  .wrap{max-width:1280px;margin:0 auto;padding:20px 22px 60px}
+  .fld label{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px}
+  select,input[type=date],input[type=number]{background:var(--panel2);color:var(--ink);
+    border:1px solid var(--line2);border-radius:8px;padding:7px 9px;font-size:13px;outline:none}
+  select:focus,input:focus{border-color:var(--accent)}
+  button{cursor:pointer;border:none;border-radius:9px;font-weight:600;font-family:inherit}
+  .primary{background:linear-gradient(180deg,#3b82f6,#2563eb);color:#fff;padding:9px 18px;font-size:14px;box-shadow:var(--shadow)}
+  .primary:hover{filter:brightness(1.08)}
+  .ghost{background:var(--panel2);color:var(--ink2);border:1px solid var(--line2);padding:7px 13px;font-size:12.5px}
+  .ghost:hover{border-color:var(--accent);color:var(--ink)}
+  .card{background:linear-gradient(180deg,var(--panel),#0f1622);border:1px solid var(--line);border-radius:14px;
+    padding:16px 18px;margin-bottom:16px;box-shadow:var(--shadow)}
+  .card h2{margin:0 0 3px;font-size:15px}
+  .hint{color:var(--muted);font-size:12.5px;margin-bottom:12px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:840px){.grid2{grid-template-columns:1fr}.wrap{padding:14px}}
+  textarea{width:100%;height:120px;background:#0c1420;color:var(--ink);border:1px solid var(--line2);border-radius:9px;
+    padding:9px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;resize:vertical}
+  textarea.ok{border-color:var(--good)}
+  label.top{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+  .filerow{display:flex;gap:8px;align-items:center;margin-top:7px;color:var(--muted);font-size:11.5px}
+  .databar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .databar .dot{width:8px;height:8px;border-radius:50%;background:var(--good);box-shadow:0 0 8px var(--good)}
+  /* KPI tiles */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:18px}
+  .kpi{background:linear-gradient(180deg,var(--panel2),#111a28);border:1px solid var(--line);border-radius:14px;
+    padding:14px 16px;position:relative;overflow:hidden}
+  .kpi .lab{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+  .kpi .big{font-size:30px;font-weight:800;line-height:1.1;margin-top:4px;font-variant-numeric:tabular-nums}
+  .kpi .sub{font-size:12px;color:var(--ink2);margin-top:2px}
+  .kpi .edge{position:absolute;left:0;top:0;bottom:0;width:4px}
+  .kpi.model .big{color:var(--orange)}
+  /* section headers */
+  .sec{display:flex;align-items:baseline;gap:11px;margin:26px 2px 12px;padding-bottom:7px;border-bottom:1px solid var(--line2)}
+  .sec .n{background:linear-gradient(180deg,#3b82f6,#1e40af);color:#fff;border-radius:7px;padding:3px 9px;font-weight:800;font-size:12px}
+  .sec h2{margin:0;font-size:17px;letter-spacing:.2px}
+  .sec .meta{margin-left:auto;color:var(--muted);font-size:12px}
+  .modelband{display:flex;align-items:center;gap:10px;margin:16px 0 6px;font-weight:800;font-size:14px;letter-spacing:.5px}
+  .modelband .mn{background:var(--panel3);border:1px solid var(--line2);border-radius:8px;padding:3px 11px}
+  .tag{background:var(--panel2);border:1px solid var(--line2);border-radius:20px;padding:2px 10px;font-size:11px;color:var(--ink2);font-weight:600}
+  /* tables */
+  .tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  thead th{background:#0e1523;color:var(--muted);text-transform:uppercase;font-size:10.5px;letter-spacing:.5px;
+    font-weight:700;padding:9px 10px;text-align:left;position:sticky;top:0;border-bottom:1px solid var(--line2)}
+  tbody td{padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap;font-variant-numeric:tabular-nums}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover td{background:rgba(59,130,246,.06)}
+  td.num,th.num{text-align:right}
+  th.teal,td.teal{background:var(--teal-bg)}
+  th.teal{background:var(--teal-hd);color:#d5fff8}
+  td.teal{color:var(--teal);font-weight:700}
+  th.orange{background:var(--orange-hd);color:#ffe9d6}
+  td.need{background:var(--orange-bg);color:var(--orange);font-weight:800;font-size:15px}
+  td.dim{color:var(--muted)}
+  .badge{border-radius:7px;padding:2px 9px;font-size:11.5px;font-weight:700;display:inline-block}
+  .b-build{background:rgba(52,211,153,.15);color:var(--build);border:1px solid rgba(52,211,153,.35)}
+  .b-alt{background:rgba(251,191,36,.13);color:var(--alt);border:1px solid rgba(251,191,36,.32)}
+  .b-opt{background:rgba(96,165,250,.13);color:var(--option);border:1px solid rgba(96,165,250,.3)}
+  .pill{border-radius:20px;padding:2px 9px;font-size:11px;font-weight:600;display:inline-block}
+  .m-ACCEL{background:rgba(52,211,153,.16);color:#4ade80}
+  .m-steady{background:rgba(96,165,250,.16);color:#7cb0ff}
+  .m-cooling{background:rgba(248,113,113,.16);color:#fb8888}
+  .m-oncadence{background:rgba(251,191,36,.15);color:#fcd34d}
+  .m-dormant{background:rgba(132,146,166,.14);color:var(--muted)}
+  .dtsband{display:inline-block;min-width:30px;text-align:right;border-radius:6px;padding:1px 7px;font-weight:700;font-size:12.5px}
+  .grade{font-size:12px;font-weight:700;white-space:nowrap}
+  .swap{color:var(--bad);font-weight:800}
+  .read{font-weight:700;display:inline-flex;gap:5px;align-items:center}
+  .read.AHEAD{color:var(--good)} .read.ON{color:var(--option)} .read.BEHIND{color:var(--bad)}
+  /* month plan grid */
+  .plan{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-top:4px}
+  .pcell{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:8px 6px;text-align:center}
+  .pcell .pm{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .pcell .po{font-size:22px;font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums}
+  .pcell .pd{font-size:10px;color:var(--muted);margin-top:2px}
+  .pcell.hot{border-color:rgba(251,146,60,.5)}
+  /* fleet heatmap */
+  .heat{border-collapse:separate;border-spacing:3px}
+  .heat td.cell{width:44px;text-align:center;border-radius:7px;font-weight:700;font-size:12.5px;padding:7px 0;color:#eaf6ff}
+  .heat td.rl{font-weight:800;padding-right:8px}
+  .spark{display:block}
+  details.exp{margin-top:6px}
+  details.exp summary{cursor:pointer;color:var(--option);font-size:12px;list-style:none;padding:4px 0}
+  details.exp summary::-webkit-details-marker{display:none}
+  details.exp summary::before{content:"▸ ";color:var(--muted)}
+  details.exp[open] summary::before{content:"▾ "}
+  .foot{color:var(--muted);font-size:12px;margin-top:8px}
+  .err{color:var(--bad)} .okmsg{color:var(--good)}
+  .empty{color:var(--muted);font-size:13px;padding:10px 2px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:11.5px;margin:2px 0 8px}
+  .legend b{color:var(--ink2)}
+  @media print{
+    header,.card.noprint,.sec .meta,.noprint{display:none!important}
+    body{background:#fff;color:#000}
+    .card{box-shadow:none;border-color:#ccc}
+    #print-vin{display:block!important}
+  }
+  #print-vin{display:none}
+</style>
+</head>
+<body data-palette="#5eead4,#fb923c,#60a5fa">
+<header>
+  <div class="brand">
+    <h1>ELITE PIPELINE <span class="thin">MANAGER</span></h1>
+    <div class="sub">Recomputes everything from your two exports · every run · offline</div>
+  </div>
+  <div class="ctrls">
+    <div class="fld"><label>Order month</label><select id="ordmonth"></select></div>
+    <div class="fld"><label>Mode</label><select id="mode">
+      <option value="CPO">CPO · factory order</option>
+      <option value="PPO">PPO · right-now</option>
+      <option value="MID-MONTH">Mid-month · right-now</option></select></div>
+    <div class="fld"><label>QX80</label><input type="number" id="a80" value="50" style="width:64px"></div>
+    <div class="fld"><label>QX60</label><input type="number" id="a60" value="100" style="width:64px"></div>
+    <div class="fld"><label>QX65</label><input type="number" id="a65" value="100" style="width:64px"></div>
+    <button class="ghost" id="editdata">✎ Data</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="card noprint" id="datacard">
+    <h2>Paste your two exports</h2>
+    <div class="hint">Select all cells (with the header row) in each report and copy, then paste below — or choose a saved <b>.csv</b>. Nothing leaves your computer. It recomputes the moment you change any setting.</div>
+    <div class="grid2">
+      <div><label class="top">Inventory Summary</label>
+        <textarea id="inv" placeholder="Paste the vehicle inventory export here (with its header row)…"></textarea>
+        <div class="filerow"><input type="file" id="invfile" accept=".csv,.txt,.tsv"><span id="invstat"></span></div></div>
+      <div><label class="top">Speed-to-Sell (sales history)</label>
+        <textarea id="sales" placeholder="Paste the Speed-to-Sell export here (with its header row)…"></textarea>
+        <div class="filerow"><input type="file" id="salesfile" accept=".csv,.txt,.tsv"><span id="salesstat"></span></div></div>
+    </div>
+    <div style="margin-top:11px;display:flex;gap:9px;align-items:center;flex-wrap:wrap">
+      <button class="primary" id="run">Compute order ▶</button>
+      <button class="ghost" id="loadsample">Load sample data</button>
+      <button class="ghost" id="clearall">Clear</button>
+      <div class="fld" style="margin-left:6px"><label>As-of date</label><input type="date" id="today"></div>
+      <span id="status" class="foot"></span>
+    </div>
+    <details class="exp"><summary>Advanced — CPO arrival window (months)</summary>
+      <div style="display:flex;gap:12px;margin-top:8px;align-items:flex-end">
+        <div class="fld"><label>QX80</label><input type="number" id="w80" value="3" style="width:60px"></div>
+        <div class="fld"><label>QX60</label><input type="number" id="w60" value="2" style="width:60px"></div>
+        <div class="fld"><label>QX65</label><input type="number" id="w65" value="2" style="width:60px"></div>
+        <span class="foot">Brief's canonical windows. Set 5 / 5 / 1 to match the old workbook exactly.</span>
+      </div>
+    </details>
+  </div>
+  <div id="results"></div>
+</div>
+
+<script>
+"use strict";
+const ROSTER = __ROSTER__;
+const DEFAULTS = __DEFAULTS__;
+const SAMPLE = { inv: __SAMPLE_INV__, sales: __SAMPLE_SALES__ };
+const MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+const MODELS = ["QX80","QX60","QX65"];
+__ENGINE__
+__RENDER__
+__WIRING__
+</script>
+</body>
+</html>
