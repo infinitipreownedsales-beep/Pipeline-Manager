@@ -16,6 +16,7 @@ from __future__ import annotations
 import calendar
 import datetime as _dt
 import math
+import re
 from dataclasses import dataclass, field
 
 from .config import Settings
@@ -306,30 +307,68 @@ def _proj_rate(m: ConfigMetrics | None, dts: float | None, s: Settings) -> float
     return min(s.rate_cap, max(prate_half, dts_rate))
 
 
-def _prod_midx(production_month):
-    """Parse a 'YYYY-MM' production month into a month index, or None."""
+_DAYS_PER_MONTH = 30.44
+
+
+def _production_date(production_month):
+    """Representative production date: the middle of the stated month.
+
+    We only know the *month* a unit was built ('2026-03'), so mid-month (the
+    15th) is the unbiased point estimate — using the 1st would systematically
+    overstate every lead by ~half a month.
+    """
     try:
         y, m = str(production_month).split("-")[:2]
-        return int(y) * 12 + int(m)
+        return _dt.date(int(y), int(m), 15)
     except (ValueError, AttributeError):
         return None
 
 
+def _arrival_date(u, today: _dt.date):
+    """The exact date a unit landed / will land, to the day where the data allows.
+
+      * on-lot -> today minus days-in-stock (exact)
+      * inbound with a real ETA date -> that date (exact)
+      * inbound with only a month ('Month of August') -> the 15th of that month
+    """
+    if u.is_dlr_inv:
+        return today - _dt.timedelta(days=round(u.dis))
+    d = _parse_eta_full_date(u.eta)
+    if d is not None:
+        return d
+    if u.arrival_month:
+        year = today.year if u.arrival_month >= today.month else today.year + 1
+        return _dt.date(year, u.arrival_month, 15)
+    return None
+
+
+def _parse_eta_full_date(eta):
+    """Parse an ETA string to an exact date, or None if only a month is given."""
+    if eta is None:
+        return None
+    s = re.sub(r"week of", "", str(eta), flags=re.I).strip()
+    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d", "%m-%d-%Y"):
+        try:
+            return _dt.datetime.strptime(s, fmt).date()
+        except ValueError:
+            pass
+    return None
+
+
 def compute_arrival_windows(inventory, today: _dt.date, s: Settings) -> dict:
-    """Continuous, trend-weighted production->arrival lead per model.
+    """Continuous, trend-weighted production->arrival lead per model, in months.
 
-    Instead of a fixed number of months, we measure how long real units take
-    from their production month to landing on the lot:
+    We measure how long real units take from when they were built to when they
+    land on the lot, to the day where the exports allow it:
 
-      * inbound units      -> (ETA arrival month) - (production month)   [planned]
-      * on-lot units       -> (today - days-in-stock) - (production month) [realized]
+      * inbound units -> (planned ETA date)          - (mid production month)
+      * on-lot units  -> (today - days-in-stock)      - (mid production month)
 
     Samples are weighted by how recent each unit's production is (a trend, so
     the current cadence dominates), averaged, and floored at min_cpo_window
     (a factory order cannot arrive the month it is placed). order_lead_pad adds
     any order->production slotting time the exports can't see (default 0).
     """
-    cur = today.year * 12 + today.month
     fallback = {"QX80": 3.0, "QX60": 2.0, "QX65": 2.0}
     out = {}
     for model in ("QX80", "QX60", "QX65"):
@@ -337,21 +376,15 @@ def compute_arrival_windows(inventory, today: _dt.date, s: Settings) -> dict:
         for u in inventory:
             if u.model != model:
                 continue
-            pm = _prod_midx(u.production_month)
-            if pm is None:
+            prod = _production_date(u.production_month)
+            arr = _arrival_date(u, today)
+            if prod is None or arr is None:
                 continue
-            if u.is_inbound and u.arrival_month:
-                arr = (cur // 12) * 12 + u.arrival_month
-                while arr < cur - 1:
-                    arr += 12
-                lead = arr - pm
-            elif u.is_dlr_inv:
-                lead = (cur - round(u.dis / 30.44)) - pm
-            else:
-                continue
+            lead = (arr - prod).days / _DAYS_PER_MONTH
             if not (0 <= lead <= 12):
                 continue
-            w = 0.5 ** (max(0, cur - pm) / max(0.5, s.lead_halflife))
+            months_since_prod = max(0.0, (today - prod).days / _DAYS_PER_MONTH)
+            w = 0.5 ** (months_since_prod / max(0.5, s.lead_halflife))
             wsum += w
             lsum += w * lead
         if wsum == 0:
