@@ -544,8 +544,10 @@ function suppressed(code,ext,intr,s){ if(code==="8461") return true;
 function effectiveRoster(s){ if(!s.roster_add||!s.roster_add.length) return ROSTER;
   var seen={}; ROSTER.forEach(function(c){ seen[c.model+"|"+c.code+"|"+c.ext+"|"+c.int]=1; });
   var out=ROSTER.slice();
-  s.roster_add.forEach(function(c){ if(!c.model||!c.code) return; var k=c.model+"|"+c.code+"|"+c.ext+"|"+c.int;
-    if(!seen[k]){ seen[k]=1; out.push({model:c.model,code:String(c.code),ext:c.ext||"",int:c.int||"",trim:c.trim||""}); } });
+  s.roster_add.forEach(function(c){ if(!c.model||!c.code) return;
+    var code=digitsOnly(c.code).slice(0,4); if(!code) return;   // drop the year digit
+    var k=c.model+"|"+code+"|"+(c.ext||"")+"|"+(c.int||"");
+    if(!seen[k]){ seen[k]=1; out.push({model:c.model,code:code,ext:c.ext||"",int:c.int||"",trim:c.trim||""}); } });
   return out; }
 function buyGrade(mom,mf,need){ if(need<=0) return ""; if(mom==="ACCEL"||mf>=0.85) return "💚 STRONG"; if(mf>=0.35) return "🔵 STEADY"; return "🟡 SPECULATIVE"; }
 function buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demoReturns){

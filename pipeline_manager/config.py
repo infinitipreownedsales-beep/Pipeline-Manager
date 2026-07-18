@@ -141,17 +141,21 @@ class Settings:
         return self.cpo_windows.get(model, "auto")
 
     def effective_roster(self) -> list:
-        """The built-in roster plus any user roster_add combos (deduped)."""
+        """The built-in roster plus any user roster_add combos (deduped).
+
+        Add codes are normalised to 4 digits, so a 5-digit code straight off the
+        preferencing sheet (the 5th digit is model year) still lands on the right
+        config, matching inventory and sales."""
         seen = {f"{c['model']}|{c['code']}|{c['ext']}|{c['int']}" for c in self.roster}
         out = list(self.roster)
         for c in self.roster_add:
-            try:
-                k = f"{c['model']}|{c['code']}|{c['ext']}|{c['int']}"
-            except (KeyError, TypeError):
+            if not (c.get("model") and c.get("code")):
                 continue
-            if k not in seen and c.get("model") and c.get("code"):
+            code = "".join(ch for ch in str(c["code"]) if ch.isdigit())[:4]
+            k = f"{c['model']}|{code}|{c.get('ext', '')}|{c.get('int', '')}"
+            if code and k not in seen:
                 seen.add(k)
-                out.append({"model": c["model"], "code": str(c["code"]),
+                out.append({"model": c["model"], "code": code,
                             "ext": c.get("ext", ""), "int": c.get("int", ""),
                             "trim": c.get("trim", "")})
         return out
