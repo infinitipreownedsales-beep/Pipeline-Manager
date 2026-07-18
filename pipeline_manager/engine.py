@@ -96,6 +96,7 @@ class OrderLine:
     wholesale_now: int
     buy_grade: str = ""
     monthly_plan: list = field(default_factory=list)
+    demo_returning: int = 0   # active demos of this config expected back in-window
 
 
 @dataclass
@@ -309,6 +310,37 @@ def _proj_rate(m: ConfigMetrics | None, dts: float | None, s: Settings) -> float
     return min(s.rate_cap, max(prate_half, dts_rate))
 
 
+def compute_demo_returns(demo_units, s: Settings, today: _dt.date) -> dict:
+    """When each active demo is expected to re-enter sellable inventory, as a
+    month offset from the order month, keyed by config.
+
+    Return timing = when the demo reaches the swap threshold (its age as a demo,
+    from an explicit start date if known, else days-in-stock). A demo already
+    past the threshold returns imminently (offset 0). Offsets before the order
+    month collapse to 0 (it is back before the order lands).
+    """
+    returns: dict[str, list] = {}
+    if not s.anticipate_demo_returns:
+        return returns
+    order_year = today.year if s.order_month >= today.month else today.year + 1
+    order_start = _dt.date(order_year, s.order_month, 1)
+    for u in demo_units:
+        if not u.key:
+            continue
+        days_as_demo = u.dis
+        for prefix, start in s.demo_starts.items():
+            if prefix and u.stock.startswith(prefix):
+                try:
+                    days_as_demo = (today - _dt.date.fromisoformat(str(start))).days
+                except ValueError:
+                    pass
+                break
+        return_date = today + _dt.timedelta(days=max(0, s.swap_threshold - days_as_demo))
+        offset = max(0, round((return_date - order_start).days / _DAYS_PER_MONTH))
+        returns.setdefault(u.key, []).append(offset)
+    return returns
+
+
 _DAYS_PER_MONTH = 30.44
 
 
@@ -421,13 +453,15 @@ def _interp_seas(seas_model, om, offset):
     return a + (b - a) * frac
 
 
-def _proj_chain(model, pos, metric, seas, s: Settings, n=8) -> list:
+def _proj_chain(model, pos, metric, seas, s: Settings, n=8, returns=()) -> list:
     """Forward sell-down chain proj_0..proj_n.
 
-    Each month: sell down at the config's pace × that month's seasonality, never
-    below the count of stalled units, then add whatever arrives that month.
-    proj_0 swallows every inbound unit landing *before* the window opens so
-    pipeline metal already coming isn't ordered twice.
+    Each month: sell down at the config's pace and that month's seasonality,
+    never below the held floor (stalled units + demos that have come back), then
+    add whatever lands that month (inbound pipeline + returning demos). proj_0
+    swallows everything already back before the window opens so it isn't ordered
+    twice. A returned demo joins the held floor -- used, higher-mileage stock
+    that lingers rather than reselling at the config's fresh pace.
     """
     om = s.order_month
     rate = _proj_rate(metric, metric.dts if metric else None, s)
@@ -435,11 +469,18 @@ def _proj_chain(model, pos, metric, seas, s: Settings, n=8) -> list:
     def arrivals_at(offset):
         return pos.arrivals.get(((om - 1 + offset) % 12) + 1, 0)
 
+    def demos_at(offset):
+        return sum(1 for r in returns if r == offset)
+
+    def demos_by(offset):     # returned and still held by this month
+        return sum(1 for r in returns if r <= offset)
+
     later = sum(arrivals_at(k) for k in range(1, n + 1))
-    proj = [pos.onlot + max(0, pos.inbound_total - later)]
+    proj = [pos.onlot + max(0, pos.inbound_total - later) + demos_at(0)]
     for k in range(1, n + 1):
+        held = pos.stalled + demos_by(k)
         seas_m = seas[model][(om - 1 + (k - 1)) % 12]
-        proj.append(max(pos.stalled, proj[k - 1] - rate * seas_m) + arrivals_at(k))
+        proj.append(max(held, proj[k - 1] - rate * seas_m) + arrivals_at(k) + demos_at(k))
     return proj
 
 
@@ -452,11 +493,13 @@ def _proj_at(chain, offset):
     return chain[lo] + (chain[lo + 1] - chain[lo]) * frac
 
 
-def project_at_arrival(model, pos, metric, seas, s: Settings, window):
+def project_at_arrival(model, pos, metric, seas, s: Settings, window, returns=()):
     """Return (projection_at_arrival, full proj chain) for a fractional window."""
-    chain = _proj_chain(model, pos, metric, seas, s, n=max(8, int(math.ceil(window)) + 1))
+    chain = _proj_chain(model, pos, metric, seas, s,
+                        n=max(8, int(math.ceil(window)) + 1), returns=returns)
     if s.mode != "CPO":
-        proj = pos.onlot + pos.inbound_total
+        # Right-now snapshot still credits demos already back before the window.
+        proj = pos.onlot + pos.inbound_total + sum(1 for r in returns if r == 0)
         return xround(proj, 1), chain
     return xround(_proj_at(chain, window), 1), chain
 
@@ -572,7 +615,8 @@ def _buy_grade(momentum, mom_factor, need) -> str:
     return "🟡 SPECULATIVE"
 
 
-def build_lines(s, metrics, seas, positions, aged_brakes, override_map, windows) -> list:
+def build_lines(s, metrics, seas, positions, aged_brakes, override_map, windows,
+                demo_returns) -> list:
     lines: list[OrderLine] = []
     for i, cfg in enumerate(s.roster):
         model, code, ext, interior = cfg["model"], cfg["code"], cfg["ext"], cfg["int"]
@@ -587,7 +631,8 @@ def build_lines(s, metrics, seas, positions, aged_brakes, override_map, windows)
         window = windows[model] if s.mode == "CPO" else 0.0
         seas_arr = _interp_seas(seas[model], s.order_month, window)
 
-        proj_at_arr, chain = project_at_arrival(model, pos, metric, seas, s, window)
+        returns = demo_returns.get(key, [])
+        proj_at_arr, chain = project_at_arrival(model, pos, metric, seas, s, window, returns)
 
         suppressed = _suppressed(key, model, code, ext, interior, s)
         demoted = any(_matches(e, model, ext, interior, key) for e in s.demote)
@@ -639,6 +684,7 @@ def build_lines(s, metrics, seas, positions, aged_brakes, override_map, windows)
             suppressed=suppressed, demoted=demoted, eff_demote=eff_demote,
             priority=prio, wholesale_now=wholesale_now,
             buy_grade=_buy_grade(momentum, mf, need), monthly_plan=monthly_plan,
+            demo_returning=len(returns),
         ))
     return lines
 
@@ -672,9 +718,11 @@ def run(inventory, sales, settings: Settings, today: _dt.date | None = None) -> 
         override_map[e["key"]] = override_map.get(e["key"], 0) + int(e.get("qty", 0))
 
     windows = resolve_windows(inventory, today, settings)
-    lines = build_lines(settings, metrics, seas, positions, aged_brakes, override_map, windows)
     demo_units = [u for u in inventory
                   if u.is_dlr_inv and _is_demo(u.stock, settings.demo_stocks)]
+    demo_returns = compute_demo_returns(demo_units, settings, today)
+    lines = build_lines(settings, metrics, seas, positions, aged_brakes,
+                        override_map, windows, demo_returns)
     orphans = _find_orphans(sales, inventory, settings.roster)
 
     return EngineResult(

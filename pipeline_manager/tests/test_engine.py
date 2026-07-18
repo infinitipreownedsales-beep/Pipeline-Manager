@@ -37,7 +37,11 @@ def _load(fname):
 def _run(**kw):
     inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
     sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
-    s = Settings(order_month=9, mode="CPO",
+    # Pinned windows and demo-return modeling OFF reproduce the source workbook,
+    # which used fixed months and fully suppressed demos. Both are validated
+    # against the workbook cell-for-cell; the data-driven window and
+    # demo-return anticipation are newer layers with their own tests.
+    s = Settings(order_month=9, mode="CPO", anticipate_demo_returns=False,
                  cpo_windows={"QX80": 5, "QX60": 5, "QX65": 1}, **kw)
     return engine.run(inv, sales, s, today=_AS_OF)
 
@@ -213,6 +217,24 @@ def test_executive_demo_board():
     # A single-lifetime-sale config (a "whim") must never appear.
     all_keys = {p["key"] for m in ed.values() for p in m}
     assert "QX65|8511|GAT|G" not in all_keys   # 1 sold, DTS 10 — fast but unproven
+
+
+def test_demo_return_is_anticipated_and_held():
+    """A config with an out demo must project that unit coming back (so ordering
+    doesn't over-replace it) and hold it as slow-moving stock — lowering NEED vs
+    treating the demo as gone forever."""
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    key = "QX80|8361|GAT|A"                       # has an active demo (N15126)
+    on = engine.run(inv, sales, Settings(order_month=9, mode="CPO",
+                    anticipate_demo_returns=True), today=_AS_OF)
+    off = engine.run(inv, sales, Settings(order_month=9, mode="CPO",
+                     anticipate_demo_returns=False), today=_AS_OF)
+    lon = next(l for l in on.lines if l.key == key)
+    loff = next(l for l in off.lines if l.key == key)
+    assert lon.demo_returning >= 1
+    assert lon.proj_at_arrival > loff.proj_at_arrival    # the returning unit shows up
+    assert lon.need <= loff.need                         # so we don't over-order
 
 
 def test_recompute_is_deterministic():

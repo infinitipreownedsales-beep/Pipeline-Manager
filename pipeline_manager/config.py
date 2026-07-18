@@ -78,6 +78,11 @@ class Settings:
     # --- tunable thresholds (brief §7/§14/§15/§17) ------------------------- #
     prove_bar: int = 2                   # R90 needed for a demoted combo to surface
     swap_threshold: int = 90             # demo age (days) before flagging a swap
+    # Anticipate demos re-entering inventory: a returning demo is added to the
+    # arrival projection at its expected return month and held as slow-moving
+    # (used, higher-mileage) stock, so ordering doesn't replace a unit that's
+    # coming back and doesn't assume it resells at full pace.
+    anticipate_demo_returns: bool = True
     # --- executive demo board (which combos to put execs into) ------------- #
     demo_pick_max_dts: int = 45          # a demo gains miles: it must still turn fast
     demo_pick_min_total: int = 2         # at least two sales ever — never a one-off

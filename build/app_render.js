@@ -33,7 +33,8 @@ function wholesaleVins(res){ let rows=[];
 function demoDashboard(res){ let s=res.settings, rows=[];
   res.demoUnits.forEach(u=>{ let dis=Math.round(u.dis), asDemo=dis;
     for(let pref in s.demo_starts){ if(pref&&u.stock.indexOf(pref)===0){ let d0=new Date(s.demo_starts[pref]); if(!isNaN(d0.getTime())) asDemo=Math.round((res.tb.today-d0)/86400000); break; } }
-    rows.push({stock:u.stock,vehicle:u.desc,dis:dis,asDemo:asDemo,swap:asDemo>s.swap_threshold}); });
+    let retIn=Math.max(0,s.swap_threshold-asDemo);
+    rows.push({stock:u.stock,vehicle:u.desc,dis:dis,asDemo:asDemo,swap:asDemo>s.swap_threshold,retIn:retIn,ei:u.ext+"/"+u.int}); });
   rows.sort((a,b)=>b.asDemo-a.asDemo); return rows; }
 function paceCheck(res){ let tb=res.tb, rows=[];
   MODELS.forEach(model=>{ let ms=res.sales.filter(s=>s.firstVin&&s.model===model);
@@ -122,7 +123,8 @@ function render(res){
       let badge={build:"<span class='badge b-build'>✓ BUILD</span>",alt:"<span class='badge b-alt'>↑ alt</span>",option:"<span class='badge b-opt'>○ option</span>"}[r.tier];
       return [ r.rank, {html:badge}, esc(l.trim), esc(l.ext), esc(l.int), {html:dtsCell(l.dts)}, {html:momPill(l.mom)},
         {html:l.buyGrade?"<span class='grade'>"+l.buyGrade+"</span>":"<span class='dim'>—</span>"},
-        l.onlot, {html:"<span class='dim'>"+l.inbound+"</span>"}, {html:l.proj.toFixed(1)},
+        l.onlot, {html:"<span class='dim'>"+l.inbound+"</span>"},
+        {html:l.proj.toFixed(1)+(l.demoReturning?" <span title='includes "+l.demoReturning+" demo returning to inventory, held as slow stock' style='color:var(--warn)'>↩"+l.demoReturning+"</span>":"")},
         {html:"<b>"+l.orderTarget+"</b>"}, {html:l.need>0?l.need:"<span class='dim'>0</span>"}, r.cum ]; });
     H.push(tbl(["#","Build?","Trim","Ext","Int","DTS","Momentum","Grade","Lot","Inb","PROJ@ARR","Tgt","NEED","Cum"],
       ["num","","","","","num","","","num","num","num teal","num","num need","num"], rows)); });
@@ -198,8 +200,15 @@ function render(res){
 
   // 6. DEMO
   H.push(sec(7,"Demo Dashboard","units currently pulled from sellable inventory"));
-  if(rep.demo.length) H.push(tbl(["Stock","Vehicle","Days in stock","Days as demo","Swap?"],["","","num","num",""],
-    rep.demo.map(r=>[esc(r.stock),esc(r.vehicle),r.dis,r.asDemo,{html:r.swap?"<span class='swap'>⚠ SWAP</span>":"<span style='color:var(--good)'>OK</span>"}])));
+  if(rep.demo.length){
+    let anticipated = s.anticipate_demo_returns;
+    H.push(tbl(["Stock","Vehicle","Days in stock","Days as demo","Returns in","Swap?"],["","","num","num","num",""],
+      rep.demo.map(r=>[esc(r.stock),esc(r.vehicle),r.dis,r.asDemo,
+        {html:r.retIn>0?("~"+r.retIn+"d"):"<span class='swap'>now</span>"},
+        {html:r.swap?"<span class='swap'>⚠ SWAP</span>":"<span style='color:var(--good)'>OK</span>"}])));
+    H.push("<div class='foot'>"+(anticipated
+      ? "✓ Ordering anticipates each of these coming back: the unit is added to its config's arrival projection and held as slow-moving (used, higher-mileage) stock — so you don't order a replacement for a unit that's returning, and you don't assume it resells at full pace."
+      : "Demo-return anticipation is off — these units are treated as gone.")+"</div>"); }
   else H.push("<div class='empty'>No demos listed.</div>");
 
   // 7. PACE
