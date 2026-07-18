@@ -36,6 +36,12 @@ function demoDashboard(res){ let s=res.settings, rows=[];
     let retIn=Math.max(0,s.swap_threshold-asDemo);
     rows.push({stock:u.stock,vehicle:u.desc,dis:dis,asDemo:asDemo,swap:asDemo>s.swap_threshold,retIn:retIn,ei:u.ext+"/"+u.int}); });
   rows.sort((a,b)=>b.asDemo-a.asDemo); return rows; }
+function previousLoaners(res){ let rows=[];
+  (res.inv||[]).forEach(u=>{ if(u.isDlr&&u.prevLoaner){
+    let met=res.metrics[u.key], dts=met&&met.dts!==null?met.dts:null, retail=effDis(u);
+    let read = (dts!==null&&retail>Math.max(60,dts))?"aging — watch":"on the market";
+    rows.push({stock:u.stock,vehicle:u.desc,ei:u.ext+"/"+u.int,dms:Math.round(u.dis),retail:retail,read:read}); } });
+  rows.sort((a,b)=>b.retail-a.retail); return rows; }
 function paceCheck(res){ let tb=res.tb, rows=[];
   MODELS.forEach(model=>{ let ms=res.sales.filter(s=>s.firstVin&&s.model===model);
     let a90=ms.filter(s=>s.midx>tb.latest-3).length, a60=xround(a90/tb.el90*2,1);
@@ -68,7 +74,7 @@ function tbl(head,cls,rows){
   let h="<div class='tblwrap'><table><thead><tr>"+head.map((x,i)=>"<th class='"+(cls[i]||"")+"'>"+x+"</th>").join("")+"</tr></thead><tbody>";
   h+=rows.map(r=>"<tr>"+r.map((c,i)=>"<td class='"+(cls[i]||"")+"'>"+(c&&c.html!==undefined?c.html:esc(c))+"</td>").join("")+"</tr>").join("");
   return h+"</tbody></table></div>"; }
-function sec(n,title,meta){ return "<div class='sec'><span class='n'>"+n+"</span><h2>"+esc(title)+"</h2><span class='meta'>"+esc(meta||"")+"</span></div>"; }
+function sec(n,title,meta){ return "<div class='sec'><span class='caret'>▾</span><span class='n'>"+n+"</span><h2>"+esc(title)+"</h2><span class='meta'>"+esc(meta||"")+"</span><span class='sechint noprint'>click to collapse</span></div>"; }
 
 function sparkline(vals){ // 12 monthly seasonality index values, baseline 1.0
   let w=210,h=46,pad=4, mn=Math.min.apply(null,vals.concat([1])), mx=Math.max.apply(null,vals.concat([1]));
@@ -156,33 +162,49 @@ function render(res){
       "<table class='heat'><thead><tr><th></th>"+MONTHS.map(m=>"<th style='font-size:9px;color:#6b7891;text-align:center'>"+m+"</th>").join("")+"</tr></thead><tbody><tr>"+cells+"</tr></tbody></table>"+
       "<div style='text-align:center'>"+sparkline(res.seas[model].index)+"<div class='foot' style='margin:0;text-align:center'>seasonality · avg = 1.0</div></div></div>"); });
 
-  // 4. EXECUTIVE DEMO BOARD
-  H.push(sec(4,"Executive Demo Board","best proven fast-movers to put your execs in — resells quickly even with miles"));
-  H.push("<div class='foot' style='margin:-4px 2px 10px'>Only combos with a short days-to-sell and repeat demand (never one-offs) qualify, so a demo still turns fast once released. VIN listed where in stock; otherwise flagged to order.</div>");
-  let ed=executiveDemos(res);
-  H.push("<div class='demogrid'>");
+  // 4. DEMO CENTER — board (left) + current demos & previous loaners (right)
+  let ed=executiveDemos(res), board=[];
+  board.push("<div class='dc-sub'>Best combos to demo <span class='dc-note'>proven fast-movers only — still turn fast with miles</span></div>");
+  board.push("<div class='demogrid'>");
   MODELS.forEach(model=>{ let picks=ed[model];
-    H.push("<div class='democol'><div class='demohd'>"+model+"</div>");
-    if(!picks.length){ H.push("<div class='empty'>No proven fast combo yet.</div>"); }
-    picks.forEach((p,i)=>{
-      let medal=["①","②","③","④","⑤"][i]||("#"+(i+1));
-      H.push("<div class='democard"+(i===0?" top":"")+"'>"+
+    board.push("<div class='democol'><div class='demohd'>"+model+"</div>");
+    if(!picks.length) board.push("<div class='empty'>No proven fast combo yet.</div>");
+    picks.forEach((p,i)=>{ let medal=["①","②","③","④","⑤"][i]||("#"+(i+1));
+      board.push("<div class='democard"+(i===0?" top":"")+"'>"+
         "<div class='demorank'>"+medal+"</div>"+
         "<div class='demotrim'>"+esc(p.trim)+" <span class='demoei'>"+esc(p.ext)+"/"+esc(p.int)+"</span></div>"+
         "<div class='demowhy'>"+dtsCell(p.dts)+" <span class='pill "+("m-"+(p.momentum==="on cadence"?"oncadence":p.momentum.replace(/\s/g,"")))+"'>"+esc(p.momentum)+"</span> <span class='demometa'>"+p.total+" sold · "+(p.r90||p.r180)+" recent</span></div>");
       if(p.units.length){ p.units.forEach(u=>{
-        H.push("<div class='demovin'><span class='vintag'>VIN …"+esc(u.vin6)+"</span>"+
+        board.push("<div class='demovin'><span class='vintag'>VIN …"+esc(u.vin6)+"</span>"+
           "<span class='demound'>"+esc(u.year)+" "+esc(u.ei)+" · "+u.dis+"d"+(u.msrp?" · $"+Math.round(u.msrp).toLocaleString():"")+"</span></div>"); });
-        if(p.backup>0) H.push("<div class='demoback'>"+p.backup+" more in stock as backup</div>");
-        else H.push("<div class='demoback warn'>last one on lot — reorder before pulling</div>");
-      } else {
-        H.push("<div class='demovin order'>none in stock — order / allocate one</div>");
-      }
-      H.push("</div>");
-    });
-    H.push("</div>");
-  });
-  H.push("</div>");
+        board.push(p.backup>0?"<div class='demoback'>"+p.backup+" more in stock as backup</div>":"<div class='demoback warn'>last one on lot — reorder before pulling</div>");
+      } else board.push("<div class='demovin order'>none in stock — order / allocate one</div>");
+      board.push("</div>"); });
+    board.push("</div>"); });
+  board.push("</div>");
+
+  let dash=["<div class='dc-sub'>Current demos</div>"];
+  if(rep.demo.length){
+    dash.push(tbl(["Stock","Vehicle","Days as demo","Returns in","Swap?"],["","","num","num",""],
+      rep.demo.map(r=>[esc(r.stock),esc(r.vehicle),r.asDemo,
+        {html:r.retIn>0?("~"+r.retIn+"d"):"<span class='swap'>now</span>"},
+        {html:r.swap?"<span class='swap'>⚠ SWAP</span>":"<span style='color:var(--good)'>OK</span>"}])));
+    if(s.anticipate_demo_returns) dash.push("<div class='foot'>✓ Ordering anticipates each of these coming back (held as slow, used stock), so you don't reorder a unit that's returning.</div>");
+  } else dash.push("<div class='empty'>No demos listed. Add them in ✎ Data.</div>");
+
+  let loaners=["<div class='dc-sub'>Previous loaners <span class='dc-note'>retail clock — hidden until they reappear</span></div>"];
+  let pl=previousLoaners(res);
+  if(pl.length){
+    loaners.push(tbl(["Stock","Ext/Int","DMS days","On market","Read"],["","","num","num",""],
+      pl.map(r=>[esc(r.stock),esc(r.ei),{html:"<span class='dim'>"+r.dms+"</span>"},
+        {html:"<b style='color:var(--teal)'>"+r.retail+"d</b>"},
+        {html:r.read==="aging — watch"?"<span class='swap'>"+r.read+"</span>":"<span style='color:var(--good)'>"+r.read+"</span>"}])));
+    loaners.push("<div class='foot'>Aged from re-entry, not the "+"inflated days-in-stock — a returned loaner isn't wrongly wholesaled the moment it reappears.</div>");
+  } else loaners.push("<div class='empty'>None flagged. Add returned loaners in ✎ Data so their aging runs from re-entry.</div>");
+
+  H.push(sec(4,"Demo Center","execs' best picks · current demos · returned loaners — worked side by side"));
+  H.push("<div class='democenter'><div class='dc-left'>"+board.join("")+"</div>"+
+    "<div class='dc-right'>"+dash.join("")+"<div style='height:12px'></div>"+loaners.join("")+"</div></div>");
 
   // 5. OVERSTOCK
   H.push(sec(5,"Overstock / Wholesale","over-target metal — order slower; wholesale only what won't sell"));
@@ -199,21 +221,8 @@ function render(res){
     H.push("<div class='foot noprint'>Use 🖨 Print (top-right) to print this sheet on its own or with any other dashboards.</div>"); }
   else H.push("<div class='empty'>No units past their selling window.</div>");
 
-  // 6. DEMO
-  H.push(sec(7,"Demo Dashboard","units currently pulled from sellable inventory"));
-  if(rep.demo.length){
-    let anticipated = s.anticipate_demo_returns;
-    H.push(tbl(["Stock","Vehicle","Days in stock","Days as demo","Returns in","Swap?"],["","","num","num","num",""],
-      rep.demo.map(r=>[esc(r.stock),esc(r.vehicle),r.dis,r.asDemo,
-        {html:r.retIn>0?("~"+r.retIn+"d"):"<span class='swap'>now</span>"},
-        {html:r.swap?"<span class='swap'>⚠ SWAP</span>":"<span style='color:var(--good)'>OK</span>"}])));
-    H.push("<div class='foot'>"+(anticipated
-      ? "✓ Ordering anticipates each of these coming back: the unit is added to its config's arrival projection and held as slow-moving (used, higher-mileage) stock — so you don't order a replacement for a unit that's returning, and you don't assume it resells at full pace."
-      : "Demo-return anticipation is off — these units are treated as gone.")+"</div>"); }
-  else H.push("<div class='empty'>No demos listed.</div>");
-
   // 7. PACE
-  H.push(sec(8,"Pace Check","actual vs predicted 60-day pace"));
+  H.push(sec(7,"Pace Check","actual vs predicted 60-day pace"));
   H.push(tbl(["Model","Actual 90d","Actual 60d pace","Predicted 60d pace","Variance","Read","Coverage"],
     ["","num","num","num","num","",""],
     rep.pace.map(r=>{ let rl={AHEAD:"AHEAD of forecast",ON:"ON TARGET",BEHIND:"BEHIND forecast"}[r.read], ic={AHEAD:"▲",ON:"●",BEHIND:"▼"}[r.read];
@@ -230,9 +239,9 @@ function render(res){
 // (and anything else) can show/hide them individually.
 function groupSections(root){
   const titleKey={"Order Priority":"order","6-Month Rolling Order Plan":"plan",
-    "Fleet Stock Target & Seasonality":"fleet","Executive Demo Board":"demoboard",
+    "Fleet Stock Target & Seasonality":"fleet","Demo Center":"democenter",
     "Overstock / Wholesale":"overstock","Wholesale Now — VIN sheet":"vins",
-    "Demo Dashboard":"demos","Pace Check":"pace"};
+    "Pace Check":"pace"};
   let kids=[].slice.call(root.childNodes), groups=[], cur={key:"summary",title:"Summary",nodes:[]};
   kids.forEach(node=>{
     if(node.nodeType===1 && node.classList && node.classList.contains("sec")){
@@ -242,8 +251,9 @@ function groupSections(root){
     } else cur.nodes.push(node);
   });
   if(cur.nodes.length) groups.push(cur);
+  let collapsed={}; try{ (JSON.parse(localStorage.getItem("pm_collapsed")||"[]")).forEach(k=>collapsed[k]=1); }catch(e){}
   root.innerHTML="";
-  groups.forEach(g=>{ let sec=document.createElement("section"); sec.className="dash";
+  groups.forEach(g=>{ let sec=document.createElement("section"); sec.className="dash"+(collapsed[g.key]?" collapsed":"");
     sec.dataset.dash=g.key; sec.dataset.title=g.title;
     g.nodes.forEach(n=>sec.appendChild(n)); root.appendChild(sec); });
   return groups.map(g=>({key:g.key,title:g.title}));

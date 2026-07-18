@@ -278,6 +278,28 @@ def test_smooth_base_is_stable_across_the_month():
     assert max(smooth) - min(smooth) < 1         # smooth base drifts, never flips a whole unit
 
 
+def test_previous_loaner_uses_retail_clock():
+    """A returned loaner's aging runs from re-entry (its real time on the public
+    market), not the inflated DMS days-in-stock — so it isn't wrongly wholesaled
+    the moment it reappears."""
+    import datetime as _d
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    today = _AS_OF
+    u = next(x for x in inv if x.is_dlr_inv and x.dis > 100)
+
+    def wholesaled(res):
+        pos = res.positions.get(u.key)
+        return pos is not None and any(x.stock == u.stock for x in pos.wholesale_eligible)
+
+    assert wholesaled(engine.run(inv, sales, Settings(), today=today))   # aged on DMS days
+    pl = [{"stock": u.stock, "since": (today - _d.timedelta(days=8)).isoformat()}]
+    r = engine.run(inv, sales, Settings(prev_loaners=pl), today=today)
+    assert not wholesaled(r)                       # 8 real market days -> not aged
+    rep = reports.previous_loaners(r)
+    assert rep and rep[0]["retail_days"] == 8 and rep[0]["dms_dis"] == int(u.dis)
+
+
 def test_recompute_is_deterministic():
     a = reports.build_all(_run())
     b = reports.build_all(_run())

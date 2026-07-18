@@ -72,6 +72,12 @@ class Settings:
         "N15106": "2026-05-08", "N15118": "2026-04-29",
         "N15126": "2026-05-07", "N15145": "2026-06-07",
     })
+    # Previous loaners: units that were demos and are now back in sellable
+    # inventory. Loaners aren't published while in service, so their retail clock
+    # starts when they reappear. Each {stock, since} makes the engine measure that
+    # unit's age from `since` instead of the inflated DMS days-in-stock — so it
+    # isn't wrongly wholesale-flagged as ancient the moment it returns.
+    prev_loaners: list = field(default_factory=list)
     # Aged-unit brakes that persist after a unit leaves the lot (brief §11).
     aged_memory: list = field(default_factory=list)
     # Outbound dealer trades — a trade out is a sale out the other door. Each

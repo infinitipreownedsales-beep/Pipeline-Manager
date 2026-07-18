@@ -331,7 +331,20 @@ def _is_demo(stock: str, demo_prefixes: list[str]) -> bool:
 # --------------------------------------------------------------------------- #
 # Inventory position per config
 # --------------------------------------------------------------------------- #
-def compute_positions(inventory: list[InventoryUnit], metrics: dict, s: Settings) -> dict:
+def _prev_loaner_since(u: InventoryUnit, prev_loaners) -> _dt.date | None:
+    """Return the date a returned-loaner unit re-entered the retail market."""
+    for e in prev_loaners or []:
+        st = str(e.get("stock", "")).strip()
+        if st and u.stock.startswith(st):
+            try:
+                return _dt.date.fromisoformat(str(e.get("since")))
+            except (ValueError, TypeError):
+                return None
+    return None
+
+
+def compute_positions(inventory: list[InventoryUnit], metrics: dict, s: Settings,
+                      today: _dt.date) -> dict:
     positions: dict[str, InvPosition] = {}
     for u in inventory:
         if not u.key:
@@ -341,15 +354,21 @@ def compute_positions(inventory: list[InventoryUnit], metrics: dict, s: Settings
         if u.is_dlr_inv:
             if demo:
                 continue  # demo units are out of all sell/order/overstock math
+            # Returned loaner: age from re-entry (real retail time), not the
+            # inflated DMS days-in-stock that includes the hidden demo period.
+            since = _prev_loaner_since(u, s.prev_loaners)
+            if since is not None:
+                u.prev_loaner = True
+                u.retail_dis = max(0, (today - since).days)
             pos.onlot += 1
             pos.onlot_units.append(u)
-            if u.dis >= s.stall_days:
+            if u.eff_dis >= s.stall_days:
                 pos.stalled += 1
-            if u.dis > s.aged_days:
+            if u.eff_dis > s.aged_days:
                 pos.aged_units.append(u)
             met = metrics.get(u.key)
             dts = met.dts if (met and met.dts is not None) else 9999
-            if u.dis > max(s.wholesale_min_age, dts):
+            if u.eff_dis > max(s.wholesale_min_age, dts):
                 pos.wholesale_eligible.append(u)
         else:
             pos.inbound_total += 1
@@ -765,7 +784,7 @@ def run(inventory, sales, settings: Settings, today: _dt.date | None = None) -> 
     tb = compute_time_base(sales, today)
     metrics = compute_metrics(sales, tb, settings, settings.roster)
     seas = compute_seasonality(sales, tb)
-    positions = compute_positions(inventory, metrics, settings)
+    positions = compute_positions(inventory, metrics, settings, today)
 
     aged_brakes: dict[str, int] = {}
     for e in settings.aged_memory:

@@ -79,8 +79,12 @@ The app has an editable trade-log panel; the CLI reads it from `config.json`.
 5. **Pace Check** — actual vs predicted 60-day pace per model, with a read.
 
 The app also has an editable **demo roster** (add a Stock# to pull a unit for an
-exec, set its start date, or ↩ Return it to swap back into inventory) and a
-**print selector** (🖨 Print → choose exactly which dashboards go on the page).
+exec, set its start date, or ↩ Return it to swap back into inventory), a
+**previous-loaner** list (a returned loaner ages from its re-entry date, not the
+inflated DMS days-in-stock, since loaners are hidden from the public until they
+reappear — so it isn't wrongly wholesale-flagged the moment it returns), a
+**print selector** (🖨 Print → choose exactly which dashboards go on the page),
+and **collapsible sections** (click any header to fold it away).
 
 Plus an **Executive Demo Board** — per model, the best *proven fast-moving*
 combos to put executives into (short days-to-sell so a demo still resells

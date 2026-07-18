@@ -62,10 +62,24 @@
   .kpi .edge{position:absolute;left:0;top:0;bottom:0;width:4px}
   .kpi.model .big{color:var(--orange)}
   /* section headers */
-  .sec{display:flex;align-items:baseline;gap:11px;margin:26px 2px 12px;padding-bottom:7px;border-bottom:1px solid var(--line2)}
+  .sec{display:flex;align-items:baseline;gap:11px;margin:26px 2px 12px;padding-bottom:7px;border-bottom:1px solid var(--line2);cursor:pointer;user-select:none}
   .sec .n{background:linear-gradient(180deg,#3b82f6,#1e40af);color:#fff;border-radius:7px;padding:3px 9px;font-weight:800;font-size:12px}
   .sec h2{margin:0;font-size:17px;letter-spacing:.2px}
   .sec .meta{margin-left:auto;color:var(--muted);font-size:12px}
+  .sec .caret{color:var(--muted);font-size:12px;display:inline-block;transition:transform .15s;transform:translateY(-1px)}
+  .sec:hover h2{color:#fff}
+  .sec .sechint{color:var(--muted);font-size:10px;opacity:0;transition:opacity .15s}
+  .sec:hover .sechint{opacity:.6}
+  .dash.collapsed .caret{transform:rotate(-90deg) translateX(1px)}
+  .dash.collapsed > :not(.sec){display:none!important}
+  .dash.collapsed .sec{margin-bottom:12px;opacity:.8}
+  /* demo center — board + dashboard/loaners side by side */
+  .democenter{display:grid;grid-template-columns:1.55fr 1fr;gap:16px;align-items:start}
+  @media(max-width:1000px){.democenter{grid-template-columns:1fr}}
+  .dc-left,.dc-right{min-width:0}
+  .dc-left .demogrid{grid-template-columns:repeat(auto-fit,minmax(155px,1fr))}
+  .dc-sub{font-weight:700;font-size:13px;margin:2px 2px 8px;color:var(--ink2)}
+  .dc-note{font-weight:500;color:var(--muted);font-size:11px}
   .modelband{display:flex;align-items:center;gap:10px;margin:16px 0 6px;font-weight:800;font-size:14px;letter-spacing:.5px}
   .modelband .mn{background:var(--panel3);border:1px solid var(--line2);border-radius:8px;padding:3px 11px}
   .tag{background:var(--panel2);border:1px solid var(--line2);border-radius:20px;padding:2px 10px;font-size:11px;color:var(--ink2);font-weight:600}
@@ -124,6 +138,8 @@
   .traderow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 0;font-size:14px}
   .traderow .del:hover{border-color:var(--bad);color:var(--bad)}
   @media(max-width:640px){.traderow{grid-template-columns:1fr 1fr;}.traderow.thead{display:none}}
+  /* newest at top; show ~10 rows, scroll for the rest */
+  .scrollrows{max-height:352px;overflow-y:auto;padding-right:4px}
   /* demo roster editor */
   .demorow{display:grid;grid-template-columns:180px 160px 1fr;gap:8px;align-items:center;margin-bottom:6px}
   .demorow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
@@ -218,7 +234,7 @@
     <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
       <label class="top">Outbound dealer trade log <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— a trade out is a sale out the other door; days-in-stock grades its speed to enter/exit inventory</span></label>
       <div id="tradeHead" class="traderow thead"><span>Date</span><span>Combo</span><span>Days in stock</span><span></span></div>
-      <div id="tradeRows"></div>
+      <div id="tradeRows" class="scrollrows"></div>
       <button class="ghost" id="addTrade" style="margin-top:8px">＋ Add trade</button>
       <datalist id="combolist"></datalist>
     </div>
@@ -227,6 +243,12 @@
       <div id="demoHead" class="demorow thead"><span>Stock #</span><span>Demo start</span><span></span></div>
       <div id="demoRows"></div>
       <button class="ghost" id="addDemo" style="margin-top:8px">＋ Add demo</button>
+    </div>
+    <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
+      <label class="top">Previous loaners <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— units back from demo duty. Loaners are hidden from the public while in service, so the retail clock starts when they reappear. Set the date it came back and the engine ages it from there (real time to sell), not the inflated days-in-stock.</span></label>
+      <div id="loanerHead" class="demorow thead"><span>Stock #</span><span>Back in stock since</span><span></span></div>
+      <div id="loanerRows"></div>
+      <button class="ghost" id="addLoaner" style="margin-top:8px">＋ Add previous loaner</button>
     </div>
     <div style="margin-top:11px;display:flex;gap:9px;align-items:center;flex-wrap:wrap">
       <button class="primary" id="run">Compute order ▶</button>

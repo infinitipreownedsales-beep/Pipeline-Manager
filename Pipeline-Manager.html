@@ -62,10 +62,24 @@
   .kpi .edge{position:absolute;left:0;top:0;bottom:0;width:4px}
   .kpi.model .big{color:var(--orange)}
   /* section headers */
-  .sec{display:flex;align-items:baseline;gap:11px;margin:26px 2px 12px;padding-bottom:7px;border-bottom:1px solid var(--line2)}
+  .sec{display:flex;align-items:baseline;gap:11px;margin:26px 2px 12px;padding-bottom:7px;border-bottom:1px solid var(--line2);cursor:pointer;user-select:none}
   .sec .n{background:linear-gradient(180deg,#3b82f6,#1e40af);color:#fff;border-radius:7px;padding:3px 9px;font-weight:800;font-size:12px}
   .sec h2{margin:0;font-size:17px;letter-spacing:.2px}
   .sec .meta{margin-left:auto;color:var(--muted);font-size:12px}
+  .sec .caret{color:var(--muted);font-size:12px;display:inline-block;transition:transform .15s;transform:translateY(-1px)}
+  .sec:hover h2{color:#fff}
+  .sec .sechint{color:var(--muted);font-size:10px;opacity:0;transition:opacity .15s}
+  .sec:hover .sechint{opacity:.6}
+  .dash.collapsed .caret{transform:rotate(-90deg) translateX(1px)}
+  .dash.collapsed > :not(.sec){display:none!important}
+  .dash.collapsed .sec{margin-bottom:12px;opacity:.8}
+  /* demo center — board + dashboard/loaners side by side */
+  .democenter{display:grid;grid-template-columns:1.55fr 1fr;gap:16px;align-items:start}
+  @media(max-width:1000px){.democenter{grid-template-columns:1fr}}
+  .dc-left,.dc-right{min-width:0}
+  .dc-left .demogrid{grid-template-columns:repeat(auto-fit,minmax(155px,1fr))}
+  .dc-sub{font-weight:700;font-size:13px;margin:2px 2px 8px;color:var(--ink2)}
+  .dc-note{font-weight:500;color:var(--muted);font-size:11px}
   .modelband{display:flex;align-items:center;gap:10px;margin:16px 0 6px;font-weight:800;font-size:14px;letter-spacing:.5px}
   .modelband .mn{background:var(--panel3);border:1px solid var(--line2);border-radius:8px;padding:3px 11px}
   .tag{background:var(--panel2);border:1px solid var(--line2);border-radius:20px;padding:2px 10px;font-size:11px;color:var(--ink2);font-weight:600}
@@ -124,6 +138,8 @@
   .traderow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 0;font-size:14px}
   .traderow .del:hover{border-color:var(--bad);color:var(--bad)}
   @media(max-width:640px){.traderow{grid-template-columns:1fr 1fr;}.traderow.thead{display:none}}
+  /* newest at top; show ~10 rows, scroll for the rest */
+  .scrollrows{max-height:352px;overflow-y:auto;padding-right:4px}
   /* demo roster editor */
   .demorow{display:grid;grid-template-columns:180px 160px 1fr;gap:8px;align-items:center;margin-bottom:6px}
   .demorow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
@@ -218,7 +234,7 @@
     <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
       <label class="top">Outbound dealer trade log <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— a trade out is a sale out the other door; days-in-stock grades its speed to enter/exit inventory</span></label>
       <div id="tradeHead" class="traderow thead"><span>Date</span><span>Combo</span><span>Days in stock</span><span></span></div>
-      <div id="tradeRows"></div>
+      <div id="tradeRows" class="scrollrows"></div>
       <button class="ghost" id="addTrade" style="margin-top:8px">＋ Add trade</button>
       <datalist id="combolist"></datalist>
     </div>
@@ -227,6 +243,12 @@
       <div id="demoHead" class="demorow thead"><span>Stock #</span><span>Demo start</span><span></span></div>
       <div id="demoRows"></div>
       <button class="ghost" id="addDemo" style="margin-top:8px">＋ Add demo</button>
+    </div>
+    <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
+      <label class="top">Previous loaners <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— units back from demo duty. Loaners are hidden from the public while in service, so the retail clock starts when they reappear. Set the date it came back and the engine ages it from there (real time to sell), not the inflated days-in-stock.</span></label>
+      <div id="loanerHead" class="demorow thead"><span>Stock #</span><span>Back in stock since</span><span></span></div>
+      <div id="loanerRows"></div>
+      <button class="ghost" id="addLoaner" style="margin-top:8px">＋ Add previous loaner</button>
     </div>
     <div style="margin-top:11px;display:flex;gap:9px;align-items:center;flex-wrap:wrap">
       <button class="primary" id="run">Compute order ▶</button>
@@ -402,14 +424,23 @@ function computeSeasonality(sales, tb){
     let avg=rates.reduce((a,b)=>a+b,0)/12; out[model]={index:rates.map(r=>avg===0?1:r/avg),rate:rates}; });
   return out; }
 function isDemo(stock, prefixes){ return prefixes.some(p=>p&&stock.indexOf(p)===0); }
-function computePositions(inv, metrics, s){
+function prevLoanerSince(u, prevLoaners){
+  for(let i=0;i<(prevLoaners||[]).length;i++){ let st=String(prevLoaners[i].stock||"").trim();
+    if(st && u.stock.indexOf(st)===0){ let d=new Date(prevLoaners[i].since); return isNaN(d.getTime())?null:d; } }
+  return null; }
+function effDis(u){ return (u.retailDis!==undefined&&u.retailDis!==null)?u.retailDis:u.dis; }
+function computePositions(inv, metrics, s, today){
   let P={};
   inv.forEach(u=>{ if(!u.key) return; let p=P[u.key]; if(!p){ p={onlot:0,inbound:0,arrivals:{},stalled:0,aged:[],whole:[],onlotUnits:[]}; P[u.key]=p; }
     let demo=isDemo(u.stock,s.demo_stocks);
-    if(u.isDlr){ if(demo) return; p.onlot++; p.onlotUnits.push(u);
-      if(u.dis>=s.stall_days) p.stalled++; if(u.dis>s.aged_days) p.aged.push(u);
+    if(u.isDlr){ if(demo) return;
+      let since=prevLoanerSince(u,s.prev_loaners);
+      if(since){ u.prevLoaner=true; u.retailDis=Math.max(0,Math.round((today-since)/86400000)); }
+      let eff=effDis(u);
+      p.onlot++; p.onlotUnits.push(u);
+      if(eff>=s.stall_days) p.stalled++; if(eff>s.aged_days) p.aged.push(u);
       let met=metrics[u.key], dts=(met&&met.dts!==null)?met.dts:9999;
-      if(u.dis>Math.max(s.wholesale_min_age,dts)) p.whole.push(u);
+      if(eff>Math.max(s.wholesale_min_age,dts)) p.whole.push(u);
     } else { p.inbound++; if(u.arr) p.arrivals[u.arr]=(p.arrivals[u.arr]||0)+1; } });
   return P; }
 function projRate(m,dts,s){ let ph=m?m.prate/2:0, dr=(m&&m.r90>0&&dts&&dts>0)?30.4/dts:0; return Math.min(s.rate_cap,Math.max(ph,dr)); }
@@ -515,7 +546,7 @@ function findOrphans(sales,roster){ let rk={}; roster.forEach(c=>rk[c.model+"|"+
   let seen={}; sales.forEach(s=>{ if(s.firstVin&&s.key&&!rk[s.key]) seen[s.key]=(seen[s.key]||0)+1; });
   return Object.keys(seen).map(k=>({key:k,sales:seen[k]})).sort((a,b)=>b.sales-a.sales); }
 function runEngine(inv,sales,s,today){
-  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,ROSTER,s), seas=computeSeasonality(sales,tb), positions=computePositions(inv,metrics,s);
+  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,ROSTER,s), seas=computeSeasonality(sales,tb), positions=computePositions(inv,metrics,s,today);
   let agedBrakes={}; (s.aged_memory||[]).forEach(e=>{ if(e.active===undefined||e.active===1||e.active===true||e.active==="1") agedBrakes[e.key]=(agedBrakes[e.key]||0)+1; });
   let overrideMap={}; s.overrides.forEach(e=>{ overrideMap[e.key]=(overrideMap[e.key]||0)+parseInt(e.qty||0,10); });
   let windows=resolveWindows(inv,today,s);
@@ -523,7 +554,7 @@ function runEngine(inv,sales,s,today){
   let demoReturns=computeDemoReturns(demoUnits,s,today);
   let lines=buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demoReturns);
   let orphans=findOrphans(sales,ROSTER);
-  return {settings:s,tb:tb,metrics:metrics,seas:seas,positions:positions,lines:lines,demoUnits:demoUnits,sales:sales,orphans:orphans,invCount:inv.length,salesCount:sales.length,windows:windows}; }
+  return {settings:s,tb:tb,metrics:metrics,seas:seas,positions:positions,lines:lines,demoUnits:demoUnits,sales:sales,orphans:orphans,inv:inv,invCount:inv.length,salesCount:sales.length,windows:windows}; }
 
 /* ===================== reports + rendering ===================== */
 function esc(v){ return String(v==null?"":v).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
@@ -563,6 +594,12 @@ function demoDashboard(res){ let s=res.settings, rows=[];
     let retIn=Math.max(0,s.swap_threshold-asDemo);
     rows.push({stock:u.stock,vehicle:u.desc,dis:dis,asDemo:asDemo,swap:asDemo>s.swap_threshold,retIn:retIn,ei:u.ext+"/"+u.int}); });
   rows.sort((a,b)=>b.asDemo-a.asDemo); return rows; }
+function previousLoaners(res){ let rows=[];
+  (res.inv||[]).forEach(u=>{ if(u.isDlr&&u.prevLoaner){
+    let met=res.metrics[u.key], dts=met&&met.dts!==null?met.dts:null, retail=effDis(u);
+    let read = (dts!==null&&retail>Math.max(60,dts))?"aging — watch":"on the market";
+    rows.push({stock:u.stock,vehicle:u.desc,ei:u.ext+"/"+u.int,dms:Math.round(u.dis),retail:retail,read:read}); } });
+  rows.sort((a,b)=>b.retail-a.retail); return rows; }
 function paceCheck(res){ let tb=res.tb, rows=[];
   MODELS.forEach(model=>{ let ms=res.sales.filter(s=>s.firstVin&&s.model===model);
     let a90=ms.filter(s=>s.midx>tb.latest-3).length, a60=xround(a90/tb.el90*2,1);
@@ -595,7 +632,7 @@ function tbl(head,cls,rows){
   let h="<div class='tblwrap'><table><thead><tr>"+head.map((x,i)=>"<th class='"+(cls[i]||"")+"'>"+x+"</th>").join("")+"</tr></thead><tbody>";
   h+=rows.map(r=>"<tr>"+r.map((c,i)=>"<td class='"+(cls[i]||"")+"'>"+(c&&c.html!==undefined?c.html:esc(c))+"</td>").join("")+"</tr>").join("");
   return h+"</tbody></table></div>"; }
-function sec(n,title,meta){ return "<div class='sec'><span class='n'>"+n+"</span><h2>"+esc(title)+"</h2><span class='meta'>"+esc(meta||"")+"</span></div>"; }
+function sec(n,title,meta){ return "<div class='sec'><span class='caret'>▾</span><span class='n'>"+n+"</span><h2>"+esc(title)+"</h2><span class='meta'>"+esc(meta||"")+"</span><span class='sechint noprint'>click to collapse</span></div>"; }
 
 function sparkline(vals){ // 12 monthly seasonality index values, baseline 1.0
   let w=210,h=46,pad=4, mn=Math.min.apply(null,vals.concat([1])), mx=Math.max.apply(null,vals.concat([1]));
@@ -683,33 +720,49 @@ function render(res){
       "<table class='heat'><thead><tr><th></th>"+MONTHS.map(m=>"<th style='font-size:9px;color:#6b7891;text-align:center'>"+m+"</th>").join("")+"</tr></thead><tbody><tr>"+cells+"</tr></tbody></table>"+
       "<div style='text-align:center'>"+sparkline(res.seas[model].index)+"<div class='foot' style='margin:0;text-align:center'>seasonality · avg = 1.0</div></div></div>"); });
 
-  // 4. EXECUTIVE DEMO BOARD
-  H.push(sec(4,"Executive Demo Board","best proven fast-movers to put your execs in — resells quickly even with miles"));
-  H.push("<div class='foot' style='margin:-4px 2px 10px'>Only combos with a short days-to-sell and repeat demand (never one-offs) qualify, so a demo still turns fast once released. VIN listed where in stock; otherwise flagged to order.</div>");
-  let ed=executiveDemos(res);
-  H.push("<div class='demogrid'>");
+  // 4. DEMO CENTER — board (left) + current demos & previous loaners (right)
+  let ed=executiveDemos(res), board=[];
+  board.push("<div class='dc-sub'>Best combos to demo <span class='dc-note'>proven fast-movers only — still turn fast with miles</span></div>");
+  board.push("<div class='demogrid'>");
   MODELS.forEach(model=>{ let picks=ed[model];
-    H.push("<div class='democol'><div class='demohd'>"+model+"</div>");
-    if(!picks.length){ H.push("<div class='empty'>No proven fast combo yet.</div>"); }
-    picks.forEach((p,i)=>{
-      let medal=["①","②","③","④","⑤"][i]||("#"+(i+1));
-      H.push("<div class='democard"+(i===0?" top":"")+"'>"+
+    board.push("<div class='democol'><div class='demohd'>"+model+"</div>");
+    if(!picks.length) board.push("<div class='empty'>No proven fast combo yet.</div>");
+    picks.forEach((p,i)=>{ let medal=["①","②","③","④","⑤"][i]||("#"+(i+1));
+      board.push("<div class='democard"+(i===0?" top":"")+"'>"+
         "<div class='demorank'>"+medal+"</div>"+
         "<div class='demotrim'>"+esc(p.trim)+" <span class='demoei'>"+esc(p.ext)+"/"+esc(p.int)+"</span></div>"+
         "<div class='demowhy'>"+dtsCell(p.dts)+" <span class='pill "+("m-"+(p.momentum==="on cadence"?"oncadence":p.momentum.replace(/\s/g,"")))+"'>"+esc(p.momentum)+"</span> <span class='demometa'>"+p.total+" sold · "+(p.r90||p.r180)+" recent</span></div>");
       if(p.units.length){ p.units.forEach(u=>{
-        H.push("<div class='demovin'><span class='vintag'>VIN …"+esc(u.vin6)+"</span>"+
+        board.push("<div class='demovin'><span class='vintag'>VIN …"+esc(u.vin6)+"</span>"+
           "<span class='demound'>"+esc(u.year)+" "+esc(u.ei)+" · "+u.dis+"d"+(u.msrp?" · $"+Math.round(u.msrp).toLocaleString():"")+"</span></div>"); });
-        if(p.backup>0) H.push("<div class='demoback'>"+p.backup+" more in stock as backup</div>");
-        else H.push("<div class='demoback warn'>last one on lot — reorder before pulling</div>");
-      } else {
-        H.push("<div class='demovin order'>none in stock — order / allocate one</div>");
-      }
-      H.push("</div>");
-    });
-    H.push("</div>");
-  });
-  H.push("</div>");
+        board.push(p.backup>0?"<div class='demoback'>"+p.backup+" more in stock as backup</div>":"<div class='demoback warn'>last one on lot — reorder before pulling</div>");
+      } else board.push("<div class='demovin order'>none in stock — order / allocate one</div>");
+      board.push("</div>"); });
+    board.push("</div>"); });
+  board.push("</div>");
+
+  let dash=["<div class='dc-sub'>Current demos</div>"];
+  if(rep.demo.length){
+    dash.push(tbl(["Stock","Vehicle","Days as demo","Returns in","Swap?"],["","","num","num",""],
+      rep.demo.map(r=>[esc(r.stock),esc(r.vehicle),r.asDemo,
+        {html:r.retIn>0?("~"+r.retIn+"d"):"<span class='swap'>now</span>"},
+        {html:r.swap?"<span class='swap'>⚠ SWAP</span>":"<span style='color:var(--good)'>OK</span>"}])));
+    if(s.anticipate_demo_returns) dash.push("<div class='foot'>✓ Ordering anticipates each of these coming back (held as slow, used stock), so you don't reorder a unit that's returning.</div>");
+  } else dash.push("<div class='empty'>No demos listed. Add them in ✎ Data.</div>");
+
+  let loaners=["<div class='dc-sub'>Previous loaners <span class='dc-note'>retail clock — hidden until they reappear</span></div>"];
+  let pl=previousLoaners(res);
+  if(pl.length){
+    loaners.push(tbl(["Stock","Ext/Int","DMS days","On market","Read"],["","","num","num",""],
+      pl.map(r=>[esc(r.stock),esc(r.ei),{html:"<span class='dim'>"+r.dms+"</span>"},
+        {html:"<b style='color:var(--teal)'>"+r.retail+"d</b>"},
+        {html:r.read==="aging — watch"?"<span class='swap'>"+r.read+"</span>":"<span style='color:var(--good)'>"+r.read+"</span>"}])));
+    loaners.push("<div class='foot'>Aged from re-entry, not the "+"inflated days-in-stock — a returned loaner isn't wrongly wholesaled the moment it reappears.</div>");
+  } else loaners.push("<div class='empty'>None flagged. Add returned loaners in ✎ Data so their aging runs from re-entry.</div>");
+
+  H.push(sec(4,"Demo Center","execs' best picks · current demos · returned loaners — worked side by side"));
+  H.push("<div class='democenter'><div class='dc-left'>"+board.join("")+"</div>"+
+    "<div class='dc-right'>"+dash.join("")+"<div style='height:12px'></div>"+loaners.join("")+"</div></div>");
 
   // 5. OVERSTOCK
   H.push(sec(5,"Overstock / Wholesale","over-target metal — order slower; wholesale only what won't sell"));
@@ -726,21 +779,8 @@ function render(res){
     H.push("<div class='foot noprint'>Use 🖨 Print (top-right) to print this sheet on its own or with any other dashboards.</div>"); }
   else H.push("<div class='empty'>No units past their selling window.</div>");
 
-  // 6. DEMO
-  H.push(sec(7,"Demo Dashboard","units currently pulled from sellable inventory"));
-  if(rep.demo.length){
-    let anticipated = s.anticipate_demo_returns;
-    H.push(tbl(["Stock","Vehicle","Days in stock","Days as demo","Returns in","Swap?"],["","","num","num","num",""],
-      rep.demo.map(r=>[esc(r.stock),esc(r.vehicle),r.dis,r.asDemo,
-        {html:r.retIn>0?("~"+r.retIn+"d"):"<span class='swap'>now</span>"},
-        {html:r.swap?"<span class='swap'>⚠ SWAP</span>":"<span style='color:var(--good)'>OK</span>"}])));
-    H.push("<div class='foot'>"+(anticipated
-      ? "✓ Ordering anticipates each of these coming back: the unit is added to its config's arrival projection and held as slow-moving (used, higher-mileage) stock — so you don't order a replacement for a unit that's returning, and you don't assume it resells at full pace."
-      : "Demo-return anticipation is off — these units are treated as gone.")+"</div>"); }
-  else H.push("<div class='empty'>No demos listed.</div>");
-
   // 7. PACE
-  H.push(sec(8,"Pace Check","actual vs predicted 60-day pace"));
+  H.push(sec(7,"Pace Check","actual vs predicted 60-day pace"));
   H.push(tbl(["Model","Actual 90d","Actual 60d pace","Predicted 60d pace","Variance","Read","Coverage"],
     ["","num","num","num","num","",""],
     rep.pace.map(r=>{ let rl={AHEAD:"AHEAD of forecast",ON:"ON TARGET",BEHIND:"BEHIND forecast"}[r.read], ic={AHEAD:"▲",ON:"●",BEHIND:"▼"}[r.read];
@@ -757,9 +797,9 @@ function render(res){
 // (and anything else) can show/hide them individually.
 function groupSections(root){
   const titleKey={"Order Priority":"order","6-Month Rolling Order Plan":"plan",
-    "Fleet Stock Target & Seasonality":"fleet","Executive Demo Board":"demoboard",
+    "Fleet Stock Target & Seasonality":"fleet","Demo Center":"democenter",
     "Overstock / Wholesale":"overstock","Wholesale Now — VIN sheet":"vins",
-    "Demo Dashboard":"demos","Pace Check":"pace"};
+    "Pace Check":"pace"};
   let kids=[].slice.call(root.childNodes), groups=[], cur={key:"summary",title:"Summary",nodes:[]};
   kids.forEach(node=>{
     if(node.nodeType===1 && node.classList && node.classList.contains("sec")){
@@ -769,8 +809,9 @@ function groupSections(root){
     } else cur.nodes.push(node);
   });
   if(cur.nodes.length) groups.push(cur);
+  let collapsed={}; try{ (JSON.parse(localStorage.getItem("pm_collapsed")||"[]")).forEach(k=>collapsed[k]=1); }catch(e){}
   root.innerHTML="";
-  groups.forEach(g=>{ let sec=document.createElement("section"); sec.className="dash";
+  groups.forEach(g=>{ let sec=document.createElement("section"); sec.className="dash"+(collapsed[g.key]?" collapsed":"");
     sec.dataset.dash=g.key; sec.dataset.title=g.title;
     g.nodes.forEach(n=>sec.appendChild(n)); root.appendChild(sec); });
   return groups.map(g=>({key:g.key,title:g.title}));
@@ -789,7 +830,7 @@ function getSettings(){
       QX60:parseInt(document.getElementById("a60").value||0,10), QX65:parseInt(document.getElementById("a65").value||0,10)},
     cpo_windows:cw, min_cpo_window:1, order_lead_pad:parseFloat(document.getElementById("wpad").value||0), lead_halflife:6,
     suppress:DEFAULTS.suppress, demote:DEFAULTS.demote, overrides:DEFAULTS.overrides,
-    demo_stocks:readDemos().demo_stocks, demo_starts:readDemos().demo_starts, aged_memory:[],
+    demo_stocks:readDemos().demo_stocks, demo_starts:readDemos().demo_starts, prev_loaners:readLoaners(), aged_memory:[],
     prove_bar:2, swap_threshold:90, rate_cap:5.0, paperweight_dts:90, wholesale_min_age:60, stall_days:120, aged_days:60,
     smooth_base:true, anticipate_demo_returns:true, trades:readTrades(),
     demo_pick_max_dts:45, demo_pick_min_total:2, demo_pick_min_r180:2, demo_picks_per_model:3, demo_vins_per_combo:2 }; }
@@ -801,7 +842,7 @@ function buildComboList(){
   ROSTER.forEach(c=>{ let label=comboLabel(c); COMBO_MAP[label]={model:c.model,code:c.code,ext:c.ext,int:c.int};
     let o=document.createElement("option"); o.value=label; dl.appendChild(o); });
 }
-function addTradeRow(t){ t=t||{};
+function addTradeRow(t,prepend){ t=t||{};
   let row=document.createElement("div"); row.className="traderow";
   row.innerHTML =
     "<input type='date' class='t-date' value='"+(t.date||"")+"'>"+
@@ -810,7 +851,8 @@ function addTradeRow(t){ t=t||{};
     "<button class='del' title='remove'>✕</button>";
   row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistTrades(); });
   row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistTrades(); }));
-  document.getElementById("tradeRows").appendChild(row);
+  let box=document.getElementById("tradeRows");
+  if(prepend && box.firstChild) box.insertBefore(row, box.firstChild); else box.appendChild(row);
   return row;
 }
 function resolveCombo(label){
@@ -877,6 +919,29 @@ function restoreDemos(){
   if(saved && saved.length!==undefined) saved.forEach(addDemoRow);
   else DEFAULTS.demo_stocks.forEach(s=>addDemoRow({stock:s, start:(DEFAULTS.demo_starts&&DEFAULTS.demo_starts[s])||""}));
 }
+
+/* ---- previous loaners (editable) ---- */
+function rawLoaners(){
+  let out=[];
+  document.querySelectorAll("#loanerRows .demorow").forEach(row=>{
+    out.push({stock:row.querySelector(".d-stock").value.trim(), since:row.querySelector(".d-start").value});
+  });
+  return out;
+}
+function addLoanerRow(d){ d=d||{};
+  let row=document.createElement("div"); row.className="demorow";
+  row.innerHTML =
+    "<input class='d-stock' placeholder='Stock# (e.g. N15106)' value=\""+String(d.stock||"").replace(/"/g,"&quot;")+"\">"+
+    "<input type='date' class='d-start' value='"+(d.since||"")+"'>"+
+    "<button class='del' title='remove'>✕ remove</button>";
+  row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistLoaners(); });
+  row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistLoaners(); }));
+  document.getElementById("loanerRows").appendChild(row);
+  return row;
+}
+function readLoaners(){ let out=[]; rawLoaners().forEach(r=>{ if(r.stock) out.push({stock:r.stock,since:r.since}); }); return out; }
+function persistLoaners(){ try{ localStorage.setItem("pm_loaners",JSON.stringify(rawLoaners())); }catch(e){} }
+function restoreLoaners(){ try{ JSON.parse(localStorage.getItem("pm_loaners")||"[]").forEach(addLoanerRow); }catch(e){} }
 
 /* ---- print selector ---- */
 function openPrintMenu(){
@@ -946,10 +1011,20 @@ window.addEventListener("DOMContentLoaded",function(){
   document.getElementById("inv").addEventListener("input",markFilled);
   document.getElementById("sales").addEventListener("input",markFilled);
   buildComboList();
-  document.getElementById("addTrade").addEventListener("click",function(){ addTradeRow(); persistTrades(); });
+  document.getElementById("addTrade").addEventListener("click",function(){ addTradeRow(null,true); persistTrades(); });
   restoreTrades();
+  // collapse/expand any dashboard by clicking its header
+  document.getElementById("results").addEventListener("click",function(e){
+    let sec=e.target.closest?e.target.closest(".sec"):null; if(!sec) return;
+    let dash=sec.closest(".dash"); if(!dash) return;
+    dash.classList.toggle("collapsed");
+    let cols=[]; document.querySelectorAll("#results .dash.collapsed").forEach(function(d){ cols.push(d.getAttribute("data-dash")); });
+    try{ localStorage.setItem("pm_collapsed",JSON.stringify(cols)); }catch(err){}
+  });
   document.getElementById("addDemo").addEventListener("click",function(){ addDemoRow(); persistDemos(); });
   restoreDemos();
+  document.getElementById("addLoaner").addEventListener("click",function(){ addLoanerRow(); persistLoaners(); });
+  restoreLoaners();
   // print selector
   document.getElementById("printbtn").addEventListener("click",function(e){ e.stopPropagation();
     let m=document.getElementById("printmenu"); if(m.style.display==="block") m.style.display="none"; else openPrintMenu(); });

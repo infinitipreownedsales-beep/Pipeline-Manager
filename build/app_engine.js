@@ -140,14 +140,23 @@ function computeSeasonality(sales, tb){
     let avg=rates.reduce((a,b)=>a+b,0)/12; out[model]={index:rates.map(r=>avg===0?1:r/avg),rate:rates}; });
   return out; }
 function isDemo(stock, prefixes){ return prefixes.some(p=>p&&stock.indexOf(p)===0); }
-function computePositions(inv, metrics, s){
+function prevLoanerSince(u, prevLoaners){
+  for(let i=0;i<(prevLoaners||[]).length;i++){ let st=String(prevLoaners[i].stock||"").trim();
+    if(st && u.stock.indexOf(st)===0){ let d=new Date(prevLoaners[i].since); return isNaN(d.getTime())?null:d; } }
+  return null; }
+function effDis(u){ return (u.retailDis!==undefined&&u.retailDis!==null)?u.retailDis:u.dis; }
+function computePositions(inv, metrics, s, today){
   let P={};
   inv.forEach(u=>{ if(!u.key) return; let p=P[u.key]; if(!p){ p={onlot:0,inbound:0,arrivals:{},stalled:0,aged:[],whole:[],onlotUnits:[]}; P[u.key]=p; }
     let demo=isDemo(u.stock,s.demo_stocks);
-    if(u.isDlr){ if(demo) return; p.onlot++; p.onlotUnits.push(u);
-      if(u.dis>=s.stall_days) p.stalled++; if(u.dis>s.aged_days) p.aged.push(u);
+    if(u.isDlr){ if(demo) return;
+      let since=prevLoanerSince(u,s.prev_loaners);
+      if(since){ u.prevLoaner=true; u.retailDis=Math.max(0,Math.round((today-since)/86400000)); }
+      let eff=effDis(u);
+      p.onlot++; p.onlotUnits.push(u);
+      if(eff>=s.stall_days) p.stalled++; if(eff>s.aged_days) p.aged.push(u);
       let met=metrics[u.key], dts=(met&&met.dts!==null)?met.dts:9999;
-      if(u.dis>Math.max(s.wholesale_min_age,dts)) p.whole.push(u);
+      if(eff>Math.max(s.wholesale_min_age,dts)) p.whole.push(u);
     } else { p.inbound++; if(u.arr) p.arrivals[u.arr]=(p.arrivals[u.arr]||0)+1; } });
   return P; }
 function projRate(m,dts,s){ let ph=m?m.prate/2:0, dr=(m&&m.r90>0&&dts&&dts>0)?30.4/dts:0; return Math.min(s.rate_cap,Math.max(ph,dr)); }
@@ -253,7 +262,7 @@ function findOrphans(sales,roster){ let rk={}; roster.forEach(c=>rk[c.model+"|"+
   let seen={}; sales.forEach(s=>{ if(s.firstVin&&s.key&&!rk[s.key]) seen[s.key]=(seen[s.key]||0)+1; });
   return Object.keys(seen).map(k=>({key:k,sales:seen[k]})).sort((a,b)=>b.sales-a.sales); }
 function runEngine(inv,sales,s,today){
-  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,ROSTER,s), seas=computeSeasonality(sales,tb), positions=computePositions(inv,metrics,s);
+  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,ROSTER,s), seas=computeSeasonality(sales,tb), positions=computePositions(inv,metrics,s,today);
   let agedBrakes={}; (s.aged_memory||[]).forEach(e=>{ if(e.active===undefined||e.active===1||e.active===true||e.active==="1") agedBrakes[e.key]=(agedBrakes[e.key]||0)+1; });
   let overrideMap={}; s.overrides.forEach(e=>{ overrideMap[e.key]=(overrideMap[e.key]||0)+parseInt(e.qty||0,10); });
   let windows=resolveWindows(inv,today,s);
@@ -261,4 +270,4 @@ function runEngine(inv,sales,s,today){
   let demoReturns=computeDemoReturns(demoUnits,s,today);
   let lines=buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demoReturns);
   let orphans=findOrphans(sales,ROSTER);
-  return {settings:s,tb:tb,metrics:metrics,seas:seas,positions:positions,lines:lines,demoUnits:demoUnits,sales:sales,orphans:orphans,invCount:inv.length,salesCount:sales.length,windows:windows}; }
+  return {settings:s,tb:tb,metrics:metrics,seas:seas,positions:positions,lines:lines,demoUnits:demoUnits,sales:sales,orphans:orphans,inv:inv,invCount:inv.length,salesCount:sales.length,windows:windows}; }

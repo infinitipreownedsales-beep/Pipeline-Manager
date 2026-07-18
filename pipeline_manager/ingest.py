@@ -56,6 +56,17 @@ class InventoryUnit:
     key: str
     arrival_month: int    # calendar month 1..12 an inbound unit lands, 0 if on lot
     model_year: int | None
+    # Set during the run for a unit flagged as a returned loaner: its real days
+    # on the retail market (from re-entry), which overrides the inflated DMS
+    # days-in-stock for all aging/wholesale math.
+    prev_loaner: bool = False
+    retail_dis: float | None = None
+
+    @property
+    def eff_dis(self) -> float:
+        """Days-in-stock to use for aging: the retail clock for a returned
+        loaner (hidden from the public until it reappeared), else raw DIS."""
+        return self.retail_dis if self.retail_dis is not None else self.dis
 
     @property
     def is_dlr_inv(self) -> bool:

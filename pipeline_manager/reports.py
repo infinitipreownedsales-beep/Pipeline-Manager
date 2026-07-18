@@ -135,6 +135,22 @@ def demo_dashboard(res: EngineResult) -> list:
     return rows
 
 
+def previous_loaners(res: EngineResult) -> list:
+    """Returned loaners now back in sellable inventory: their real days on the
+    retail market (from re-entry), not the inflated DMS days-in-stock."""
+    rows = []
+    for u in res.inventory:
+        if u.is_dlr_inv and u.prev_loaner:
+            rows.append({
+                "stock": u.stock, "vehicle": u.description,
+                "ext_int": f"{u.ext}/{u.interior}",
+                "dms_dis": int(u.dis), "retail_days": int(u.eff_dis),
+                "key": u.key,
+            })
+    rows.sort(key=lambda r: -r["retail_days"])
+    return rows
+
+
 # --------------------------------------------------------------------------- #
 # Executive Demo Board — best combos to put execs into (VIN-led)
 # --------------------------------------------------------------------------- #
@@ -303,6 +319,7 @@ def build_all(res: EngineResult) -> dict:
         "overstock": overstock(res),
         "wholesale_vins": wholesale_vins(res),
         "demo_dashboard": demo_dashboard(res),
+        "previous_loaners": previous_loaners(res),
         "executive_demos": executive_demos(res),
         "pace_check": pace_check(res),
         "fleet_targets": fleet_targets(res),

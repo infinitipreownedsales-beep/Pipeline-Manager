@@ -11,7 +11,7 @@ function getSettings(){
       QX60:parseInt(document.getElementById("a60").value||0,10), QX65:parseInt(document.getElementById("a65").value||0,10)},
     cpo_windows:cw, min_cpo_window:1, order_lead_pad:parseFloat(document.getElementById("wpad").value||0), lead_halflife:6,
     suppress:DEFAULTS.suppress, demote:DEFAULTS.demote, overrides:DEFAULTS.overrides,
-    demo_stocks:readDemos().demo_stocks, demo_starts:readDemos().demo_starts, aged_memory:[],
+    demo_stocks:readDemos().demo_stocks, demo_starts:readDemos().demo_starts, prev_loaners:readLoaners(), aged_memory:[],
     prove_bar:2, swap_threshold:90, rate_cap:5.0, paperweight_dts:90, wholesale_min_age:60, stall_days:120, aged_days:60,
     smooth_base:true, anticipate_demo_returns:true, trades:readTrades(),
     demo_pick_max_dts:45, demo_pick_min_total:2, demo_pick_min_r180:2, demo_picks_per_model:3, demo_vins_per_combo:2 }; }
@@ -23,7 +23,7 @@ function buildComboList(){
   ROSTER.forEach(c=>{ let label=comboLabel(c); COMBO_MAP[label]={model:c.model,code:c.code,ext:c.ext,int:c.int};
     let o=document.createElement("option"); o.value=label; dl.appendChild(o); });
 }
-function addTradeRow(t){ t=t||{};
+function addTradeRow(t,prepend){ t=t||{};
   let row=document.createElement("div"); row.className="traderow";
   row.innerHTML =
     "<input type='date' class='t-date' value='"+(t.date||"")+"'>"+
@@ -32,7 +32,8 @@ function addTradeRow(t){ t=t||{};
     "<button class='del' title='remove'>✕</button>";
   row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistTrades(); });
   row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistTrades(); }));
-  document.getElementById("tradeRows").appendChild(row);
+  let box=document.getElementById("tradeRows");
+  if(prepend && box.firstChild) box.insertBefore(row, box.firstChild); else box.appendChild(row);
   return row;
 }
 function resolveCombo(label){
@@ -99,6 +100,29 @@ function restoreDemos(){
   if(saved && saved.length!==undefined) saved.forEach(addDemoRow);
   else DEFAULTS.demo_stocks.forEach(s=>addDemoRow({stock:s, start:(DEFAULTS.demo_starts&&DEFAULTS.demo_starts[s])||""}));
 }
+
+/* ---- previous loaners (editable) ---- */
+function rawLoaners(){
+  let out=[];
+  document.querySelectorAll("#loanerRows .demorow").forEach(row=>{
+    out.push({stock:row.querySelector(".d-stock").value.trim(), since:row.querySelector(".d-start").value});
+  });
+  return out;
+}
+function addLoanerRow(d){ d=d||{};
+  let row=document.createElement("div"); row.className="demorow";
+  row.innerHTML =
+    "<input class='d-stock' placeholder='Stock# (e.g. N15106)' value=\""+String(d.stock||"").replace(/"/g,"&quot;")+"\">"+
+    "<input type='date' class='d-start' value='"+(d.since||"")+"'>"+
+    "<button class='del' title='remove'>✕ remove</button>";
+  row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistLoaners(); });
+  row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistLoaners(); }));
+  document.getElementById("loanerRows").appendChild(row);
+  return row;
+}
+function readLoaners(){ let out=[]; rawLoaners().forEach(r=>{ if(r.stock) out.push({stock:r.stock,since:r.since}); }); return out; }
+function persistLoaners(){ try{ localStorage.setItem("pm_loaners",JSON.stringify(rawLoaners())); }catch(e){} }
+function restoreLoaners(){ try{ JSON.parse(localStorage.getItem("pm_loaners")||"[]").forEach(addLoanerRow); }catch(e){} }
 
 /* ---- print selector ---- */
 function openPrintMenu(){
@@ -168,10 +192,20 @@ window.addEventListener("DOMContentLoaded",function(){
   document.getElementById("inv").addEventListener("input",markFilled);
   document.getElementById("sales").addEventListener("input",markFilled);
   buildComboList();
-  document.getElementById("addTrade").addEventListener("click",function(){ addTradeRow(); persistTrades(); });
+  document.getElementById("addTrade").addEventListener("click",function(){ addTradeRow(null,true); persistTrades(); });
   restoreTrades();
+  // collapse/expand any dashboard by clicking its header
+  document.getElementById("results").addEventListener("click",function(e){
+    let sec=e.target.closest?e.target.closest(".sec"):null; if(!sec) return;
+    let dash=sec.closest(".dash"); if(!dash) return;
+    dash.classList.toggle("collapsed");
+    let cols=[]; document.querySelectorAll("#results .dash.collapsed").forEach(function(d){ cols.push(d.getAttribute("data-dash")); });
+    try{ localStorage.setItem("pm_collapsed",JSON.stringify(cols)); }catch(err){}
+  });
   document.getElementById("addDemo").addEventListener("click",function(){ addDemoRow(); persistDemos(); });
   restoreDemos();
+  document.getElementById("addLoaner").addEventListener("click",function(){ addLoanerRow(); persistLoaners(); });
+  restoreLoaners();
   // print selector
   document.getElementById("printbtn").addEventListener("click",function(e){ e.stopPropagation();
     let m=document.getElementById("printmenu"); if(m.style.display==="block") m.style.display="none"; else openPrintMenu(); });

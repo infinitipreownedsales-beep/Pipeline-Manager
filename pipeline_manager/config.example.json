@@ -27,6 +27,11 @@
     "N15145": "2026-06-07"
   },
 
+  "_prev_loaners_comment": "Units back from demo duty. 'since' is when they returned to sellable inventory (appeared publicly); the engine ages them from there, not the inflated days-in-stock, so a returned loaner isn't wrongly wholesaled the moment it reappears.",
+  "prev_loaners": [
+    { "stock": "N15106", "since": "2026-07-15" }
+  ],
+
   "aged_memory": [
     { "key": "QX80|8361|XLF|G", "active": 1 }
   ],
