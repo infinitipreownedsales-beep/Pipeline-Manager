@@ -124,6 +124,21 @@
   .traderow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 0;font-size:14px}
   .traderow .del:hover{border-color:var(--bad);color:var(--bad)}
   @media(max-width:640px){.traderow{grid-template-columns:1fr 1fr;}.traderow.thead{display:none}}
+  /* demo roster editor */
+  .demorow{display:grid;grid-template-columns:180px 160px 1fr;gap:8px;align-items:center;margin-bottom:6px}
+  .demorow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .demorow input{width:100%}
+  .demorow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:13px;justify-self:start}
+  .demorow .del:hover{border-color:var(--warn);color:var(--warn)}
+  @media(max-width:640px){.demorow{grid-template-columns:1fr 1fr}.demorow.thead{display:none}}
+  /* print selector menu */
+  .printmenu{position:absolute;right:0;top:38px;z-index:40;background:var(--panel2);border:1px solid var(--line2);
+    border-radius:12px;padding:12px;box-shadow:var(--shadow);width:250px}
+  .pm-title{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+  .pm-opt{display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13.5px}
+  .pm-opt input{width:15px;height:15px}
+  .pm-actions{display:flex;gap:6px;margin-top:10px;align-items:center}
+  .pm-actions .ghost{padding:5px 10px;font-size:12px}
   /* executive demo board */
   .demogrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
   @media(max-width:900px){.demogrid{grid-template-columns:1fr}}
@@ -151,6 +166,7 @@
     header,.card.noprint,.sec .meta,.noprint{display:none!important}
     body{background:#fff;color:#000}
     .card{box-shadow:none;border-color:#ccc}
+    .dash.printhide{display:none!important}
     #print-vin{display:block!important}
   }
   #print-vin{display:none}
@@ -172,6 +188,18 @@
     <div class="fld"><label>QX60</label><input type="number" id="a60" value="100" style="width:64px"></div>
     <div class="fld"><label>QX65</label><input type="number" id="a65" value="100" style="width:64px"></div>
     <button class="ghost" id="editdata">✎ Data</button>
+    <div style="position:relative">
+      <button class="ghost" id="printbtn">🖨 Print</button>
+      <div id="printmenu" class="printmenu" style="display:none">
+        <div class="pm-title">Print which dashboards?</div>
+        <div id="printopts"></div>
+        <div class="pm-actions">
+          <button class="ghost" id="printAll">All</button>
+          <button class="ghost" id="printNone">None</button>
+          <button class="primary" id="printGo" style="padding:7px 14px">Print selected</button>
+        </div>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -193,6 +221,12 @@
       <div id="tradeRows"></div>
       <button class="ghost" id="addTrade" style="margin-top:8px">＋ Add trade</button>
       <datalist id="combolist"></datalist>
+    </div>
+    <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
+      <label class="top">Demo roster <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— units driven by execs, pulled from sellable inventory. Add a Stock# to pull one; ✕ (or Return) to swap it back in. Demo start sets exact aging &amp; return timing.</span></label>
+      <div id="demoHead" class="demorow thead"><span>Stock #</span><span>Demo start</span><span></span></div>
+      <div id="demoRows"></div>
+      <button class="ghost" id="addDemo" style="margin-top:8px">＋ Add demo</button>
     </div>
     <div style="margin-top:11px;display:flex;gap:9px;align-items:center;flex-wrap:wrap">
       <button class="primary" id="run">Compute order ▶</button>
@@ -689,7 +723,7 @@ function render(res){
   if(rep.vins.length){ H.push("<div id='print-vin'><h2>WHOLESALE VIN SHEET — "+tb.today.toISOString().slice(0,10)+"</h2></div>");
     H.push(tbl(["#","Stock #","VIN (last 6)","Year","Model","Trim","Ext/Int","Days in stock"],["num","","","","","","","num"],
       rep.vins.map(r=>[r.num,esc(r.stock),esc(r.vin6),r.year,r.model,esc(r.trim),esc(r.ei),r.dis])));
-    H.push("<button class='ghost noprint' style='margin-top:8px' onclick='window.print()'>🖨 Print this VIN sheet</button>"); }
+    H.push("<div class='foot noprint'>Use 🖨 Print (top-right) to print this sheet on its own or with any other dashboards.</div>"); }
   else H.push("<div class='empty'>No units past their selling window.</div>");
 
   // 6. DEMO
@@ -715,7 +749,31 @@ function render(res){
   if(res.orphans.length){ let top=res.orphans.slice(0,16).map(o=>o.key+" ("+o.sales+")").join(",  ");
     H.push("<details class='exp' style='margin-top:14px'><summary>Data health — "+res.orphans.length+" configs sold but not on the order roster (ordering can't see them; many are discontinued/legacy — expected)</summary><div class='foot'>"+esc(top)+(res.orphans.length>16?" …":"")+"</div></details>"); }
 
-  document.getElementById("results").innerHTML=H.join("");
+  let root=document.getElementById("results");
+  root.innerHTML=H.join("");
+  window.__dashes = groupSections(root);
+}
+// Wrap the flat output into one <section class="dash"> per dashboard so print
+// (and anything else) can show/hide them individually.
+function groupSections(root){
+  const titleKey={"Order Priority":"order","6-Month Rolling Order Plan":"plan",
+    "Fleet Stock Target & Seasonality":"fleet","Executive Demo Board":"demoboard",
+    "Overstock / Wholesale":"overstock","Wholesale Now — VIN sheet":"vins",
+    "Demo Dashboard":"demos","Pace Check":"pace"};
+  let kids=[].slice.call(root.childNodes), groups=[], cur={key:"summary",title:"Summary",nodes:[]};
+  kids.forEach(node=>{
+    if(node.nodeType===1 && node.classList && node.classList.contains("sec")){
+      if(cur.nodes.length) groups.push(cur);
+      let h=node.querySelector("h2"), t=h?h.textContent.trim():"";
+      cur={key:titleKey[t]||t, title:t, nodes:[node]};
+    } else cur.nodes.push(node);
+  });
+  if(cur.nodes.length) groups.push(cur);
+  root.innerHTML="";
+  groups.forEach(g=>{ let sec=document.createElement("section"); sec.className="dash";
+    sec.dataset.dash=g.key; sec.dataset.title=g.title;
+    g.nodes.forEach(n=>sec.appendChild(n)); root.appendChild(sec); });
+  return groups.map(g=>({key:g.key,title:g.title}));
 }
 
 /* ===================== wiring ===================== */
@@ -731,7 +789,7 @@ function getSettings(){
       QX60:parseInt(document.getElementById("a60").value||0,10), QX65:parseInt(document.getElementById("a65").value||0,10)},
     cpo_windows:cw, min_cpo_window:1, order_lead_pad:parseFloat(document.getElementById("wpad").value||0), lead_halflife:6,
     suppress:DEFAULTS.suppress, demote:DEFAULTS.demote, overrides:DEFAULTS.overrides,
-    demo_stocks:DEFAULTS.demo_stocks, demo_starts:DEFAULTS.demo_starts, aged_memory:[],
+    demo_stocks:readDemos().demo_stocks, demo_starts:readDemos().demo_starts, aged_memory:[],
     prove_bar:2, swap_threshold:90, rate_cap:5.0, paperweight_dts:90, wholesale_min_age:60, stall_days:120, aged_days:60,
     smooth_base:true, anticipate_demo_returns:true, trades:readTrades(),
     demo_pick_max_dts:45, demo_pick_min_total:2, demo_pick_min_r180:2, demo_picks_per_model:3, demo_vins_per_combo:2 }; }
@@ -789,6 +847,59 @@ function persistTrades(){ try{ localStorage.setItem("pm_trades",JSON.stringify(r
 function restoreTrades(){ try{ JSON.parse(localStorage.getItem("pm_trades")||"[]")
   .forEach(r=>addTradeRow({date:r.date,label:r.combo,days:r.days})); }catch(e){} }
 
+/* ---- demo roster (editable) ---- */
+function rawDemos(){
+  let out=[];
+  document.querySelectorAll("#demoRows .demorow").forEach(row=>{
+    out.push({stock:row.querySelector(".d-stock").value.trim(), start:row.querySelector(".d-start").value});
+  });
+  return out;
+}
+function addDemoRow(d){ d=d||{};
+  let row=document.createElement("div"); row.className="demorow";
+  row.innerHTML =
+    "<input class='d-stock' placeholder='Stock# (e.g. N15106)' value=\""+String(d.stock||"").replace(/"/g,"&quot;")+"\">"+
+    "<input type='date' class='d-start' value='"+(d.start||"")+"'>"+
+    "<button class='del' title='swap back into sellable inventory'>↩ Return / remove</button>";
+  row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistDemos(); });
+  row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistDemos(); }));
+  document.getElementById("demoRows").appendChild(row);
+  return row;
+}
+function readDemos(){
+  let stocks=[], starts={};
+  rawDemos().forEach(r=>{ if(!r.stock) return; stocks.push(r.stock); if(r.start) starts[r.stock]=r.start; });
+  return {demo_stocks:stocks, demo_starts:starts};
+}
+function persistDemos(){ try{ localStorage.setItem("pm_demos",JSON.stringify(rawDemos())); }catch(e){} }
+function restoreDemos(){
+  let saved=null; try{ saved=JSON.parse(localStorage.getItem("pm_demos")); }catch(e){}
+  if(saved && saved.length!==undefined) saved.forEach(addDemoRow);
+  else DEFAULTS.demo_stocks.forEach(s=>addDemoRow({stock:s, start:(DEFAULTS.demo_starts&&DEFAULTS.demo_starts[s])||""}));
+}
+
+/* ---- print selector ---- */
+function openPrintMenu(){
+  let opts=document.getElementById("printopts"), dashes=window.__dashes||[], sel={};
+  try{ sel=JSON.parse(localStorage.getItem("pm_print")||"{}"); }catch(e){}
+  if(!dashes.length){ opts.innerHTML="<div class='foot'>Compute the dashboards first.</div>"; }
+  else opts.innerHTML=dashes.map(function(d){ let on=(sel[d.key]===undefined)?true:sel[d.key];
+    return "<label class='pm-opt'><input type='checkbox' data-dash='"+d.key+"' "+(on?"checked":"")+"> "+d.title+"</label>"; }).join("");
+  document.getElementById("printmenu").style.display="block";
+}
+function doPrint(){
+  let want={}, sel={};
+  document.querySelectorAll("#printopts input[type=checkbox]").forEach(function(b){ want[b.getAttribute("data-dash")]=b.checked; sel[b.getAttribute("data-dash")]=b.checked; });
+  document.querySelectorAll("#results .dash").forEach(function(sec){
+    let k=sec.getAttribute("data-dash"); let show=(k in want)?want[k]:true;
+    sec.classList.toggle("printhide", !show);
+  });
+  try{ localStorage.setItem("pm_print",JSON.stringify(sel)); }catch(e){}
+  document.getElementById("printmenu").style.display="none";
+  window.print();
+}
+function restorePrintHidden(){ document.querySelectorAll("#results .dash.printhide").forEach(function(s){ s.classList.remove("printhide"); }); }
+
 function markFilled(){
   document.getElementById("inv").classList.toggle("ok", document.getElementById("inv").value.trim()!=="");
   document.getElementById("sales").classList.toggle("ok", document.getElementById("sales").value.trim()!==""); }
@@ -837,6 +948,17 @@ window.addEventListener("DOMContentLoaded",function(){
   buildComboList();
   document.getElementById("addTrade").addEventListener("click",function(){ addTradeRow(); persistTrades(); });
   restoreTrades();
+  document.getElementById("addDemo").addEventListener("click",function(){ addDemoRow(); persistDemos(); });
+  restoreDemos();
+  // print selector
+  document.getElementById("printbtn").addEventListener("click",function(e){ e.stopPropagation();
+    let m=document.getElementById("printmenu"); if(m.style.display==="block") m.style.display="none"; else openPrintMenu(); });
+  document.getElementById("printmenu").addEventListener("click",function(e){ e.stopPropagation(); });
+  document.getElementById("printGo").addEventListener("click",doPrint);
+  document.getElementById("printAll").addEventListener("click",function(){ document.querySelectorAll("#printopts input").forEach(function(b){ b.checked=true; }); });
+  document.getElementById("printNone").addEventListener("click",function(){ document.querySelectorAll("#printopts input").forEach(function(b){ b.checked=false; }); });
+  document.addEventListener("click",function(){ document.getElementById("printmenu").style.display="none"; });
+  window.addEventListener("afterprint",restorePrintHidden);
   function toggleManual(){ document.getElementById("manualwins").style.display =
     document.getElementById("wmode").value==="manual" ? "flex" : "none"; }
   document.getElementById("wmode").addEventListener("change",toggleManual);

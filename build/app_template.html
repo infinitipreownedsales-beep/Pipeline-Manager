@@ -124,6 +124,21 @@
   .traderow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 0;font-size:14px}
   .traderow .del:hover{border-color:var(--bad);color:var(--bad)}
   @media(max-width:640px){.traderow{grid-template-columns:1fr 1fr;}.traderow.thead{display:none}}
+  /* demo roster editor */
+  .demorow{display:grid;grid-template-columns:180px 160px 1fr;gap:8px;align-items:center;margin-bottom:6px}
+  .demorow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .demorow input{width:100%}
+  .demorow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:13px;justify-self:start}
+  .demorow .del:hover{border-color:var(--warn);color:var(--warn)}
+  @media(max-width:640px){.demorow{grid-template-columns:1fr 1fr}.demorow.thead{display:none}}
+  /* print selector menu */
+  .printmenu{position:absolute;right:0;top:38px;z-index:40;background:var(--panel2);border:1px solid var(--line2);
+    border-radius:12px;padding:12px;box-shadow:var(--shadow);width:250px}
+  .pm-title{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+  .pm-opt{display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:13.5px}
+  .pm-opt input{width:15px;height:15px}
+  .pm-actions{display:flex;gap:6px;margin-top:10px;align-items:center}
+  .pm-actions .ghost{padding:5px 10px;font-size:12px}
   /* executive demo board */
   .demogrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
   @media(max-width:900px){.demogrid{grid-template-columns:1fr}}
@@ -151,6 +166,7 @@
     header,.card.noprint,.sec .meta,.noprint{display:none!important}
     body{background:#fff;color:#000}
     .card{box-shadow:none;border-color:#ccc}
+    .dash.printhide{display:none!important}
     #print-vin{display:block!important}
   }
   #print-vin{display:none}
@@ -172,6 +188,18 @@
     <div class="fld"><label>QX60</label><input type="number" id="a60" value="100" style="width:64px"></div>
     <div class="fld"><label>QX65</label><input type="number" id="a65" value="100" style="width:64px"></div>
     <button class="ghost" id="editdata">✎ Data</button>
+    <div style="position:relative">
+      <button class="ghost" id="printbtn">🖨 Print</button>
+      <div id="printmenu" class="printmenu" style="display:none">
+        <div class="pm-title">Print which dashboards?</div>
+        <div id="printopts"></div>
+        <div class="pm-actions">
+          <button class="ghost" id="printAll">All</button>
+          <button class="ghost" id="printNone">None</button>
+          <button class="primary" id="printGo" style="padding:7px 14px">Print selected</button>
+        </div>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -193,6 +221,12 @@
       <div id="tradeRows"></div>
       <button class="ghost" id="addTrade" style="margin-top:8px">＋ Add trade</button>
       <datalist id="combolist"></datalist>
+    </div>
+    <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
+      <label class="top">Demo roster <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— units driven by execs, pulled from sellable inventory. Add a Stock# to pull one; ✕ (or Return) to swap it back in. Demo start sets exact aging &amp; return timing.</span></label>
+      <div id="demoHead" class="demorow thead"><span>Stock #</span><span>Demo start</span><span></span></div>
+      <div id="demoRows"></div>
+      <button class="ghost" id="addDemo" style="margin-top:8px">＋ Add demo</button>
     </div>
     <div style="margin-top:11px;display:flex;gap:9px;align-items:center;flex-wrap:wrap">
       <button class="primary" id="run">Compute order ▶</button>

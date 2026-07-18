@@ -11,7 +11,7 @@ function getSettings(){
       QX60:parseInt(document.getElementById("a60").value||0,10), QX65:parseInt(document.getElementById("a65").value||0,10)},
     cpo_windows:cw, min_cpo_window:1, order_lead_pad:parseFloat(document.getElementById("wpad").value||0), lead_halflife:6,
     suppress:DEFAULTS.suppress, demote:DEFAULTS.demote, overrides:DEFAULTS.overrides,
-    demo_stocks:DEFAULTS.demo_stocks, demo_starts:DEFAULTS.demo_starts, aged_memory:[],
+    demo_stocks:readDemos().demo_stocks, demo_starts:readDemos().demo_starts, aged_memory:[],
     prove_bar:2, swap_threshold:90, rate_cap:5.0, paperweight_dts:90, wholesale_min_age:60, stall_days:120, aged_days:60,
     smooth_base:true, anticipate_demo_returns:true, trades:readTrades(),
     demo_pick_max_dts:45, demo_pick_min_total:2, demo_pick_min_r180:2, demo_picks_per_model:3, demo_vins_per_combo:2 }; }
@@ -69,6 +69,59 @@ function persistTrades(){ try{ localStorage.setItem("pm_trades",JSON.stringify(r
 function restoreTrades(){ try{ JSON.parse(localStorage.getItem("pm_trades")||"[]")
   .forEach(r=>addTradeRow({date:r.date,label:r.combo,days:r.days})); }catch(e){} }
 
+/* ---- demo roster (editable) ---- */
+function rawDemos(){
+  let out=[];
+  document.querySelectorAll("#demoRows .demorow").forEach(row=>{
+    out.push({stock:row.querySelector(".d-stock").value.trim(), start:row.querySelector(".d-start").value});
+  });
+  return out;
+}
+function addDemoRow(d){ d=d||{};
+  let row=document.createElement("div"); row.className="demorow";
+  row.innerHTML =
+    "<input class='d-stock' placeholder='Stock# (e.g. N15106)' value=\""+String(d.stock||"").replace(/"/g,"&quot;")+"\">"+
+    "<input type='date' class='d-start' value='"+(d.start||"")+"'>"+
+    "<button class='del' title='swap back into sellable inventory'>↩ Return / remove</button>";
+  row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistDemos(); });
+  row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistDemos(); }));
+  document.getElementById("demoRows").appendChild(row);
+  return row;
+}
+function readDemos(){
+  let stocks=[], starts={};
+  rawDemos().forEach(r=>{ if(!r.stock) return; stocks.push(r.stock); if(r.start) starts[r.stock]=r.start; });
+  return {demo_stocks:stocks, demo_starts:starts};
+}
+function persistDemos(){ try{ localStorage.setItem("pm_demos",JSON.stringify(rawDemos())); }catch(e){} }
+function restoreDemos(){
+  let saved=null; try{ saved=JSON.parse(localStorage.getItem("pm_demos")); }catch(e){}
+  if(saved && saved.length!==undefined) saved.forEach(addDemoRow);
+  else DEFAULTS.demo_stocks.forEach(s=>addDemoRow({stock:s, start:(DEFAULTS.demo_starts&&DEFAULTS.demo_starts[s])||""}));
+}
+
+/* ---- print selector ---- */
+function openPrintMenu(){
+  let opts=document.getElementById("printopts"), dashes=window.__dashes||[], sel={};
+  try{ sel=JSON.parse(localStorage.getItem("pm_print")||"{}"); }catch(e){}
+  if(!dashes.length){ opts.innerHTML="<div class='foot'>Compute the dashboards first.</div>"; }
+  else opts.innerHTML=dashes.map(function(d){ let on=(sel[d.key]===undefined)?true:sel[d.key];
+    return "<label class='pm-opt'><input type='checkbox' data-dash='"+d.key+"' "+(on?"checked":"")+"> "+d.title+"</label>"; }).join("");
+  document.getElementById("printmenu").style.display="block";
+}
+function doPrint(){
+  let want={}, sel={};
+  document.querySelectorAll("#printopts input[type=checkbox]").forEach(function(b){ want[b.getAttribute("data-dash")]=b.checked; sel[b.getAttribute("data-dash")]=b.checked; });
+  document.querySelectorAll("#results .dash").forEach(function(sec){
+    let k=sec.getAttribute("data-dash"); let show=(k in want)?want[k]:true;
+    sec.classList.toggle("printhide", !show);
+  });
+  try{ localStorage.setItem("pm_print",JSON.stringify(sel)); }catch(e){}
+  document.getElementById("printmenu").style.display="none";
+  window.print();
+}
+function restorePrintHidden(){ document.querySelectorAll("#results .dash.printhide").forEach(function(s){ s.classList.remove("printhide"); }); }
+
 function markFilled(){
   document.getElementById("inv").classList.toggle("ok", document.getElementById("inv").value.trim()!=="");
   document.getElementById("sales").classList.toggle("ok", document.getElementById("sales").value.trim()!==""); }
@@ -117,6 +170,17 @@ window.addEventListener("DOMContentLoaded",function(){
   buildComboList();
   document.getElementById("addTrade").addEventListener("click",function(){ addTradeRow(); persistTrades(); });
   restoreTrades();
+  document.getElementById("addDemo").addEventListener("click",function(){ addDemoRow(); persistDemos(); });
+  restoreDemos();
+  // print selector
+  document.getElementById("printbtn").addEventListener("click",function(e){ e.stopPropagation();
+    let m=document.getElementById("printmenu"); if(m.style.display==="block") m.style.display="none"; else openPrintMenu(); });
+  document.getElementById("printmenu").addEventListener("click",function(e){ e.stopPropagation(); });
+  document.getElementById("printGo").addEventListener("click",doPrint);
+  document.getElementById("printAll").addEventListener("click",function(){ document.querySelectorAll("#printopts input").forEach(function(b){ b.checked=true; }); });
+  document.getElementById("printNone").addEventListener("click",function(){ document.querySelectorAll("#printopts input").forEach(function(b){ b.checked=false; }); });
+  document.addEventListener("click",function(){ document.getElementById("printmenu").style.display="none"; });
+  window.addEventListener("afterprint",restorePrintHidden);
   function toggleManual(){ document.getElementById("manualwins").style.display =
     document.getElementById("wmode").value==="manual" ? "flex" : "none"; }
   document.getElementById("wmode").addEventListener("change",toggleManual);

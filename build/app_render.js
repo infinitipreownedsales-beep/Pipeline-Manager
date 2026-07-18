@@ -196,7 +196,7 @@ function render(res){
   if(rep.vins.length){ H.push("<div id='print-vin'><h2>WHOLESALE VIN SHEET — "+tb.today.toISOString().slice(0,10)+"</h2></div>");
     H.push(tbl(["#","Stock #","VIN (last 6)","Year","Model","Trim","Ext/Int","Days in stock"],["num","","","","","","","num"],
       rep.vins.map(r=>[r.num,esc(r.stock),esc(r.vin6),r.year,r.model,esc(r.trim),esc(r.ei),r.dis])));
-    H.push("<button class='ghost noprint' style='margin-top:8px' onclick='window.print()'>🖨 Print this VIN sheet</button>"); }
+    H.push("<div class='foot noprint'>Use 🖨 Print (top-right) to print this sheet on its own or with any other dashboards.</div>"); }
   else H.push("<div class='empty'>No units past their selling window.</div>");
 
   // 6. DEMO
@@ -222,5 +222,29 @@ function render(res){
   if(res.orphans.length){ let top=res.orphans.slice(0,16).map(o=>o.key+" ("+o.sales+")").join(",  ");
     H.push("<details class='exp' style='margin-top:14px'><summary>Data health — "+res.orphans.length+" configs sold but not on the order roster (ordering can't see them; many are discontinued/legacy — expected)</summary><div class='foot'>"+esc(top)+(res.orphans.length>16?" …":"")+"</div></details>"); }
 
-  document.getElementById("results").innerHTML=H.join("");
+  let root=document.getElementById("results");
+  root.innerHTML=H.join("");
+  window.__dashes = groupSections(root);
+}
+// Wrap the flat output into one <section class="dash"> per dashboard so print
+// (and anything else) can show/hide them individually.
+function groupSections(root){
+  const titleKey={"Order Priority":"order","6-Month Rolling Order Plan":"plan",
+    "Fleet Stock Target & Seasonality":"fleet","Executive Demo Board":"demoboard",
+    "Overstock / Wholesale":"overstock","Wholesale Now — VIN sheet":"vins",
+    "Demo Dashboard":"demos","Pace Check":"pace"};
+  let kids=[].slice.call(root.childNodes), groups=[], cur={key:"summary",title:"Summary",nodes:[]};
+  kids.forEach(node=>{
+    if(node.nodeType===1 && node.classList && node.classList.contains("sec")){
+      if(cur.nodes.length) groups.push(cur);
+      let h=node.querySelector("h2"), t=h?h.textContent.trim():"";
+      cur={key:titleKey[t]||t, title:t, nodes:[node]};
+    } else cur.nodes.push(node);
+  });
+  if(cur.nodes.length) groups.push(cur);
+  root.innerHTML="";
+  groups.forEach(g=>{ let sec=document.createElement("section"); sec.className="dash";
+    sec.dataset.dash=g.key; sec.dataset.title=g.title;
+    g.nodes.forEach(n=>sec.appendChild(n)); root.appendChild(sec); });
+  return groups.map(g=>({key:g.key,title:g.title}));
 }

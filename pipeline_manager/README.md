@@ -78,6 +78,10 @@ The app has an editable trade-log panel; the CLI reads it from `config.json`.
 4. **Demo Dashboard** — units pulled from sellable inventory, ages, swap flags.
 5. **Pace Check** — actual vs predicted 60-day pace per model, with a read.
 
+The app also has an editable **demo roster** (add a Stock# to pull a unit for an
+exec, set its start date, or ↩ Return it to swap back into inventory) and a
+**print selector** (🖨 Print → choose exactly which dashboards go on the page).
+
 Plus an **Executive Demo Board** — per model, the best *proven fast-moving*
 combos to put executives into (short days-to-sell so a demo still resells
 quickly once it has miles; repeat demand only, never a one-off), VIN-led where
