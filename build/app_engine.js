@@ -140,23 +140,27 @@ function computeSeasonality(sales, tb){
     let avg=rates.reduce((a,b)=>a+b,0)/12; out[model]={index:rates.map(r=>avg===0?1:r/avg),rate:rates}; });
   return out; }
 function isDemo(stock, prefixes){ return prefixes.some(p=>p&&stock.indexOf(p)===0); }
-function prevLoanerSince(u, prevLoaners){
-  for(let i=0;i<(prevLoaners||[]).length;i++){ let st=String(prevLoaners[i].stock||"").trim();
-    if(st && u.stock.indexOf(st)===0){ let d=new Date(prevLoaners[i].since); return isNaN(d.getTime())?null:d; } }
+function matchPrevLoaner(u, list){
+  for(let i=0;i<(list||[]).length;i++){ let st=String(list[i].stock||"").trim();
+    if(st && u.stock.indexOf(st)===0) return list[i]; }
   return null; }
+function loanerDaysOut(e){ let t=new Date(e.taken), r=new Date(e.returned);
+  if(isNaN(t.getTime())||isNaN(r.getTime())) return null; return Math.max(0,Math.round((r-t)/86400000)); }
 function effDis(u){ return (u.retailDis!==undefined&&u.retailDis!==null)?u.retailDis:u.dis; }
 function computePositions(inv, metrics, s, today){
   let P={};
   inv.forEach(u=>{ if(!u.key) return; let p=P[u.key]; if(!p){ p={onlot:0,inbound:0,arrivals:{},stalled:0,aged:[],whole:[],onlotUnits:[]}; P[u.key]=p; }
     let demo=isDemo(u.stock,s.demo_stocks);
     if(u.isDlr){ if(demo) return;
-      let since=prevLoanerSince(u,s.prev_loaners);
-      if(since){ u.prevLoaner=true; u.retailDis=Math.max(0,Math.round((today-since)/86400000)); }
+      let entry=matchPrevLoaner(u,s.prev_loaners);
+      if(entry){ u.prevLoaner=true; let dout=loanerDaysOut(entry);
+        if(dout!==null) u.retailDis=Math.max(0,u.dis-dout);
+        else if(entry.since){ let d=new Date(entry.since); if(!isNaN(d.getTime())) u.retailDis=Math.max(0,Math.round((today-d)/86400000)); } }
       let eff=effDis(u);
       p.onlot++; p.onlotUnits.push(u);
       if(eff>=s.stall_days) p.stalled++; if(eff>s.aged_days) p.aged.push(u);
       let met=metrics[u.key], dts=(met&&met.dts!==null)?met.dts:9999;
-      if(eff>Math.max(s.wholesale_min_age,dts)) p.whole.push(u);
+      if(eff>Math.max(s.wholesale_min_age,dts) && !u.prevLoaner) p.whole.push(u);
     } else { p.inbound++; if(u.arr) p.arrivals[u.arr]=(p.arrivals[u.arr]||0)+1; } });
   return P; }
 function projRate(m,dts,s){ let ph=m?m.prate/2:0, dr=(m&&m.r90>0&&dts&&dts>0)?30.4/dts:0; return Math.min(s.rate_cap,Math.max(ph,dr)); }

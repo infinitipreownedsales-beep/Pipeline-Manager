@@ -278,11 +278,9 @@ def test_smooth_base_is_stable_across_the_month():
     assert max(smooth) - min(smooth) < 1         # smooth base drifts, never flips a whole unit
 
 
-def test_previous_loaner_uses_retail_clock():
-    """A returned loaner's aging runs from re-entry (its real time on the public
-    market), not the inflated DMS days-in-stock — so it isn't wrongly wholesaled
-    the moment it reappears."""
-    import datetime as _d
+def test_previous_loaner_subtracts_demo_period_and_never_wholesales():
+    """Only the hidden demo period (taken -> returned) is subtracted from
+    days-in-stock, and a returned loaner is never wholesale-flagged (miles)."""
     inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
     sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
     today = _AS_OF
@@ -293,11 +291,15 @@ def test_previous_loaner_uses_retail_clock():
         return pos is not None and any(x.stock == u.stock for x in pos.wholesale_eligible)
 
     assert wholesaled(engine.run(inv, sales, Settings(), today=today))   # aged on DMS days
-    pl = [{"stock": u.stock, "since": (today - _d.timedelta(days=8)).isoformat()}]
+    pl = [{"stock": u.stock, "taken": "2026-04-01", "returned": "2026-05-01",
+           "note": "REED / body shop"}]                                  # 30 days out
     r = engine.run(inv, sales, Settings(prev_loaners=pl), today=today)
-    assert not wholesaled(r)                       # 8 real market days -> not aged
     rep = reports.previous_loaners(r)
-    assert rep and rep[0]["retail_days"] == 8 and rep[0]["dms_dis"] == int(u.dis)
+    assert rep and rep[0]["dms_dis"] == int(u.dis)
+    assert rep[0]["days_out"] == 30
+    assert rep[0]["retail_days"] == int(u.dis) - 30       # market time = DMS - days out
+    assert rep[0]["note"] == "REED / body shop"
+    assert not wholesaled(r)                              # previous demos never wholesale
 
 
 def test_recompute_is_deterministic():

@@ -140,13 +140,14 @@
   @media(max-width:640px){.traderow{grid-template-columns:1fr 1fr;}.traderow.thead{display:none}}
   /* newest at top; show ~10 rows, scroll for the rest */
   .scrollrows{max-height:352px;overflow-y:auto;padding-right:4px}
-  /* demo roster editor */
-  .demorow{display:grid;grid-template-columns:180px 160px 1fr;gap:8px;align-items:center;margin-bottom:6px}
-  .demorow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
-  .demorow input{width:100%}
-  .demorow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:13px;justify-self:start}
-  .demorow .del:hover{border-color:var(--warn);color:var(--warn)}
-  @media(max-width:640px){.demorow{grid-template-columns:1fr 1fr}.demorow.thead{display:none}}
+  /* demo roster + previous-loaner editors */
+  .demorow{display:grid;grid-template-columns:150px 140px 1fr auto;gap:8px;align-items:center;margin-bottom:6px}
+  .loanrow{display:grid;grid-template-columns:130px 130px 130px 1fr auto;gap:8px;align-items:center;margin-bottom:6px}
+  .demorow.thead span,.loanrow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .demorow input,.loanrow input{width:100%}
+  .demorow .del,.loanrow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:13px;justify-self:start;white-space:nowrap}
+  .demorow .del:hover,.loanrow .del:hover{border-color:var(--warn);color:var(--warn)}
+  @media(max-width:640px){.demorow,.loanrow{grid-template-columns:1fr 1fr}.demorow.thead,.loanrow.thead{display:none}}
   /* print selector menu */
   .printmenu{position:absolute;right:0;top:38px;z-index:40;background:var(--panel2);border:1px solid var(--line2);
     border-radius:12px;padding:12px;box-shadow:var(--shadow);width:250px}
@@ -240,13 +241,13 @@
     </div>
     <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
       <label class="top">Demo roster <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— units driven by execs, pulled from sellable inventory. Add a Stock# to pull one; ✕ (or Return) to swap it back in. Demo start sets exact aging &amp; return timing.</span></label>
-      <div id="demoHead" class="demorow thead"><span>Stock #</span><span>Demo start</span><span></span></div>
+      <div id="demoHead" class="demorow thead"><span>Stock #</span><span>Demo start</span><span>Driver / reason</span><span></span></div>
       <div id="demoRows"></div>
       <button class="ghost" id="addDemo" style="margin-top:8px">＋ Add demo</button>
     </div>
     <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
-      <label class="top">Previous loaners <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— units back from demo duty. Loaners are hidden from the public while in service, so the retail clock starts when they reappear. Set the date it came back and the engine ages it from there (real time to sell), not the inflated days-in-stock.</span></label>
-      <div id="loanerHead" class="demorow thead"><span>Stock #</span><span>Back in stock since</span><span></span></div>
+      <label class="top">Previous loaners <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— units back from demo duty. Enter when it was taken out and returned; the engine subtracts only that hidden demo stretch from days-in-stock, so the real market time (before + after the demo) stays true. Never wholesale-listed (miles).</span></label>
+      <div id="loanerHead" class="loanrow thead"><span>Stock #</span><span>Taken (out)</span><span>Returned (in)</span><span>Driver / reason</span><span></span></div>
       <div id="loanerRows"></div>
       <button class="ghost" id="addLoaner" style="margin-top:8px">＋ Add previous loaner</button>
     </div>

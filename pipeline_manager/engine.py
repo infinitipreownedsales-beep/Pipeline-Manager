@@ -331,15 +331,29 @@ def _is_demo(stock: str, demo_prefixes: list[str]) -> bool:
 # --------------------------------------------------------------------------- #
 # Inventory position per config
 # --------------------------------------------------------------------------- #
-def _prev_loaner_since(u: InventoryUnit, prev_loaners) -> _dt.date | None:
-    """Return the date a returned-loaner unit re-entered the retail market."""
+def _match_prev_loaner(u: InventoryUnit, prev_loaners):
+    """Return the previous-loaner entry matching this unit's Stock#, or None."""
     for e in prev_loaners or []:
         st = str(e.get("stock", "")).strip()
         if st and u.stock.startswith(st):
-            try:
-                return _dt.date.fromisoformat(str(e.get("since")))
-            except (ValueError, TypeError):
-                return None
+            return e
+    return None
+
+
+def _iso(v):
+    try:
+        return _dt.date.fromisoformat(str(v))
+    except (ValueError, TypeError):
+        return None
+
+
+def _loaner_days_out(entry) -> int | None:
+    """Days a loaner was OUT of sellable stock (taken -> returned) = the hidden
+    demo period. Only this is subtracted from days-in-stock; the days the unit
+    was publicly available before and after the demo still count as market time."""
+    taken, returned = _iso(entry.get("taken")), _iso(entry.get("returned"))
+    if taken and returned:
+        return max(0, (returned - taken).days)
     return None
 
 
@@ -354,12 +368,18 @@ def compute_positions(inventory: list[InventoryUnit], metrics: dict, s: Settings
         if u.is_dlr_inv:
             if demo:
                 continue  # demo units are out of all sell/order/overstock math
-            # Returned loaner: age from re-entry (real retail time), not the
-            # inflated DMS days-in-stock that includes the hidden demo period.
-            since = _prev_loaner_since(u, s.prev_loaners)
-            if since is not None:
+            # Returned loaner: subtract only the hidden demo period (taken ->
+            # returned) from days-in-stock, so the days it was publicly available
+            # before and after the demo still count as real market time. (A bare
+            # legacy `since` re-entry date falls back to today - since.)
+            entry = _match_prev_loaner(u, s.prev_loaners)
+            if entry is not None:
                 u.prev_loaner = True
-                u.retail_dis = max(0, (today - since).days)
+                days_out = _loaner_days_out(entry)
+                if days_out is not None:
+                    u.retail_dis = max(0, u.dis - days_out)
+                elif _iso(entry.get("since")):
+                    u.retail_dis = max(0, (today - _iso(entry.get("since"))).days)
             pos.onlot += 1
             pos.onlot_units.append(u)
             if u.eff_dis >= s.stall_days:
@@ -368,7 +388,9 @@ def compute_positions(inventory: list[InventoryUnit], metrics: dict, s: Settings
                 pos.aged_units.append(u)
             met = metrics.get(u.key)
             dts = met.dts if (met and met.dts is not None) else 9999
-            if u.eff_dis > max(s.wholesale_min_age, dts):
+            # Demos and previous demos are never wholesale-flagged — the miles
+            # make them a different disposal, not a print-and-send wholesale unit.
+            if u.eff_dis > max(s.wholesale_min_age, dts) and not u.prev_loaner:
                 pos.wholesale_eligible.append(u)
         else:
             pos.inbound_total += 1

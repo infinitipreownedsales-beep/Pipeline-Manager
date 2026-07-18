@@ -11,7 +11,7 @@ function getSettings(){
       QX60:parseInt(document.getElementById("a60").value||0,10), QX65:parseInt(document.getElementById("a65").value||0,10)},
     cpo_windows:cw, min_cpo_window:1, order_lead_pad:parseFloat(document.getElementById("wpad").value||0), lead_halflife:6,
     suppress:DEFAULTS.suppress, demote:DEFAULTS.demote, overrides:DEFAULTS.overrides,
-    demo_stocks:readDemos().demo_stocks, demo_starts:readDemos().demo_starts, prev_loaners:readLoaners(), aged_memory:[],
+    demo_stocks:readDemos().demo_stocks, demo_starts:readDemos().demo_starts, demo_notes:readDemos().demo_notes, prev_loaners:readLoaners(), aged_memory:[],
     prove_bar:2, swap_threshold:90, rate_cap:5.0, paperweight_dts:90, wholesale_min_age:60, stall_days:120, aged_days:60,
     smooth_base:true, anticipate_demo_returns:true, trades:readTrades(),
     demo_pick_max_dts:45, demo_pick_min_total:2, demo_pick_min_r180:2, demo_picks_per_model:3, demo_vins_per_combo:2 }; }
@@ -71,28 +71,31 @@ function restoreTrades(){ try{ JSON.parse(localStorage.getItem("pm_trades")||"[]
   .forEach(r=>addTradeRow({date:r.date,label:r.combo,days:r.days})); }catch(e){} }
 
 /* ---- demo roster (editable) ---- */
+function attrq(v){ return String(v||"").replace(/"/g,"&quot;"); }
 function rawDemos(){
   let out=[];
   document.querySelectorAll("#demoRows .demorow").forEach(row=>{
-    out.push({stock:row.querySelector(".d-stock").value.trim(), start:row.querySelector(".d-start").value});
+    out.push({stock:row.querySelector(".d-stock").value.trim(), start:row.querySelector(".d-start").value,
+              note:row.querySelector(".d-note").value.trim()});
   });
   return out;
 }
 function addDemoRow(d){ d=d||{};
   let row=document.createElement("div"); row.className="demorow";
   row.innerHTML =
-    "<input class='d-stock' placeholder='Stock# (e.g. N15106)' value=\""+String(d.stock||"").replace(/"/g,"&quot;")+"\">"+
+    "<input class='d-stock' placeholder='Stock# (e.g. N15106)' value=\""+attrq(d.stock)+"\">"+
     "<input type='date' class='d-start' value='"+(d.start||"")+"'>"+
-    "<button class='del' title='swap back into sellable inventory'>↩ Return / remove</button>";
+    "<input class='d-note' placeholder='driver / reason' value=\""+attrq(d.note)+"\">"+
+    "<button class='del' title='swap back into sellable inventory'>↩ Return</button>";
   row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistDemos(); });
   row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistDemos(); }));
   document.getElementById("demoRows").appendChild(row);
   return row;
 }
 function readDemos(){
-  let stocks=[], starts={};
-  rawDemos().forEach(r=>{ if(!r.stock) return; stocks.push(r.stock); if(r.start) starts[r.stock]=r.start; });
-  return {demo_stocks:stocks, demo_starts:starts};
+  let stocks=[], starts={}, notes={};
+  rawDemos().forEach(r=>{ if(!r.stock) return; stocks.push(r.stock); if(r.start) starts[r.stock]=r.start; if(r.note) notes[r.stock]=r.note; });
+  return {demo_stocks:stocks, demo_starts:starts, demo_notes:notes};
 }
 function persistDemos(){ try{ localStorage.setItem("pm_demos",JSON.stringify(rawDemos())); }catch(e){} }
 function restoreDemos(){
@@ -104,23 +107,28 @@ function restoreDemos(){
 /* ---- previous loaners (editable) ---- */
 function rawLoaners(){
   let out=[];
-  document.querySelectorAll("#loanerRows .demorow").forEach(row=>{
-    out.push({stock:row.querySelector(".d-stock").value.trim(), since:row.querySelector(".d-start").value});
+  document.querySelectorAll("#loanerRows .loanrow").forEach(row=>{
+    out.push({stock:row.querySelector(".d-stock").value.trim(),
+              taken:row.querySelector(".l-taken").value,
+              returned:row.querySelector(".l-returned").value,
+              note:row.querySelector(".d-note").value.trim()});
   });
   return out;
 }
 function addLoanerRow(d){ d=d||{};
-  let row=document.createElement("div"); row.className="demorow";
+  let row=document.createElement("div"); row.className="loanrow";
   row.innerHTML =
-    "<input class='d-stock' placeholder='Stock# (e.g. N15106)' value=\""+String(d.stock||"").replace(/"/g,"&quot;")+"\">"+
-    "<input type='date' class='d-start' value='"+(d.since||"")+"'>"+
-    "<button class='del' title='remove'>✕ remove</button>";
+    "<input class='d-stock' placeholder='Stock#' value=\""+attrq(d.stock)+"\">"+
+    "<input type='date' class='l-taken' title='date taken out as a demo' value='"+(d.taken||"")+"'>"+
+    "<input type='date' class='l-returned' title='date returned to sellable stock' value='"+(d.returned||"")+"'>"+
+    "<input class='d-note' placeholder='driver / reason' value=\""+attrq(d.note)+"\">"+
+    "<button class='del' title='remove'>✕</button>";
   row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistLoaners(); });
   row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistLoaners(); }));
   document.getElementById("loanerRows").appendChild(row);
   return row;
 }
-function readLoaners(){ let out=[]; rawLoaners().forEach(r=>{ if(r.stock) out.push({stock:r.stock,since:r.since}); }); return out; }
+function readLoaners(){ let out=[]; rawLoaners().forEach(r=>{ if(r.stock) out.push({stock:r.stock,taken:r.taken,returned:r.returned,note:r.note}); }); return out; }
 function persistLoaners(){ try{ localStorage.setItem("pm_loaners",JSON.stringify(rawLoaners())); }catch(e){} }
 function restoreLoaners(){ try{ JSON.parse(localStorage.getItem("pm_loaners")||"[]").forEach(addLoanerRow); }catch(e){} }
 

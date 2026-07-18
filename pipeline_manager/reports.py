@@ -126,9 +126,15 @@ def demo_dashboard(res: EngineResult) -> list:
                 except ValueError:
                     pass
                 break
+        note = ""
+        for prefix, txt in s.demo_notes.items():
+            if prefix and u.stock.startswith(prefix):
+                note = str(txt).strip()
+                break
         rows.append({
             "stock": u.stock, "vehicle": u.description, "msrp": u.msrp,
             "days_in_stock": days_in_stock, "days_as_demo": days_as_demo,
+            "note": note,
             "swap": "⚠ SWAP" if days_as_demo > s.swap_threshold else "OK",
         })
     rows.sort(key=lambda r: -r["days_as_demo"])
@@ -136,15 +142,23 @@ def demo_dashboard(res: EngineResult) -> list:
 
 
 def previous_loaners(res: EngineResult) -> list:
-    """Returned loaners now back in sellable inventory: their real days on the
-    retail market (from re-entry), not the inflated DMS days-in-stock."""
+    """Returned loaners now back in sellable inventory: real market days
+    (days-in-stock minus the hidden demo period), never wholesale-flagged."""
+    by_stock = {}
+    for e in res.settings.prev_loaners:
+        st = str(e.get("stock", "")).strip()
+        if st:
+            by_stock[st] = e
     rows = []
     for u in res.inventory:
         if u.is_dlr_inv and u.prev_loaner:
+            entry = next((v for k, v in by_stock.items() if u.stock.startswith(k)), {})
             rows.append({
                 "stock": u.stock, "vehicle": u.description,
                 "ext_int": f"{u.ext}/{u.interior}",
                 "dms_dis": int(u.dis), "retail_days": int(u.eff_dis),
+                "days_out": int(u.dis - u.eff_dis),
+                "note": str(entry.get("note", "")).strip(),
                 "key": u.key,
             })
     rows.sort(key=lambda r: -r["retail_days"])

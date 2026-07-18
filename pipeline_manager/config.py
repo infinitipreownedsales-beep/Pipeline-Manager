@@ -72,6 +72,8 @@ class Settings:
         "N15106": "2026-05-08", "N15118": "2026-04-29",
         "N15126": "2026-05-07", "N15145": "2026-06-07",
     })
+    # Free-text note per demo (driver / reason out), keyed by Stock# prefix.
+    demo_notes: dict = field(default_factory=dict)
     # Previous loaners: units that were demos and are now back in sellable
     # inventory. Loaners aren't published while in service, so their retail clock
     # starts when they reappear. Each {stock, since} makes the engine measure that

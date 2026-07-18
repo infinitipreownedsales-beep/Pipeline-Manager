@@ -33,14 +33,18 @@ function wholesaleVins(res){ let rows=[];
 function demoDashboard(res){ let s=res.settings, rows=[];
   res.demoUnits.forEach(u=>{ let dis=Math.round(u.dis), asDemo=dis;
     for(let pref in s.demo_starts){ if(pref&&u.stock.indexOf(pref)===0){ let d0=new Date(s.demo_starts[pref]); if(!isNaN(d0.getTime())) asDemo=Math.round((res.tb.today-d0)/86400000); break; } }
-    let retIn=Math.max(0,s.swap_threshold-asDemo);
-    rows.push({stock:u.stock,vehicle:u.desc,dis:dis,asDemo:asDemo,swap:asDemo>s.swap_threshold,retIn:retIn,ei:u.ext+"/"+u.int}); });
+    let retIn=Math.max(0,s.swap_threshold-asDemo), note="";
+    for(let pref in (s.demo_notes||{})){ if(pref&&u.stock.indexOf(pref)===0){ note=String(s.demo_notes[pref]||"").trim(); break; } }
+    rows.push({stock:u.stock,vehicle:u.desc,dis:dis,asDemo:asDemo,swap:asDemo>s.swap_threshold,retIn:retIn,ei:u.ext+"/"+u.int,note:note}); });
   rows.sort((a,b)=>b.asDemo-a.asDemo); return rows; }
-function previousLoaners(res){ let rows=[];
+function previousLoaners(res){ let rows=[], byStock={};
+  (res.settings.prev_loaners||[]).forEach(e=>{ let st=String(e.stock||"").trim(); if(st) byStock[st]=e; });
   (res.inv||[]).forEach(u=>{ if(u.isDlr&&u.prevLoaner){
-    let met=res.metrics[u.key], dts=met&&met.dts!==null?met.dts:null, retail=effDis(u);
-    let read = (dts!==null&&retail>Math.max(60,dts))?"aging — watch":"on the market";
-    rows.push({stock:u.stock,vehicle:u.desc,ei:u.ext+"/"+u.int,dms:Math.round(u.dis),retail:retail,read:read}); } });
+    let met=res.metrics[u.key], dts=met&&met.dts!==null?met.dts:null, retail=effDis(u), entry=null;
+    for(let k in byStock){ if(u.stock.indexOf(k)===0){ entry=byStock[k]; break; } }
+    let read=(dts!==null&&retail>Math.max(60,dts))?"aging — watch":"on the market";
+    rows.push({stock:u.stock,ei:u.ext+"/"+u.int,dms:Math.round(u.dis),retail:retail,
+      daysOut:Math.round(u.dis-retail),note:entry?String(entry.note||"").trim():"",read:read}); } });
   rows.sort((a,b)=>b.retail-a.retail); return rows; }
 function paceCheck(res){ let tb=res.tb, rows=[];
   MODELS.forEach(model=>{ let ms=res.sales.filter(s=>s.firstVin&&s.model===model);
@@ -185,8 +189,8 @@ function render(res){
 
   let dash=["<div class='dc-sub'>Current demos</div>"];
   if(rep.demo.length){
-    dash.push(tbl(["Stock","Vehicle","Days as demo","Returns in","Swap?"],["","","num","num",""],
-      rep.demo.map(r=>[esc(r.stock),esc(r.vehicle),r.asDemo,
+    dash.push(tbl(["Stock","Driver / reason","Vehicle","As demo","Returns","Swap?"],["","","","num","num",""],
+      rep.demo.map(r=>[esc(r.stock),{html:r.note?esc(r.note):"<span class='dim'>—</span>"},{html:"<span class='dim'>"+esc(r.vehicle)+"</span>"},r.asDemo+"d",
         {html:r.retIn>0?("~"+r.retIn+"d"):"<span class='swap'>now</span>"},
         {html:r.swap?"<span class='swap'>⚠ SWAP</span>":"<span style='color:var(--good)'>OK</span>"}])));
     if(s.anticipate_demo_returns) dash.push("<div class='foot'>✓ Ordering anticipates each of these coming back (held as slow, used stock), so you don't reorder a unit that's returning.</div>");
@@ -195,12 +199,13 @@ function render(res){
   let loaners=["<div class='dc-sub'>Previous loaners <span class='dc-note'>retail clock — hidden until they reappear</span></div>"];
   let pl=previousLoaners(res);
   if(pl.length){
-    loaners.push(tbl(["Stock","Ext/Int","DMS days","On market","Read"],["","","num","num",""],
-      pl.map(r=>[esc(r.stock),esc(r.ei),{html:"<span class='dim'>"+r.dms+"</span>"},
-        {html:"<b style='color:var(--teal)'>"+r.retail+"d</b>"},
-        {html:r.read==="aging — watch"?"<span class='swap'>"+r.read+"</span>":"<span style='color:var(--good)'>"+r.read+"</span>"}])));
-    loaners.push("<div class='foot'>Aged from re-entry, not the "+"inflated days-in-stock — a returned loaner isn't wrongly wholesaled the moment it reappears.</div>");
-  } else loaners.push("<div class='empty'>None flagged. Add returned loaners in ✎ Data so their aging runs from re-entry.</div>");
+    loaners.push(tbl(["Stock","Driver / reason","DMS","Demo out","On market"],["","","num","num","num"],
+      pl.map(r=>[esc(r.stock),{html:r.note?esc(r.note):"<span class='dim'>—</span>"},
+        {html:"<span class='dim'>"+r.dms+"d</span>"},
+        {html:"<span class='dim'>−"+r.daysOut+"d</span>"},
+        {html:"<b style='color:var(--teal)'>"+r.retail+"d</b>"}])));
+    loaners.push("<div class='foot'>On market = days-in-stock minus the demo period. Never wholesale-listed (miles), and not aged on the inflated days-in-stock.</div>");
+  } else loaners.push("<div class='empty'>None flagged. Add returned loaners in ✎ Data (taken + returned dates) so their real market time is right.</div>");
 
   H.push(sec(4,"Demo Center","execs' best picks · current demos · returned loaners — worked side by side"));
   H.push("<div class='democenter'><div class='dc-left'>"+board.join("")+"</div>"+

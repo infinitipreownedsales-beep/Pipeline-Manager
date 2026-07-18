@@ -140,13 +140,14 @@
   @media(max-width:640px){.traderow{grid-template-columns:1fr 1fr;}.traderow.thead{display:none}}
   /* newest at top; show ~10 rows, scroll for the rest */
   .scrollrows{max-height:352px;overflow-y:auto;padding-right:4px}
-  /* demo roster editor */
-  .demorow{display:grid;grid-template-columns:180px 160px 1fr;gap:8px;align-items:center;margin-bottom:6px}
-  .demorow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
-  .demorow input{width:100%}
-  .demorow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:13px;justify-self:start}
-  .demorow .del:hover{border-color:var(--warn);color:var(--warn)}
-  @media(max-width:640px){.demorow{grid-template-columns:1fr 1fr}.demorow.thead{display:none}}
+  /* demo roster + previous-loaner editors */
+  .demorow{display:grid;grid-template-columns:150px 140px 1fr auto;gap:8px;align-items:center;margin-bottom:6px}
+  .loanrow{display:grid;grid-template-columns:130px 130px 130px 1fr auto;gap:8px;align-items:center;margin-bottom:6px}
+  .demorow.thead span,.loanrow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .demorow input,.loanrow input{width:100%}
+  .demorow .del,.loanrow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:13px;justify-self:start;white-space:nowrap}
+  .demorow .del:hover,.loanrow .del:hover{border-color:var(--warn);color:var(--warn)}
+  @media(max-width:640px){.demorow,.loanrow{grid-template-columns:1fr 1fr}.demorow.thead,.loanrow.thead{display:none}}
   /* print selector menu */
   .printmenu{position:absolute;right:0;top:38px;z-index:40;background:var(--panel2);border:1px solid var(--line2);
     border-radius:12px;padding:12px;box-shadow:var(--shadow);width:250px}
@@ -240,13 +241,13 @@
     </div>
     <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
       <label class="top">Demo roster <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— units driven by execs, pulled from sellable inventory. Add a Stock# to pull one; ✕ (or Return) to swap it back in. Demo start sets exact aging &amp; return timing.</span></label>
-      <div id="demoHead" class="demorow thead"><span>Stock #</span><span>Demo start</span><span></span></div>
+      <div id="demoHead" class="demorow thead"><span>Stock #</span><span>Demo start</span><span>Driver / reason</span><span></span></div>
       <div id="demoRows"></div>
       <button class="ghost" id="addDemo" style="margin-top:8px">＋ Add demo</button>
     </div>
     <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
-      <label class="top">Previous loaners <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— units back from demo duty. Loaners are hidden from the public while in service, so the retail clock starts when they reappear. Set the date it came back and the engine ages it from there (real time to sell), not the inflated days-in-stock.</span></label>
-      <div id="loanerHead" class="demorow thead"><span>Stock #</span><span>Back in stock since</span><span></span></div>
+      <label class="top">Previous loaners <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— units back from demo duty. Enter when it was taken out and returned; the engine subtracts only that hidden demo stretch from days-in-stock, so the real market time (before + after the demo) stays true. Never wholesale-listed (miles).</span></label>
+      <div id="loanerHead" class="loanrow thead"><span>Stock #</span><span>Taken (out)</span><span>Returned (in)</span><span>Driver / reason</span><span></span></div>
       <div id="loanerRows"></div>
       <button class="ghost" id="addLoaner" style="margin-top:8px">＋ Add previous loaner</button>
     </div>
@@ -424,23 +425,27 @@ function computeSeasonality(sales, tb){
     let avg=rates.reduce((a,b)=>a+b,0)/12; out[model]={index:rates.map(r=>avg===0?1:r/avg),rate:rates}; });
   return out; }
 function isDemo(stock, prefixes){ return prefixes.some(p=>p&&stock.indexOf(p)===0); }
-function prevLoanerSince(u, prevLoaners){
-  for(let i=0;i<(prevLoaners||[]).length;i++){ let st=String(prevLoaners[i].stock||"").trim();
-    if(st && u.stock.indexOf(st)===0){ let d=new Date(prevLoaners[i].since); return isNaN(d.getTime())?null:d; } }
+function matchPrevLoaner(u, list){
+  for(let i=0;i<(list||[]).length;i++){ let st=String(list[i].stock||"").trim();
+    if(st && u.stock.indexOf(st)===0) return list[i]; }
   return null; }
+function loanerDaysOut(e){ let t=new Date(e.taken), r=new Date(e.returned);
+  if(isNaN(t.getTime())||isNaN(r.getTime())) return null; return Math.max(0,Math.round((r-t)/86400000)); }
 function effDis(u){ return (u.retailDis!==undefined&&u.retailDis!==null)?u.retailDis:u.dis; }
 function computePositions(inv, metrics, s, today){
   let P={};
   inv.forEach(u=>{ if(!u.key) return; let p=P[u.key]; if(!p){ p={onlot:0,inbound:0,arrivals:{},stalled:0,aged:[],whole:[],onlotUnits:[]}; P[u.key]=p; }
     let demo=isDemo(u.stock,s.demo_stocks);
     if(u.isDlr){ if(demo) return;
-      let since=prevLoanerSince(u,s.prev_loaners);
-      if(since){ u.prevLoaner=true; u.retailDis=Math.max(0,Math.round((today-since)/86400000)); }
+      let entry=matchPrevLoaner(u,s.prev_loaners);
+      if(entry){ u.prevLoaner=true; let dout=loanerDaysOut(entry);
+        if(dout!==null) u.retailDis=Math.max(0,u.dis-dout);
+        else if(entry.since){ let d=new Date(entry.since); if(!isNaN(d.getTime())) u.retailDis=Math.max(0,Math.round((today-d)/86400000)); } }
       let eff=effDis(u);
       p.onlot++; p.onlotUnits.push(u);
       if(eff>=s.stall_days) p.stalled++; if(eff>s.aged_days) p.aged.push(u);
       let met=metrics[u.key], dts=(met&&met.dts!==null)?met.dts:9999;
-      if(eff>Math.max(s.wholesale_min_age,dts)) p.whole.push(u);
+      if(eff>Math.max(s.wholesale_min_age,dts) && !u.prevLoaner) p.whole.push(u);
     } else { p.inbound++; if(u.arr) p.arrivals[u.arr]=(p.arrivals[u.arr]||0)+1; } });
   return P; }
 function projRate(m,dts,s){ let ph=m?m.prate/2:0, dr=(m&&m.r90>0&&dts&&dts>0)?30.4/dts:0; return Math.min(s.rate_cap,Math.max(ph,dr)); }
@@ -591,14 +596,18 @@ function wholesaleVins(res){ let rows=[];
 function demoDashboard(res){ let s=res.settings, rows=[];
   res.demoUnits.forEach(u=>{ let dis=Math.round(u.dis), asDemo=dis;
     for(let pref in s.demo_starts){ if(pref&&u.stock.indexOf(pref)===0){ let d0=new Date(s.demo_starts[pref]); if(!isNaN(d0.getTime())) asDemo=Math.round((res.tb.today-d0)/86400000); break; } }
-    let retIn=Math.max(0,s.swap_threshold-asDemo);
-    rows.push({stock:u.stock,vehicle:u.desc,dis:dis,asDemo:asDemo,swap:asDemo>s.swap_threshold,retIn:retIn,ei:u.ext+"/"+u.int}); });
+    let retIn=Math.max(0,s.swap_threshold-asDemo), note="";
+    for(let pref in (s.demo_notes||{})){ if(pref&&u.stock.indexOf(pref)===0){ note=String(s.demo_notes[pref]||"").trim(); break; } }
+    rows.push({stock:u.stock,vehicle:u.desc,dis:dis,asDemo:asDemo,swap:asDemo>s.swap_threshold,retIn:retIn,ei:u.ext+"/"+u.int,note:note}); });
   rows.sort((a,b)=>b.asDemo-a.asDemo); return rows; }
-function previousLoaners(res){ let rows=[];
+function previousLoaners(res){ let rows=[], byStock={};
+  (res.settings.prev_loaners||[]).forEach(e=>{ let st=String(e.stock||"").trim(); if(st) byStock[st]=e; });
   (res.inv||[]).forEach(u=>{ if(u.isDlr&&u.prevLoaner){
-    let met=res.metrics[u.key], dts=met&&met.dts!==null?met.dts:null, retail=effDis(u);
-    let read = (dts!==null&&retail>Math.max(60,dts))?"aging — watch":"on the market";
-    rows.push({stock:u.stock,vehicle:u.desc,ei:u.ext+"/"+u.int,dms:Math.round(u.dis),retail:retail,read:read}); } });
+    let met=res.metrics[u.key], dts=met&&met.dts!==null?met.dts:null, retail=effDis(u), entry=null;
+    for(let k in byStock){ if(u.stock.indexOf(k)===0){ entry=byStock[k]; break; } }
+    let read=(dts!==null&&retail>Math.max(60,dts))?"aging — watch":"on the market";
+    rows.push({stock:u.stock,ei:u.ext+"/"+u.int,dms:Math.round(u.dis),retail:retail,
+      daysOut:Math.round(u.dis-retail),note:entry?String(entry.note||"").trim():"",read:read}); } });
   rows.sort((a,b)=>b.retail-a.retail); return rows; }
 function paceCheck(res){ let tb=res.tb, rows=[];
   MODELS.forEach(model=>{ let ms=res.sales.filter(s=>s.firstVin&&s.model===model);
@@ -743,8 +752,8 @@ function render(res){
 
   let dash=["<div class='dc-sub'>Current demos</div>"];
   if(rep.demo.length){
-    dash.push(tbl(["Stock","Vehicle","Days as demo","Returns in","Swap?"],["","","num","num",""],
-      rep.demo.map(r=>[esc(r.stock),esc(r.vehicle),r.asDemo,
+    dash.push(tbl(["Stock","Driver / reason","Vehicle","As demo","Returns","Swap?"],["","","","num","num",""],
+      rep.demo.map(r=>[esc(r.stock),{html:r.note?esc(r.note):"<span class='dim'>—</span>"},{html:"<span class='dim'>"+esc(r.vehicle)+"</span>"},r.asDemo+"d",
         {html:r.retIn>0?("~"+r.retIn+"d"):"<span class='swap'>now</span>"},
         {html:r.swap?"<span class='swap'>⚠ SWAP</span>":"<span style='color:var(--good)'>OK</span>"}])));
     if(s.anticipate_demo_returns) dash.push("<div class='foot'>✓ Ordering anticipates each of these coming back (held as slow, used stock), so you don't reorder a unit that's returning.</div>");
@@ -753,12 +762,13 @@ function render(res){
   let loaners=["<div class='dc-sub'>Previous loaners <span class='dc-note'>retail clock — hidden until they reappear</span></div>"];
   let pl=previousLoaners(res);
   if(pl.length){
-    loaners.push(tbl(["Stock","Ext/Int","DMS days","On market","Read"],["","","num","num",""],
-      pl.map(r=>[esc(r.stock),esc(r.ei),{html:"<span class='dim'>"+r.dms+"</span>"},
-        {html:"<b style='color:var(--teal)'>"+r.retail+"d</b>"},
-        {html:r.read==="aging — watch"?"<span class='swap'>"+r.read+"</span>":"<span style='color:var(--good)'>"+r.read+"</span>"}])));
-    loaners.push("<div class='foot'>Aged from re-entry, not the "+"inflated days-in-stock — a returned loaner isn't wrongly wholesaled the moment it reappears.</div>");
-  } else loaners.push("<div class='empty'>None flagged. Add returned loaners in ✎ Data so their aging runs from re-entry.</div>");
+    loaners.push(tbl(["Stock","Driver / reason","DMS","Demo out","On market"],["","","num","num","num"],
+      pl.map(r=>[esc(r.stock),{html:r.note?esc(r.note):"<span class='dim'>—</span>"},
+        {html:"<span class='dim'>"+r.dms+"d</span>"},
+        {html:"<span class='dim'>−"+r.daysOut+"d</span>"},
+        {html:"<b style='color:var(--teal)'>"+r.retail+"d</b>"}])));
+    loaners.push("<div class='foot'>On market = days-in-stock minus the demo period. Never wholesale-listed (miles), and not aged on the inflated days-in-stock.</div>");
+  } else loaners.push("<div class='empty'>None flagged. Add returned loaners in ✎ Data (taken + returned dates) so their real market time is right.</div>");
 
   H.push(sec(4,"Demo Center","execs' best picks · current demos · returned loaners — worked side by side"));
   H.push("<div class='democenter'><div class='dc-left'>"+board.join("")+"</div>"+
@@ -830,7 +840,7 @@ function getSettings(){
       QX60:parseInt(document.getElementById("a60").value||0,10), QX65:parseInt(document.getElementById("a65").value||0,10)},
     cpo_windows:cw, min_cpo_window:1, order_lead_pad:parseFloat(document.getElementById("wpad").value||0), lead_halflife:6,
     suppress:DEFAULTS.suppress, demote:DEFAULTS.demote, overrides:DEFAULTS.overrides,
-    demo_stocks:readDemos().demo_stocks, demo_starts:readDemos().demo_starts, prev_loaners:readLoaners(), aged_memory:[],
+    demo_stocks:readDemos().demo_stocks, demo_starts:readDemos().demo_starts, demo_notes:readDemos().demo_notes, prev_loaners:readLoaners(), aged_memory:[],
     prove_bar:2, swap_threshold:90, rate_cap:5.0, paperweight_dts:90, wholesale_min_age:60, stall_days:120, aged_days:60,
     smooth_base:true, anticipate_demo_returns:true, trades:readTrades(),
     demo_pick_max_dts:45, demo_pick_min_total:2, demo_pick_min_r180:2, demo_picks_per_model:3, demo_vins_per_combo:2 }; }
@@ -890,28 +900,31 @@ function restoreTrades(){ try{ JSON.parse(localStorage.getItem("pm_trades")||"[]
   .forEach(r=>addTradeRow({date:r.date,label:r.combo,days:r.days})); }catch(e){} }
 
 /* ---- demo roster (editable) ---- */
+function attrq(v){ return String(v||"").replace(/"/g,"&quot;"); }
 function rawDemos(){
   let out=[];
   document.querySelectorAll("#demoRows .demorow").forEach(row=>{
-    out.push({stock:row.querySelector(".d-stock").value.trim(), start:row.querySelector(".d-start").value});
+    out.push({stock:row.querySelector(".d-stock").value.trim(), start:row.querySelector(".d-start").value,
+              note:row.querySelector(".d-note").value.trim()});
   });
   return out;
 }
 function addDemoRow(d){ d=d||{};
   let row=document.createElement("div"); row.className="demorow";
   row.innerHTML =
-    "<input class='d-stock' placeholder='Stock# (e.g. N15106)' value=\""+String(d.stock||"").replace(/"/g,"&quot;")+"\">"+
+    "<input class='d-stock' placeholder='Stock# (e.g. N15106)' value=\""+attrq(d.stock)+"\">"+
     "<input type='date' class='d-start' value='"+(d.start||"")+"'>"+
-    "<button class='del' title='swap back into sellable inventory'>↩ Return / remove</button>";
+    "<input class='d-note' placeholder='driver / reason' value=\""+attrq(d.note)+"\">"+
+    "<button class='del' title='swap back into sellable inventory'>↩ Return</button>";
   row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistDemos(); });
   row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistDemos(); }));
   document.getElementById("demoRows").appendChild(row);
   return row;
 }
 function readDemos(){
-  let stocks=[], starts={};
-  rawDemos().forEach(r=>{ if(!r.stock) return; stocks.push(r.stock); if(r.start) starts[r.stock]=r.start; });
-  return {demo_stocks:stocks, demo_starts:starts};
+  let stocks=[], starts={}, notes={};
+  rawDemos().forEach(r=>{ if(!r.stock) return; stocks.push(r.stock); if(r.start) starts[r.stock]=r.start; if(r.note) notes[r.stock]=r.note; });
+  return {demo_stocks:stocks, demo_starts:starts, demo_notes:notes};
 }
 function persistDemos(){ try{ localStorage.setItem("pm_demos",JSON.stringify(rawDemos())); }catch(e){} }
 function restoreDemos(){
@@ -923,23 +936,28 @@ function restoreDemos(){
 /* ---- previous loaners (editable) ---- */
 function rawLoaners(){
   let out=[];
-  document.querySelectorAll("#loanerRows .demorow").forEach(row=>{
-    out.push({stock:row.querySelector(".d-stock").value.trim(), since:row.querySelector(".d-start").value});
+  document.querySelectorAll("#loanerRows .loanrow").forEach(row=>{
+    out.push({stock:row.querySelector(".d-stock").value.trim(),
+              taken:row.querySelector(".l-taken").value,
+              returned:row.querySelector(".l-returned").value,
+              note:row.querySelector(".d-note").value.trim()});
   });
   return out;
 }
 function addLoanerRow(d){ d=d||{};
-  let row=document.createElement("div"); row.className="demorow";
+  let row=document.createElement("div"); row.className="loanrow";
   row.innerHTML =
-    "<input class='d-stock' placeholder='Stock# (e.g. N15106)' value=\""+String(d.stock||"").replace(/"/g,"&quot;")+"\">"+
-    "<input type='date' class='d-start' value='"+(d.since||"")+"'>"+
-    "<button class='del' title='remove'>✕ remove</button>";
+    "<input class='d-stock' placeholder='Stock#' value=\""+attrq(d.stock)+"\">"+
+    "<input type='date' class='l-taken' title='date taken out as a demo' value='"+(d.taken||"")+"'>"+
+    "<input type='date' class='l-returned' title='date returned to sellable stock' value='"+(d.returned||"")+"'>"+
+    "<input class='d-note' placeholder='driver / reason' value=\""+attrq(d.note)+"\">"+
+    "<button class='del' title='remove'>✕</button>";
   row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistLoaners(); });
   row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistLoaners(); }));
   document.getElementById("loanerRows").appendChild(row);
   return row;
 }
-function readLoaners(){ let out=[]; rawLoaners().forEach(r=>{ if(r.stock) out.push({stock:r.stock,since:r.since}); }); return out; }
+function readLoaners(){ let out=[]; rawLoaners().forEach(r=>{ if(r.stock) out.push({stock:r.stock,taken:r.taken,returned:r.returned,note:r.note}); }); return out; }
 function persistLoaners(){ try{ localStorage.setItem("pm_loaners",JSON.stringify(rawLoaners())); }catch(e){} }
 function restoreLoaners(){ try{ JSON.parse(localStorage.getItem("pm_loaners")||"[]").forEach(addLoanerRow); }catch(e){} }
 

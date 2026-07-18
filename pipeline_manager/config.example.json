@@ -27,9 +27,9 @@
     "N15145": "2026-06-07"
   },
 
-  "_prev_loaners_comment": "Units back from demo duty. 'since' is when they returned to sellable inventory (appeared publicly); the engine ages them from there, not the inflated days-in-stock, so a returned loaner isn't wrongly wholesaled the moment it reappears.",
+  "_prev_loaners_comment": "Units back from demo duty. 'taken'/'returned' are when it left and re-entered sellable stock; the engine subtracts only that hidden demo stretch from days-in-stock (real market time = DMS - days out) and never wholesale-lists it (miles). 'note' = driver/reason.",
   "prev_loaners": [
-    { "stock": "N15106", "since": "2026-07-15" }
+    { "stock": "N15106", "taken": "2026-05-08", "returned": "2026-07-15", "note": "BODYSHOP loaner" }
   ],
 
   "aged_memory": [
