@@ -226,11 +226,20 @@ function matchesDemote(e,model,ext,intr,key){ function ok(fv,act){ fv=String(fv|
   let has=["model","code","ext","int"].some(f=>String(e[f]||"").trim()), code=key.indexOf("|")>=0?key.split("|")[1]:"";
   return has && ok(e.model,model)&&ok(e.code,code)&&ok(e.ext,ext)&&ok(e.int,intr); }
 function suppressed(code,ext,intr,s){ if(code==="8461") return true;
-  return s.suppress.some(e=> String(e.code||"").trim().slice(0,4)===code && String(e.ext||"").trim()===ext && String(e.int||"").trim()===intr); }
+  return (s.suppress||[]).some(function(e){ var ec=digitsOnly(e.code).slice(0,4);
+    if(!ec||ec!==code) return false;
+    var ee=String(e.ext||"").trim(), ei=String(e.int||"").trim();
+    return (ee===""||ee===ext) && (ei===""||ei===intr); }); }
+function effectiveRoster(s){ if(!s.roster_add||!s.roster_add.length) return ROSTER;
+  var seen={}; ROSTER.forEach(function(c){ seen[c.model+"|"+c.code+"|"+c.ext+"|"+c.int]=1; });
+  var out=ROSTER.slice();
+  s.roster_add.forEach(function(c){ if(!c.model||!c.code) return; var k=c.model+"|"+c.code+"|"+c.ext+"|"+c.int;
+    if(!seen[k]){ seen[k]=1; out.push({model:c.model,code:String(c.code),ext:c.ext||"",int:c.int||"",trim:c.trim||""}); } });
+  return out; }
 function buyGrade(mom,mf,need){ if(need<=0) return ""; if(mom==="ACCEL"||mf>=0.85) return "💚 STRONG"; if(mf>=0.35) return "🔵 STEADY"; return "🟡 SPECULATIVE"; }
 function buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demoReturns){
   let lines=[];
-  ROSTER.forEach((c,i)=>{
+  effectiveRoster(s).forEach((c,i)=>{
     let model=c.model,code=c.code,ext=c.ext,intr=c.int,key=model+"|"+code+"|"+ext+"|"+intr;
     let metric=metrics[key]||null, pos=positions[key]||{onlot:0,inbound:0,arrivals:{},stalled:0,aged:[],whole:[]}, dts=metric?metric.dts:null;
     let bf=baseForOrder(key,metrics), base=bf[0], found=bf[1], mf=momFactor(metric,dts);
@@ -246,12 +255,12 @@ function buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demo
     let agedBrake=agedBrakes[key]||0, ov=overrideMap[key]||0;
     let need=blocked?0:Math.max(0,xround(orderTarget-proj-agedBrake,0))+ov;
     let rate=projRate(metric,dts,s), excess=Math.max(0,xround(pos.onlot+pos.inbound-3*rate-overstockTarget,0));
-    let wholeNow=sup?0:Math.min(excess,pos.whole.length), mom=metric?metric.momentum:"dormant";
+    let wholeNow=Math.min(excess,pos.whole.length), mom=metric?metric.momentum:"dormant";
     let plan=[]; for(let k=0;k<6;k++){ let cal=(s.order_month-1+k)%12;
       let tgt=Math.max(needFloor,xround(base*seas[model].index[cal],0)), arr=pos.arrivals[cal+1]||0;
       let ordk=blocked?0:Math.max(0,xround(tgt-chain[k],0)); if(k===0&&!blocked) ordk+=ov;
       plan.push({month:cal+1,tgt:tgt,arr:arr,ord:ordk}); }
-    let prio=priority(dts,mom,need,proj,orderTarget,seasArr,effDem,i);
+    let prio=sup?-1:priority(dts,mom,need,proj,orderTarget,seasArr,effDem,i);
     lines.push({model:model,code:code,ext:ext,int:intr,trim:c.trim,key:key,dts:dts,mom:mom,onlot:pos.onlot,inbound:pos.inbound,
       proj:proj,base:base,found:found,mf:mf,orderTarget:orderTarget,overstockTarget:overstockTarget,need:need,
       suppressed:sup,demoted:dem,effDem:effDem,priority:prio,wholeNow:wholeNow,buyGrade:buyGrade(mom,mf,need),plan:plan,pos:pos,seasArr:seasArr,
@@ -266,12 +275,12 @@ function findOrphans(sales,roster){ let rk={}; roster.forEach(c=>rk[c.model+"|"+
   let seen={}; sales.forEach(s=>{ if(s.firstVin&&s.key&&!rk[s.key]) seen[s.key]=(seen[s.key]||0)+1; });
   return Object.keys(seen).map(k=>({key:k,sales:seen[k]})).sort((a,b)=>b.sales-a.sales); }
 function runEngine(inv,sales,s,today){
-  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,ROSTER,s), seas=computeSeasonality(sales,tb), positions=computePositions(inv,metrics,s,today);
+  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,effectiveRoster(s),s), seas=computeSeasonality(sales,tb), positions=computePositions(inv,metrics,s,today);
   let agedBrakes={}; (s.aged_memory||[]).forEach(e=>{ if(e.active===undefined||e.active===1||e.active===true||e.active==="1") agedBrakes[e.key]=(agedBrakes[e.key]||0)+1; });
   let overrideMap={}; s.overrides.forEach(e=>{ overrideMap[e.key]=(overrideMap[e.key]||0)+parseInt(e.qty||0,10); });
   let windows=resolveWindows(inv,today,s);
   let demoUnits=inv.filter(u=>u.isDlr&&isDemo(u.stock,s.demo_stocks));
   let demoReturns=computeDemoReturns(demoUnits,s,today);
   let lines=buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demoReturns);
-  let orphans=findOrphans(sales,ROSTER);
+  let orphans=findOrphans(sales,effectiveRoster(s));
   return {settings:s,tb:tb,metrics:metrics,seas:seas,positions:positions,lines:lines,demoUnits:demoUnits,sales:sales,orphans:orphans,inv:inv,invCount:inv.length,salesCount:sales.length,windows:windows}; }

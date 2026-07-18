@@ -145,9 +145,18 @@
   .loanrow{display:grid;grid-template-columns:130px 130px 130px 1fr auto;gap:8px;align-items:center;margin-bottom:6px}
   .demorow.thead span,.loanrow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
   .demorow input,.loanrow input{width:100%}
-  .demorow .del,.loanrow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:13px;justify-self:start;white-space:nowrap}
-  .demorow .del:hover,.loanrow .del:hover{border-color:var(--warn);color:var(--warn)}
+  .demorow .del,.loanrow .del,.suprow .del,.addrow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:13px;justify-self:start;white-space:nowrap}
+  .demorow .del:hover,.loanrow .del:hover,.suprow .del:hover,.addrow .del:hover{border-color:var(--warn);color:var(--warn)}
   @media(max-width:640px){.demorow,.loanrow{grid-template-columns:1fr 1fr}.demorow.thead,.loanrow.thead{display:none}}
+  /* roster control */
+  .rcgrid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:820px){.rcgrid{grid-template-columns:1fr}}
+  .suprow{display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:center;margin-bottom:6px}
+  .addrow{display:grid;grid-template-columns:1.1fr 1fr .8fr .8fr auto;gap:8px;align-items:center;margin-bottom:6px}
+  .suprow.thead span,.addrow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .suprow input,.addrow input,.addrow select{width:100%}
+  .suprow .del,.addrow .del{padding:6px 10px}
+  @media(max-width:640px){.suprow,.addrow{grid-template-columns:1fr 1fr}.suprow.thead,.addrow.thead{display:none}}
   /* print selector menu */
   .printmenu{position:absolute;right:0;top:38px;z-index:40;background:var(--panel2);border:1px solid var(--line2);
     border-radius:12px;padding:12px;box-shadow:var(--shadow);width:250px}
@@ -250,6 +259,23 @@
       <div id="loanerHead" class="loanrow thead"><span>Stock #</span><span>Taken (out)</span><span>Returned (in)</span><span>Driver / reason</span><span></span></div>
       <div id="loanerRows"></div>
       <button class="ghost" id="addLoaner" style="margin-top:8px">＋ Add previous loaner</button>
+    </div>
+    <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
+      <label class="top">Roster control <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— suppress combos that are no longer orderable (a bare Code drops the whole trim, e.g. 8411; leave Ext/Int blank for all). Suppressed combos never appear as an order suggestion, but their on-lot / incoming units still count and still show in overstock. Add combos the engine doesn't carry.</span></label>
+      <div class="rcgrid">
+        <div>
+          <div class="dc-sub" style="margin:2px 0 6px">🚫 Discontinued (suppress)</div>
+          <div id="supHead" class="suprow thead"><span>Code (4-dig)</span><span>Ext (blank=any)</span><span>Int (blank=any)</span><span></span></div>
+          <div id="supRows"></div>
+          <button class="ghost" id="addSup" style="margin-top:8px">＋ Suppress a combo</button>
+        </div>
+        <div>
+          <div class="dc-sub" style="margin:2px 0 6px">➕ Add orderable combo</div>
+          <div id="addHead" class="addrow thead"><span>Model</span><span>Code</span><span>Ext</span><span>Int</span><span></span></div>
+          <div id="addRows"></div>
+          <button class="ghost" id="addAdd" style="margin-top:8px">＋ Add combo</button>
+        </div>
+      </div>
     </div>
     <div style="margin-top:11px;display:flex;gap:9px;align-items:center;flex-wrap:wrap">
       <button class="primary" id="run">Compute order ▶</button>
@@ -511,11 +537,20 @@ function matchesDemote(e,model,ext,intr,key){ function ok(fv,act){ fv=String(fv|
   let has=["model","code","ext","int"].some(f=>String(e[f]||"").trim()), code=key.indexOf("|")>=0?key.split("|")[1]:"";
   return has && ok(e.model,model)&&ok(e.code,code)&&ok(e.ext,ext)&&ok(e.int,intr); }
 function suppressed(code,ext,intr,s){ if(code==="8461") return true;
-  return s.suppress.some(e=> String(e.code||"").trim().slice(0,4)===code && String(e.ext||"").trim()===ext && String(e.int||"").trim()===intr); }
+  return (s.suppress||[]).some(function(e){ var ec=digitsOnly(e.code).slice(0,4);
+    if(!ec||ec!==code) return false;
+    var ee=String(e.ext||"").trim(), ei=String(e.int||"").trim();
+    return (ee===""||ee===ext) && (ei===""||ei===intr); }); }
+function effectiveRoster(s){ if(!s.roster_add||!s.roster_add.length) return ROSTER;
+  var seen={}; ROSTER.forEach(function(c){ seen[c.model+"|"+c.code+"|"+c.ext+"|"+c.int]=1; });
+  var out=ROSTER.slice();
+  s.roster_add.forEach(function(c){ if(!c.model||!c.code) return; var k=c.model+"|"+c.code+"|"+c.ext+"|"+c.int;
+    if(!seen[k]){ seen[k]=1; out.push({model:c.model,code:String(c.code),ext:c.ext||"",int:c.int||"",trim:c.trim||""}); } });
+  return out; }
 function buyGrade(mom,mf,need){ if(need<=0) return ""; if(mom==="ACCEL"||mf>=0.85) return "💚 STRONG"; if(mf>=0.35) return "🔵 STEADY"; return "🟡 SPECULATIVE"; }
 function buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demoReturns){
   let lines=[];
-  ROSTER.forEach((c,i)=>{
+  effectiveRoster(s).forEach((c,i)=>{
     let model=c.model,code=c.code,ext=c.ext,intr=c.int,key=model+"|"+code+"|"+ext+"|"+intr;
     let metric=metrics[key]||null, pos=positions[key]||{onlot:0,inbound:0,arrivals:{},stalled:0,aged:[],whole:[]}, dts=metric?metric.dts:null;
     let bf=baseForOrder(key,metrics), base=bf[0], found=bf[1], mf=momFactor(metric,dts);
@@ -531,12 +566,12 @@ function buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demo
     let agedBrake=agedBrakes[key]||0, ov=overrideMap[key]||0;
     let need=blocked?0:Math.max(0,xround(orderTarget-proj-agedBrake,0))+ov;
     let rate=projRate(metric,dts,s), excess=Math.max(0,xround(pos.onlot+pos.inbound-3*rate-overstockTarget,0));
-    let wholeNow=sup?0:Math.min(excess,pos.whole.length), mom=metric?metric.momentum:"dormant";
+    let wholeNow=Math.min(excess,pos.whole.length), mom=metric?metric.momentum:"dormant";
     let plan=[]; for(let k=0;k<6;k++){ let cal=(s.order_month-1+k)%12;
       let tgt=Math.max(needFloor,xround(base*seas[model].index[cal],0)), arr=pos.arrivals[cal+1]||0;
       let ordk=blocked?0:Math.max(0,xround(tgt-chain[k],0)); if(k===0&&!blocked) ordk+=ov;
       plan.push({month:cal+1,tgt:tgt,arr:arr,ord:ordk}); }
-    let prio=priority(dts,mom,need,proj,orderTarget,seasArr,effDem,i);
+    let prio=sup?-1:priority(dts,mom,need,proj,orderTarget,seasArr,effDem,i);
     lines.push({model:model,code:code,ext:ext,int:intr,trim:c.trim,key:key,dts:dts,mom:mom,onlot:pos.onlot,inbound:pos.inbound,
       proj:proj,base:base,found:found,mf:mf,orderTarget:orderTarget,overstockTarget:overstockTarget,need:need,
       suppressed:sup,demoted:dem,effDem:effDem,priority:prio,wholeNow:wholeNow,buyGrade:buyGrade(mom,mf,need),plan:plan,pos:pos,seasArr:seasArr,
@@ -551,14 +586,14 @@ function findOrphans(sales,roster){ let rk={}; roster.forEach(c=>rk[c.model+"|"+
   let seen={}; sales.forEach(s=>{ if(s.firstVin&&s.key&&!rk[s.key]) seen[s.key]=(seen[s.key]||0)+1; });
   return Object.keys(seen).map(k=>({key:k,sales:seen[k]})).sort((a,b)=>b.sales-a.sales); }
 function runEngine(inv,sales,s,today){
-  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,ROSTER,s), seas=computeSeasonality(sales,tb), positions=computePositions(inv,metrics,s,today);
+  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,effectiveRoster(s),s), seas=computeSeasonality(sales,tb), positions=computePositions(inv,metrics,s,today);
   let agedBrakes={}; (s.aged_memory||[]).forEach(e=>{ if(e.active===undefined||e.active===1||e.active===true||e.active==="1") agedBrakes[e.key]=(agedBrakes[e.key]||0)+1; });
   let overrideMap={}; s.overrides.forEach(e=>{ overrideMap[e.key]=(overrideMap[e.key]||0)+parseInt(e.qty||0,10); });
   let windows=resolveWindows(inv,today,s);
   let demoUnits=inv.filter(u=>u.isDlr&&isDemo(u.stock,s.demo_stocks));
   let demoReturns=computeDemoReturns(demoUnits,s,today);
   let lines=buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demoReturns);
-  let orphans=findOrphans(sales,ROSTER);
+  let orphans=findOrphans(sales,effectiveRoster(s));
   return {settings:s,tb:tb,metrics:metrics,seas:seas,positions:positions,lines:lines,demoUnits:demoUnits,sales:sales,orphans:orphans,inv:inv,invCount:inv.length,salesCount:sales.length,windows:windows}; }
 
 /* ===================== reports + rendering ===================== */
@@ -586,7 +621,7 @@ function orderPriority(res){ let s=res.settings,out={};
       buildUnits:rows.filter(r=>r.tier==="build").reduce((a,r)=>a+r.line.need,0)}; });
   return out; }
 function overstock(res){ let rows=[];
-  res.lines.forEach(l=>{ let over=l.onlot-l.overstockTarget; if(l.suppressed||over<1) return;
+  res.lines.forEach(l=>{ let over=l.onlot-l.overstockTarget; if(over<1) return;
     rows.push({model:l.model,trim:l.trim,ext:l.ext,int:l.int,onhand:l.onlot,target:l.overstockTarget,over:over,wholeNow:l.wholeNow,inbound:l.inbound,dts:l.dts,aged:l.pos.aged.length}); });
   rows.sort((a,b)=>(MODELS.indexOf(a.model)-MODELS.indexOf(b.model))||(b.over-a.over)||(b.wholeNow-a.wholeNow)); return rows; }
 function wholesaleVins(res){ let rows=[];
@@ -839,7 +874,7 @@ function getSettings(){
     allocations:{QX80:parseInt(document.getElementById("a80").value||0,10),
       QX60:parseInt(document.getElementById("a60").value||0,10), QX65:parseInt(document.getElementById("a65").value||0,10)},
     cpo_windows:cw, min_cpo_window:1, order_lead_pad:parseFloat(document.getElementById("wpad").value||0), lead_halflife:6,
-    suppress:DEFAULTS.suppress, demote:DEFAULTS.demote, overrides:DEFAULTS.overrides,
+    suppress:readSuppress(), roster_add:readAdds(), demote:DEFAULTS.demote, overrides:DEFAULTS.overrides,
     demo_stocks:readDemos().demo_stocks, demo_starts:readDemos().demo_starts, demo_notes:readDemos().demo_notes, prev_loaners:readLoaners(), aged_memory:[],
     prove_bar:2, swap_threshold:90, rate_cap:5.0, paperweight_dts:90, wholesale_min_age:60, stall_days:120, aged_days:60,
     smooth_base:true, anticipate_demo_returns:true, trades:readTrades(),
@@ -961,6 +996,46 @@ function readLoaners(){ let out=[]; rawLoaners().forEach(r=>{ if(r.stock) out.pu
 function persistLoaners(){ try{ localStorage.setItem("pm_loaners",JSON.stringify(rawLoaners())); }catch(e){} }
 function restoreLoaners(){ try{ JSON.parse(localStorage.getItem("pm_loaners")||"[]").forEach(addLoanerRow); }catch(e){} }
 
+/* ---- roster control: suppress (discontinued) + add ---- */
+function rawSuppress(){ let out=[];
+  document.querySelectorAll("#supRows .suprow").forEach(row=>{
+    out.push({code:row.querySelector(".s-code").value.trim(), ext:row.querySelector(".s-ext").value.trim(), int:row.querySelector(".s-int").value.trim()}); });
+  return out; }
+function addSupRow(d){ d=d||{};
+  let row=document.createElement("div"); row.className="suprow";
+  row.innerHTML =
+    "<input class='s-code' placeholder='e.g. 8411' value=\""+attrq(d.code)+"\">"+
+    "<input class='s-ext' placeholder='any' value=\""+attrq(d.ext)+"\">"+
+    "<input class='s-int' placeholder='any' value=\""+attrq(d.int)+"\">"+
+    "<button class='del' title='remove'>✕</button>";
+  row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistSuppress(); });
+  row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistSuppress(); }));
+  document.getElementById("supRows").appendChild(row); return row; }
+function readSuppress(){ let out=[]; rawSuppress().forEach(r=>{ if(r.code) out.push({code:r.code,ext:r.ext,int:r.int}); }); return out; }
+function persistSuppress(){ try{ localStorage.setItem("pm_suppress",JSON.stringify(rawSuppress())); }catch(e){} }
+function restoreSuppress(){ try{ JSON.parse(localStorage.getItem("pm_suppress")||"[]").forEach(addSupRow); }catch(e){} }
+
+function rawAdds(){ let out=[];
+  document.querySelectorAll("#addRows .addrow").forEach(row=>{
+    out.push({model:row.querySelector(".a-model").value, code:row.querySelector(".a-code").value.trim(),
+              ext:row.querySelector(".a-ext").value.trim(), int:row.querySelector(".a-int").value.trim()}); });
+  return out; }
+function addAddRow(d){ d=d||{};
+  let row=document.createElement("div"); row.className="addrow";
+  let opts=["QX80","QX60","QX65"].map(m=>"<option "+((d.model||"QX80")===m?"selected":"")+">"+m+"</option>").join("");
+  row.innerHTML =
+    "<select class='a-model'>"+opts+"</select>"+
+    "<input class='a-code' placeholder='4-dig' value=\""+attrq(d.code)+"\">"+
+    "<input class='a-ext' placeholder='ext' value=\""+attrq(d.ext)+"\">"+
+    "<input class='a-int' placeholder='int' value=\""+attrq(d.int)+"\">"+
+    "<button class='del' title='remove'>✕</button>";
+  row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistAdds(); });
+  row.querySelectorAll("input,select").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistAdds(); }));
+  document.getElementById("addRows").appendChild(row); return row; }
+function readAdds(){ let out=[]; rawAdds().forEach(r=>{ if(r.code&&r.ext&&r.int) out.push({model:r.model,code:r.code,ext:r.ext,int:r.int}); }); return out; }
+function persistAdds(){ try{ localStorage.setItem("pm_adds",JSON.stringify(rawAdds())); }catch(e){} }
+function restoreAdds(){ try{ JSON.parse(localStorage.getItem("pm_adds")||"[]").forEach(addAddRow); }catch(e){} }
+
 /* ---- print selector ---- */
 function openPrintMenu(){
   let opts=document.getElementById("printopts"), dashes=window.__dashes||[], sel={};
@@ -1043,6 +1118,10 @@ window.addEventListener("DOMContentLoaded",function(){
   restoreDemos();
   document.getElementById("addLoaner").addEventListener("click",function(){ addLoanerRow(); persistLoaners(); });
   restoreLoaners();
+  document.getElementById("addSup").addEventListener("click",function(){ addSupRow(); persistSuppress(); });
+  restoreSuppress();
+  document.getElementById("addAdd").addEventListener("click",function(){ addAddRow(); persistAdds(); });
+  restoreAdds();
   // print selector
   document.getElementById("printbtn").addEventListener("click",function(e){ e.stopPropagation();
     let m=document.getElementById("printmenu"); if(m.style.display==="block") m.style.display="none"; else openPrintMenu(); });

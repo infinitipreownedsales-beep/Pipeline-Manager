@@ -659,13 +659,18 @@ def _matches(entry: dict, model, ext, interior, key) -> bool:
 
 
 def _suppressed(key, model, code, ext, interior, s: Settings) -> bool:
+    """Discontinued / no-longer-orderable. Ext and Int are optional: a bare code
+    (e.g. 8411) suppresses every combo of that code; add ext/int to target one."""
+    from .keys import digits_only
     if code == "8461":  # hardcoded discontinued (brief §17)
         return True
     for e in s.suppress:
-        # suppress entries are code|ext|int
-        if str(e.get("code", "")).strip()[:4] == code and \
-           str(e.get("ext", "")).strip() == ext and \
-           str(e.get("int", "")).strip() == interior:
+        ec = digits_only(e.get("code", ""))[:4]
+        if not ec or ec != code:
+            continue
+        ee = str(e.get("ext", "")).strip()
+        ei = str(e.get("int", "")).strip()
+        if (ee == "" or ee == ext) and (ei == "" or ei == interior):
             return True
     return False
 
@@ -717,7 +722,7 @@ def _buy_grade(momentum, mom_factor, need) -> str:
 def build_lines(s, metrics, seas, positions, aged_brakes, override_map, windows,
                 demo_returns) -> list:
     lines: list[OrderLine] = []
-    for i, cfg in enumerate(s.roster):
+    for i, cfg in enumerate(s.effective_roster()):
         model, code, ext, interior = cfg["model"], cfg["code"], cfg["ext"], cfg["int"]
         key = f"{model}|{code}|{ext}|{interior}"
         metric = metrics.get(key)
@@ -751,14 +756,18 @@ def build_lines(s, metrics, seas, positions, aged_brakes, override_map, windows,
         else:
             need = max(0, xround(order_target - proj_at_arr - aged_brake)) + override_qty
 
-        # Overstock / wholesale-now (brief §15).
+        # Overstock / wholesale-now (brief §15). Discontinued combos still
+        # surface here — you can't reorder them, but you can move existing stock.
         rate = _proj_rate(metric, dts, s)
         excess = max(0, xround(pos.onlot + pos.inbound_total - 3 * rate - overstock_target))
-        wholesale_now = 0 if suppressed else min(excess, len(pos.wholesale_eligible))
+        wholesale_now = min(excess, len(pos.wholesale_eligible))
 
         momentum = metric.momentum if metric else "dormant"
-        prio = _priority(key, model, dts, momentum,
-                         need, proj_at_arr, order_target, seas_arr, eff_demote, i)
+        # A discontinued combo is never an order suggestion (build or option) —
+        # you cannot build it — even though its on-lot/inbound units still count.
+        prio = -1 if suppressed else _priority(
+            key, model, dts, momentum, need, proj_at_arr, order_target,
+            seas_arr, eff_demote, i)
 
         # Six-month rolling plan: per month, the seasonal target (always shown,
         # even for demoted combos), what arrives, and what to order. A manual
@@ -804,7 +813,7 @@ def _find_orphans(sales, inventory, roster) -> list:
 def run(inventory, sales, settings: Settings, today: _dt.date | None = None) -> EngineResult:
     today = today or _dt.date.today()
     tb = compute_time_base(sales, today)
-    metrics = compute_metrics(sales, tb, settings, settings.roster)
+    metrics = compute_metrics(sales, tb, settings, settings.effective_roster())
     seas = compute_seasonality(sales, tb)
     positions = compute_positions(inventory, metrics, settings, today)
 
@@ -822,7 +831,7 @@ def run(inventory, sales, settings: Settings, today: _dt.date | None = None) -> 
     demo_returns = compute_demo_returns(demo_units, settings, today)
     lines = build_lines(settings, metrics, seas, positions, aged_brakes,
                         override_map, windows, demo_returns)
-    orphans = _find_orphans(sales, inventory, settings.roster)
+    orphans = _find_orphans(sales, inventory, settings.effective_roster())
 
     return EngineResult(
         settings=settings, time=tb, metrics=metrics, seasonality=seas,

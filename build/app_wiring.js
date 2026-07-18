@@ -10,7 +10,7 @@ function getSettings(){
     allocations:{QX80:parseInt(document.getElementById("a80").value||0,10),
       QX60:parseInt(document.getElementById("a60").value||0,10), QX65:parseInt(document.getElementById("a65").value||0,10)},
     cpo_windows:cw, min_cpo_window:1, order_lead_pad:parseFloat(document.getElementById("wpad").value||0), lead_halflife:6,
-    suppress:DEFAULTS.suppress, demote:DEFAULTS.demote, overrides:DEFAULTS.overrides,
+    suppress:readSuppress(), roster_add:readAdds(), demote:DEFAULTS.demote, overrides:DEFAULTS.overrides,
     demo_stocks:readDemos().demo_stocks, demo_starts:readDemos().demo_starts, demo_notes:readDemos().demo_notes, prev_loaners:readLoaners(), aged_memory:[],
     prove_bar:2, swap_threshold:90, rate_cap:5.0, paperweight_dts:90, wholesale_min_age:60, stall_days:120, aged_days:60,
     smooth_base:true, anticipate_demo_returns:true, trades:readTrades(),
@@ -132,6 +132,46 @@ function readLoaners(){ let out=[]; rawLoaners().forEach(r=>{ if(r.stock) out.pu
 function persistLoaners(){ try{ localStorage.setItem("pm_loaners",JSON.stringify(rawLoaners())); }catch(e){} }
 function restoreLoaners(){ try{ JSON.parse(localStorage.getItem("pm_loaners")||"[]").forEach(addLoanerRow); }catch(e){} }
 
+/* ---- roster control: suppress (discontinued) + add ---- */
+function rawSuppress(){ let out=[];
+  document.querySelectorAll("#supRows .suprow").forEach(row=>{
+    out.push({code:row.querySelector(".s-code").value.trim(), ext:row.querySelector(".s-ext").value.trim(), int:row.querySelector(".s-int").value.trim()}); });
+  return out; }
+function addSupRow(d){ d=d||{};
+  let row=document.createElement("div"); row.className="suprow";
+  row.innerHTML =
+    "<input class='s-code' placeholder='e.g. 8411' value=\""+attrq(d.code)+"\">"+
+    "<input class='s-ext' placeholder='any' value=\""+attrq(d.ext)+"\">"+
+    "<input class='s-int' placeholder='any' value=\""+attrq(d.int)+"\">"+
+    "<button class='del' title='remove'>✕</button>";
+  row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistSuppress(); });
+  row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistSuppress(); }));
+  document.getElementById("supRows").appendChild(row); return row; }
+function readSuppress(){ let out=[]; rawSuppress().forEach(r=>{ if(r.code) out.push({code:r.code,ext:r.ext,int:r.int}); }); return out; }
+function persistSuppress(){ try{ localStorage.setItem("pm_suppress",JSON.stringify(rawSuppress())); }catch(e){} }
+function restoreSuppress(){ try{ JSON.parse(localStorage.getItem("pm_suppress")||"[]").forEach(addSupRow); }catch(e){} }
+
+function rawAdds(){ let out=[];
+  document.querySelectorAll("#addRows .addrow").forEach(row=>{
+    out.push({model:row.querySelector(".a-model").value, code:row.querySelector(".a-code").value.trim(),
+              ext:row.querySelector(".a-ext").value.trim(), int:row.querySelector(".a-int").value.trim()}); });
+  return out; }
+function addAddRow(d){ d=d||{};
+  let row=document.createElement("div"); row.className="addrow";
+  let opts=["QX80","QX60","QX65"].map(m=>"<option "+((d.model||"QX80")===m?"selected":"")+">"+m+"</option>").join("");
+  row.innerHTML =
+    "<select class='a-model'>"+opts+"</select>"+
+    "<input class='a-code' placeholder='4-dig' value=\""+attrq(d.code)+"\">"+
+    "<input class='a-ext' placeholder='ext' value=\""+attrq(d.ext)+"\">"+
+    "<input class='a-int' placeholder='int' value=\""+attrq(d.int)+"\">"+
+    "<button class='del' title='remove'>✕</button>";
+  row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistAdds(); });
+  row.querySelectorAll("input,select").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistAdds(); }));
+  document.getElementById("addRows").appendChild(row); return row; }
+function readAdds(){ let out=[]; rawAdds().forEach(r=>{ if(r.code&&r.ext&&r.int) out.push({model:r.model,code:r.code,ext:r.ext,int:r.int}); }); return out; }
+function persistAdds(){ try{ localStorage.setItem("pm_adds",JSON.stringify(rawAdds())); }catch(e){} }
+function restoreAdds(){ try{ JSON.parse(localStorage.getItem("pm_adds")||"[]").forEach(addAddRow); }catch(e){} }
+
 /* ---- print selector ---- */
 function openPrintMenu(){
   let opts=document.getElementById("printopts"), dashes=window.__dashes||[], sel={};
@@ -214,6 +254,10 @@ window.addEventListener("DOMContentLoaded",function(){
   restoreDemos();
   document.getElementById("addLoaner").addEventListener("click",function(){ addLoanerRow(); persistLoaners(); });
   restoreLoaners();
+  document.getElementById("addSup").addEventListener("click",function(){ addSupRow(); persistSuppress(); });
+  restoreSuppress();
+  document.getElementById("addAdd").addEventListener("click",function(){ addAddRow(); persistAdds(); });
+  restoreAdds();
   // print selector
   document.getElementById("printbtn").addEventListener("click",function(e){ e.stopPropagation();
     let m=document.getElementById("printmenu"); if(m.style.display==="block") m.style.display="none"; else openPrintMenu(); });

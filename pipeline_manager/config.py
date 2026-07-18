@@ -56,9 +56,13 @@ class Settings:
     lead_halflife: float = 6.0           # months; recency half-life for trend-weighting
 
     # --- control lists ----------------------------------------------------- #
-    # Suppress forces NEED=0 immediately (discontinued combos). 8461 is always
-    # suppressed in code; add {code,ext,int} entries here for more.
+    # Suppress = discontinued / no-longer-orderable. Each entry {code[,ext,int]}
+    # drops that combo from every order suggestion (a bare code drops the whole
+    # trim); its on-lot/inbound units still count and still surface in overstock.
     suppress: list = field(default_factory=list)
+    # Extra orderable combos the built-in roster doesn't carry (new trims/colors).
+    # Each {model, code, ext, int[, trim]} is added to the orderable universe.
+    roster_add: list = field(default_factory=list)
     # Demote keeps a slow combo visible but ranks it last and zeroes NEED
     # unless it proves through (R90 >= prove_bar). Blank field = wildcard.
     demote: list = field(default_factory=lambda: [{"model": "", "ext": "", "int": "N"}])
@@ -135,3 +139,19 @@ class Settings:
     def window_setting(self, model: str):
         """Raw window setting for a model: the string "auto" or a number."""
         return self.cpo_windows.get(model, "auto")
+
+    def effective_roster(self) -> list:
+        """The built-in roster plus any user roster_add combos (deduped)."""
+        seen = {f"{c['model']}|{c['code']}|{c['ext']}|{c['int']}" for c in self.roster}
+        out = list(self.roster)
+        for c in self.roster_add:
+            try:
+                k = f"{c['model']}|{c['code']}|{c['ext']}|{c['int']}"
+            except (KeyError, TypeError):
+                continue
+            if k not in seen and c.get("model") and c.get("code"):
+                seen.add(k)
+                out.append({"model": c["model"], "code": str(c["code"]),
+                            "ext": c.get("ext", ""), "int": c.get("int", ""),
+                            "trim": c.get("trim", "")})
+        return out

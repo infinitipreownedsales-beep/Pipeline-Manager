@@ -302,6 +302,26 @@ def test_previous_loaner_subtracts_demo_period_and_never_wholesales():
     assert not wholesaled(r)                              # previous demos never wholesale
 
 
+def test_suppress_by_code_removes_from_order_priority_only():
+    """A bare code suppresses the whole trim from order suggestions (NEED 0, not
+    on the priority list), but its on-lot/inbound units still count and it still
+    shows in overstock. And roster_add extends the orderable universe."""
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    r = engine.run(inv, sales, Settings(order_month=9, mode="CPO",
+                   suppress=[{"code": "8411"}]), today=_AS_OF)
+    eight411 = [l for l in r.lines if l.code == "8411"]
+    assert eight411
+    assert all(l.need == 0 and l.priority == -1 for l in eight411)   # never suggested
+    assert sum(l.onlot for l in eight411) > 0                        # inventory still counts
+    over_keys = {(x["ext"], x["int"]) for x in reports.overstock(r)}
+    assert any((l.ext, l.interior) in over_keys for l in eight411)   # still in overstock
+    # roster_add makes a new combo orderable
+    r2 = engine.run(inv, sales, Settings(roster_add=[
+        {"model": "QX60", "code": "8411", "ext": "ZZZ", "int": "Q"}]), today=_AS_OF)
+    assert any(l.key == "QX60|8411|ZZZ|Q" for l in r2.lines)
+
+
 def test_recompute_is_deterministic():
     a = reports.build_all(_run())
     b = reports.build_all(_run())

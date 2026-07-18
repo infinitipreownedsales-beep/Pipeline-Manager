@@ -58,7 +58,7 @@ def overstock(res: EngineResult) -> list:
     for l in res.lines:
         pos = res.positions.get(l.key)
         over = l.onlot - l.overstock_target
-        if l.suppressed or over < 1:
+        if over < 1:
             continue
         aged = len(pos.aged_units) if pos else 0
         rows.append({

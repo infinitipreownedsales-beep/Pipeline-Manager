@@ -9,8 +9,15 @@
   "cpo_windows": { "QX80": 3, "QX60": 2, "QX65": 2 },
   "min_cpo_window": 1,
 
+  "_suppress_comment": "Discontinued / no-longer-orderable combos. A bare code drops the whole trim; add ext/int to target one. Suppressed combos never appear as an order suggestion, but their on-lot/incoming units still count and still show in overstock.",
   "suppress": [
-    { "code": "8461", "ext": "", "int": "" }
+    { "code": "8411" },
+    { "code": "8431", "ext": "KCF", "int": "C" }
+  ],
+
+  "_roster_add_comment": "Extra orderable combos the built-in roster doesn't carry (new trims/colors). Uses the DMS 4-digit code + ext + int.",
+  "roster_add": [
+    { "model": "QX60", "code": "8441", "ext": "QBE", "int": "K", "trim": "SPORT" }
   ],
   "demote": [
     { "model": "", "ext": "", "int": "N" }

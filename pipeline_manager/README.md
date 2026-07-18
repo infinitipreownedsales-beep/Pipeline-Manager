@@ -85,7 +85,10 @@ returned; the engine subtracts only that hidden demo stretch from days-in-stock,
 so real market time = DMS − days-out stays true — and demos and previous loaners
 are never wholesale-listed because of the miles), a **print selector** (🖨 Print
 → choose which dashboards go on the page), and **collapsible sections** (click
-any header to fold it away).
+any header to fold it away). **Roster control** lets you suppress discontinued
+combos (a bare code drops the whole trim — they leave the order suggestions but
+their stock still counts and still shows in overstock) and add orderable combos
+the engine doesn't carry.
 
 Plus an **Executive Demo Board** — per model, the best *proven fast-moving*
 combos to put executives into (short days-to-sell so a demo still resells

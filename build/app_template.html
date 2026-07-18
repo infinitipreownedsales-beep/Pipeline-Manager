@@ -145,9 +145,18 @@
   .loanrow{display:grid;grid-template-columns:130px 130px 130px 1fr auto;gap:8px;align-items:center;margin-bottom:6px}
   .demorow.thead span,.loanrow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
   .demorow input,.loanrow input{width:100%}
-  .demorow .del,.loanrow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:13px;justify-self:start;white-space:nowrap}
-  .demorow .del:hover,.loanrow .del:hover{border-color:var(--warn);color:var(--warn)}
+  .demorow .del,.loanrow .del,.suprow .del,.addrow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:13px;justify-self:start;white-space:nowrap}
+  .demorow .del:hover,.loanrow .del:hover,.suprow .del:hover,.addrow .del:hover{border-color:var(--warn);color:var(--warn)}
   @media(max-width:640px){.demorow,.loanrow{grid-template-columns:1fr 1fr}.demorow.thead,.loanrow.thead{display:none}}
+  /* roster control */
+  .rcgrid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:820px){.rcgrid{grid-template-columns:1fr}}
+  .suprow{display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:center;margin-bottom:6px}
+  .addrow{display:grid;grid-template-columns:1.1fr 1fr .8fr .8fr auto;gap:8px;align-items:center;margin-bottom:6px}
+  .suprow.thead span,.addrow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .suprow input,.addrow input,.addrow select{width:100%}
+  .suprow .del,.addrow .del{padding:6px 10px}
+  @media(max-width:640px){.suprow,.addrow{grid-template-columns:1fr 1fr}.suprow.thead,.addrow.thead{display:none}}
   /* print selector menu */
   .printmenu{position:absolute;right:0;top:38px;z-index:40;background:var(--panel2);border:1px solid var(--line2);
     border-radius:12px;padding:12px;box-shadow:var(--shadow);width:250px}
@@ -250,6 +259,23 @@
       <div id="loanerHead" class="loanrow thead"><span>Stock #</span><span>Taken (out)</span><span>Returned (in)</span><span>Driver / reason</span><span></span></div>
       <div id="loanerRows"></div>
       <button class="ghost" id="addLoaner" style="margin-top:8px">＋ Add previous loaner</button>
+    </div>
+    <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
+      <label class="top">Roster control <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— suppress combos that are no longer orderable (a bare Code drops the whole trim, e.g. 8411; leave Ext/Int blank for all). Suppressed combos never appear as an order suggestion, but their on-lot / incoming units still count and still show in overstock. Add combos the engine doesn't carry.</span></label>
+      <div class="rcgrid">
+        <div>
+          <div class="dc-sub" style="margin:2px 0 6px">🚫 Discontinued (suppress)</div>
+          <div id="supHead" class="suprow thead"><span>Code (4-dig)</span><span>Ext (blank=any)</span><span>Int (blank=any)</span><span></span></div>
+          <div id="supRows"></div>
+          <button class="ghost" id="addSup" style="margin-top:8px">＋ Suppress a combo</button>
+        </div>
+        <div>
+          <div class="dc-sub" style="margin:2px 0 6px">➕ Add orderable combo</div>
+          <div id="addHead" class="addrow thead"><span>Model</span><span>Code</span><span>Ext</span><span>Int</span><span></span></div>
+          <div id="addRows"></div>
+          <button class="ghost" id="addAdd" style="margin-top:8px">＋ Add combo</button>
+        </div>
+      </div>
     </div>
     <div style="margin-top:11px;display:flex;gap:9px;align-items:center;flex-wrap:wrap">
       <button class="primary" id="run">Compute order ▶</button>

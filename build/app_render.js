@@ -23,7 +23,7 @@ function orderPriority(res){ let s=res.settings,out={};
       buildUnits:rows.filter(r=>r.tier==="build").reduce((a,r)=>a+r.line.need,0)}; });
   return out; }
 function overstock(res){ let rows=[];
-  res.lines.forEach(l=>{ let over=l.onlot-l.overstockTarget; if(l.suppressed||over<1) return;
+  res.lines.forEach(l=>{ let over=l.onlot-l.overstockTarget; if(over<1) return;
     rows.push({model:l.model,trim:l.trim,ext:l.ext,int:l.int,onhand:l.onlot,target:l.overstockTarget,over:over,wholeNow:l.wholeNow,inbound:l.inbound,dts:l.dts,aged:l.pos.aged.length}); });
   rows.sort((a,b)=>(MODELS.indexOf(a.model)-MODELS.indexOf(b.model))||(b.over-a.over)||(b.wholeNow-a.wholeNow)); return rows; }
 function wholesaleVins(res){ let rows=[];
