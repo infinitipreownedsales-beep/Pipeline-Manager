@@ -67,6 +67,7 @@ class InvPosition:
     stalled: int = 0                     # on-lot units aged past stall_days
     aged_units: list = field(default_factory=list)  # on-lot units past aged_days
     wholesale_eligible: list = field(default_factory=list)  # aged past MAX(min,DTS)
+    onlot_units: list = field(default_factory=list)  # DLR-INV, non-demo unit objects
 
 
 @dataclass
@@ -282,6 +283,7 @@ def compute_positions(inventory: list[InventoryUnit], metrics: dict, s: Settings
             if demo:
                 continue  # demo units are out of all sell/order/overstock math
             pos.onlot += 1
+            pos.onlot_units.append(u)
             if u.dis >= s.stall_days:
                 pos.stalled += 1
             if u.dis > s.aged_days:

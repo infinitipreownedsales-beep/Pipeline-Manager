@@ -43,6 +43,23 @@ function paceCheck(res){ let tb=res.tb, rows=[];
     let total=ms.length, mapped=ms.filter(s=>res.metrics[s.key]).length, cov=total?mapped/total:1;
     rows.push({model:model,a90:a90,a60:a60,p60:p60,vr:vr,read:read,cov:cov}); });
   return rows; }
+function demoScore(m){ return Math.max(0,(50-m.dts)/50)*40 + Math.min(m.prate,5)*8 + Math.min(m.total,12)*2 + m.r90*4 + ({ACCEL:10,steady:6,"on cadence":3}[m.momentum]||0); }
+function demoReason(m){ let b=[Math.round(m.dts)+"-day resale", m.total+" sold lifetime"];
+  if(m.r90) b.push(m.r90+" in 90d"); else if(m.r180) b.push(m.r180+" in 180d");
+  if(m.momentum==="ACCEL"||m.momentum==="cooling") b.push(m.momentum); return b.join(" · "); }
+function executiveDemos(res){ let s=res.settings, out={};
+  MODELS.forEach(model=>{ let picks=[];
+    res.lines.forEach(l=>{ if(l.model!==model||l.suppressed) return; let m=res.metrics[l.key];
+      if(!m||m.dts===null) return;
+      if(!(m.dts<=s.demo_pick_max_dts && m.total>=s.demo_pick_min_total && m.r180>=s.demo_pick_min_r180 && m.momentum!=="dormant")) return;
+      let pos=res.positions[l.key], fresh=pos?pos.onlotUnits.slice().sort((a,b)=>a.dis-b.dis):[];
+      let units=fresh.slice(0,s.demo_vins_per_combo).map(u=>{ let vin=u.serial||u.stock;
+        return {stock:u.stock||"—",vin6:vin?vin.slice(-6):"—",dis:Math.round(u.dis),msrp:u.msrp,year:u.myear||u.my||"",ei:u.ext+"/"+u.int}; });
+      let score=demoScore(m)+(units.length?6:0);
+      picks.push({trim:l.trim,ext:l.ext,int:l.int,key:l.key,dts:m.dts,total:m.total,r90:m.r90,r180:m.r180,momentum:m.momentum,
+        score:score,reason:demoReason(m),onlot:l.onlot,backup:Math.max(0,l.onlot-1),units:units,inStock:units.length>0}); });
+    picks.sort((a,b)=>b.score-a.score); out[model]=picks.slice(0,s.demo_picks_per_model); });
+  return out; }
 function fleetTargets(res){ let out={}; MODELS.forEach(model=>{ let r=res.seas[model].rate;
     out[model]=[]; for(let m=0;m<12;m++) out[model].push(xround(r[m]+r[(m+1)%12],0)); }); return out; }
 
@@ -136,15 +153,43 @@ function render(res){
       "<table class='heat'><thead><tr><th></th>"+MONTHS.map(m=>"<th style='font-size:9px;color:#6b7891;text-align:center'>"+m+"</th>").join("")+"</tr></thead><tbody><tr>"+cells+"</tr></tbody></table>"+
       "<div style='text-align:center'>"+sparkline(res.seas[model].index)+"<div class='foot' style='margin:0;text-align:center'>seasonality · avg = 1.0</div></div></div>"); });
 
-  // 4. OVERSTOCK
-  H.push(sec(4,"Overstock / Wholesale","over-target metal — order slower; wholesale only what won't sell"));
+  // 4. EXECUTIVE DEMO BOARD
+  H.push(sec(4,"Executive Demo Board","best proven fast-movers to put your execs in — resells quickly even with miles"));
+  H.push("<div class='foot' style='margin:-4px 2px 10px'>Only combos with a short days-to-sell and repeat demand (never one-offs) qualify, so a demo still turns fast once released. VIN listed where in stock; otherwise flagged to order.</div>");
+  let ed=executiveDemos(res);
+  H.push("<div class='demogrid'>");
+  MODELS.forEach(model=>{ let picks=ed[model];
+    H.push("<div class='democol'><div class='demohd'>"+model+"</div>");
+    if(!picks.length){ H.push("<div class='empty'>No proven fast combo yet.</div>"); }
+    picks.forEach((p,i)=>{
+      let medal=["①","②","③","④","⑤"][i]||("#"+(i+1));
+      H.push("<div class='democard"+(i===0?" top":"")+"'>"+
+        "<div class='demorank'>"+medal+"</div>"+
+        "<div class='demotrim'>"+esc(p.trim)+" <span class='demoei'>"+esc(p.ext)+"/"+esc(p.int)+"</span></div>"+
+        "<div class='demowhy'>"+dtsCell(p.dts)+" <span class='pill "+("m-"+(p.momentum==="on cadence"?"oncadence":p.momentum.replace(/\s/g,"")))+"'>"+esc(p.momentum)+"</span> <span class='demometa'>"+p.total+" sold · "+(p.r90||p.r180)+" recent</span></div>");
+      if(p.units.length){ p.units.forEach(u=>{
+        H.push("<div class='demovin'><span class='vintag'>VIN …"+esc(u.vin6)+"</span>"+
+          "<span class='demound'>"+esc(u.year)+" "+esc(u.ei)+" · "+u.dis+"d"+(u.msrp?" · $"+Math.round(u.msrp).toLocaleString():"")+"</span></div>"); });
+        if(p.backup>0) H.push("<div class='demoback'>"+p.backup+" more in stock as backup</div>");
+        else H.push("<div class='demoback warn'>last one on lot — reorder before pulling</div>");
+      } else {
+        H.push("<div class='demovin order'>none in stock — order / allocate one</div>");
+      }
+      H.push("</div>");
+    });
+    H.push("</div>");
+  });
+  H.push("</div>");
+
+  // 5. OVERSTOCK
+  H.push(sec(5,"Overstock / Wholesale","over-target metal — order slower; wholesale only what won't sell"));
   if(rep.over.length) H.push(tbl(["Model","Trim","Ext","Int","On hand","60-day tgt","Over","Wholesale now","Inbound","DTS","Aged"],
     ["","","","","num","num","num","num need","num","num","num"],
     rep.over.map(r=>[r.model,esc(r.trim),r.ext,r.int,r.onhand,r.target,{html:"<b>"+r.over+"</b>"},{html:r.wholeNow>0?r.wholeNow:"<span class='dim'>0</span>"},{html:"<span class='dim'>"+r.inbound+"</span>"},{html:dtsCell(r.dts)},r.aged])));
   else H.push("<div class='empty'>Nothing over target.</div>");
 
   // 5. WHOLESALE VIN SHEET
-  H.push(sec(5,"Wholesale Now — VIN sheet","aged, over-target, non-demo · print & send to other dealers"));
+  H.push(sec(6,"Wholesale Now — VIN sheet","aged, over-target, non-demo · print & send to other dealers"));
   if(rep.vins.length){ H.push("<div id='print-vin'><h2>WHOLESALE VIN SHEET — "+tb.today.toISOString().slice(0,10)+"</h2></div>");
     H.push(tbl(["#","Stock #","VIN (last 6)","Year","Model","Trim","Ext/Int","Days in stock"],["num","","","","","","","num"],
       rep.vins.map(r=>[r.num,esc(r.stock),esc(r.vin6),r.year,r.model,esc(r.trim),esc(r.ei),r.dis])));
@@ -152,13 +197,13 @@ function render(res){
   else H.push("<div class='empty'>No units past their selling window.</div>");
 
   // 6. DEMO
-  H.push(sec(6,"Demo Dashboard","units pulled from sellable inventory"));
+  H.push(sec(7,"Demo Dashboard","units currently pulled from sellable inventory"));
   if(rep.demo.length) H.push(tbl(["Stock","Vehicle","Days in stock","Days as demo","Swap?"],["","","num","num",""],
     rep.demo.map(r=>[esc(r.stock),esc(r.vehicle),r.dis,r.asDemo,{html:r.swap?"<span class='swap'>⚠ SWAP</span>":"<span style='color:var(--good)'>OK</span>"}])));
   else H.push("<div class='empty'>No demos listed.</div>");
 
   // 7. PACE
-  H.push(sec(7,"Pace Check","actual vs predicted 60-day pace"));
+  H.push(sec(8,"Pace Check","actual vs predicted 60-day pace"));
   H.push(tbl(["Model","Actual 90d","Actual 60d pace","Predicted 60d pace","Variance","Read","Coverage"],
     ["","num","num","num","num","",""],
     rep.pace.map(r=>{ let rl={AHEAD:"AHEAD of forecast",ON:"ON TARGET",BEHIND:"BEHIND forecast"}[r.read], ic={AHEAD:"▲",ON:"●",BEHIND:"▼"}[r.read];

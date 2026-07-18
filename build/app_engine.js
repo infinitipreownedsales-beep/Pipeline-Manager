@@ -131,9 +131,9 @@ function computeSeasonality(sales, tb){
 function isDemo(stock, prefixes){ return prefixes.some(p=>p&&stock.indexOf(p)===0); }
 function computePositions(inv, metrics, s){
   let P={};
-  inv.forEach(u=>{ if(!u.key) return; let p=P[u.key]; if(!p){ p={onlot:0,inbound:0,arrivals:{},stalled:0,aged:[],whole:[]}; P[u.key]=p; }
+  inv.forEach(u=>{ if(!u.key) return; let p=P[u.key]; if(!p){ p={onlot:0,inbound:0,arrivals:{},stalled:0,aged:[],whole:[],onlotUnits:[]}; P[u.key]=p; }
     let demo=isDemo(u.stock,s.demo_stocks);
-    if(u.isDlr){ if(demo) return; p.onlot++;
+    if(u.isDlr){ if(demo) return; p.onlot++; p.onlotUnits.push(u);
       if(u.dis>=s.stall_days) p.stalled++; if(u.dis>s.aged_days) p.aged.push(u);
       let met=metrics[u.key], dts=(met&&met.dts!==null)?met.dts:9999;
       if(u.dis>Math.max(s.wholesale_min_age,dts)) p.whole.push(u);

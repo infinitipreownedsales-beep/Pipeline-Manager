@@ -136,6 +136,81 @@ def demo_dashboard(res: EngineResult) -> list:
 
 
 # --------------------------------------------------------------------------- #
+# Executive Demo Board — best combos to put execs into (VIN-led)
+# --------------------------------------------------------------------------- #
+def _demo_score(m) -> float:
+    """Rank a config's fitness as an executive demo.
+
+    A demo accumulates miles and age, so it must resell fast once released:
+    days-to-sell dominates. Proven repeat depth (lifetime + recent) and current
+    heat keep whims and one-offs off the board.
+    """
+    dts_component = max(0.0, (50 - m.dts) / 50.0) * 40      # faster resale = better
+    pace = min(m.prate, 5.0) * 8                             # recent 60-day pace
+    depth = min(m.total, 12) * 2                             # proven demand pool
+    heat = m.r90 * 4                                         # live demand
+    mom = {"ACCEL": 10, "steady": 6, "on cadence": 3}.get(m.momentum, 0)
+    return dts_component + pace + depth + heat + mom
+
+
+def _demo_reason(m) -> str:
+    bits = [f"{int(m.dts)}-day resale", f"{m.total} sold lifetime"]
+    if m.r90:
+        bits.append(f"{m.r90} in 90d")
+    elif m.r180:
+        bits.append(f"{m.r180} in 180d")
+    if m.momentum in ("ACCEL", "cooling"):
+        bits.append(m.momentum)
+    return " · ".join(bits)
+
+
+def executive_demos(res: EngineResult) -> dict:
+    """Per model, the best proven fast-moving combos to demo, with in-stock VINs.
+
+    A combo qualifies only if it is a genuine fast, repeat seller (DTS under the
+    demo cap, enough lifetime sales, live 180-day demand) — never a one-off. Each
+    surfaced combo offers up to N fresh, in-stock, non-demo VINs to assign; a
+    strong combo with nothing on the lot is flagged to order for a demo.
+    """
+    s = res.settings
+    out = {}
+    for model in MODELS:
+        picks = []
+        for l in res.lines:
+            if l.model != model or l.suppressed:
+                continue
+            m = res.metrics.get(l.key)
+            if not m or m.dts is None:
+                continue
+            if not (m.dts <= s.demo_pick_max_dts and m.total >= s.demo_pick_min_total
+                    and m.r180 >= s.demo_pick_min_r180 and m.momentum != "dormant"):
+                continue
+            pos = res.positions.get(l.key)
+            fresh = sorted(pos.onlot_units, key=lambda u: u.dis) if pos else []
+            units = [{
+                "stock": u.stock or "—",
+                "vin": (u.serial or u.stock),
+                "vin_last6": (u.serial or u.stock)[-6:] if (u.serial or u.stock) else "—",
+                "dis": int(u.dis), "msrp": u.msrp,
+                "year": u.model_year or u.my or "", "ext_int": f"{u.ext}/{u.interior}",
+            } for u in fresh[:s.demo_vins_per_combo]]
+            # A small nudge so an in-stock combo edges out an equally-fast combo
+            # you'd have to order — without letting it outrank a clearly faster one.
+            score = _demo_score(m) + (6 if units else 0)
+            picks.append({
+                "trim": l.trim, "ext": l.ext, "int": l.interior, "key": l.key,
+                "dts": m.dts, "total": m.total, "r90": m.r90, "r180": m.r180,
+                "momentum": m.momentum, "score": round(score, 1),
+                "reason": _demo_reason(m), "onlot": l.onlot,
+                "backup": max(0, l.onlot - 1),  # units left if you pull one for a demo
+                "units": units, "in_stock": bool(units),
+            })
+        picks.sort(key=lambda p: -p["score"])
+        out[model] = picks[:s.demo_picks_per_model]
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # 5. Pace Check
 # --------------------------------------------------------------------------- #
 def pace_check(res: EngineResult) -> list:
@@ -228,6 +303,7 @@ def build_all(res: EngineResult) -> dict:
         "overstock": overstock(res),
         "wholesale_vins": wholesale_vins(res),
         "demo_dashboard": demo_dashboard(res),
+        "executive_demos": executive_demos(res),
         "pace_check": pace_check(res),
         "fleet_targets": fleet_targets(res),
         "data_health": data_health(res),

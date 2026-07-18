@@ -191,6 +191,30 @@ def test_projection_credits_residual_inbound():
     assert line.inbound == 2 and line.proj_at_arrival > 0
 
 
+def test_executive_demo_board():
+    """Demo picks must be proven fast movers (never one-off whims), ranked, with
+    a VIN where one is in stock, across all three models."""
+    res = _run()
+    ed = reports.executive_demos(res)
+    s = res.settings
+    for model in ("QX80", "QX60", "QX65"):
+        picks = ed[model]
+        assert picks, f"{model} should surface at least one demo pick"
+        assert len(picks) <= s.demo_picks_per_model
+        scores = [p["score"] for p in picks]
+        assert scores == sorted(scores, reverse=True)          # ranked
+        for p in picks:
+            assert p["dts"] <= s.demo_pick_max_dts              # fast resale
+            assert p["total"] >= s.demo_pick_min_total          # not a one-off
+            assert p["r180"] >= s.demo_pick_min_r180            # repeat demand
+            assert p["momentum"] != "dormant"
+            if p["in_stock"]:
+                assert p["units"] and p["units"][0]["vin"]      # VIN-led
+    # A single-lifetime-sale config (a "whim") must never appear.
+    all_keys = {p["key"] for m in ed.values() for p in m}
+    assert "QX65|8511|GAT|G" not in all_keys   # 1 sold, DTS 10 — fast but unproven
+
+
 def test_recompute_is_deterministic():
     a = reports.build_all(_run())
     b = reports.build_all(_run())

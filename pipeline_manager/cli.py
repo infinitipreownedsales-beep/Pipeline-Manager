@@ -103,6 +103,26 @@ def render_text(res, rep) -> str:
         aligns=["<", "<", "<", "<", "<", "<", "<", ">"]) if rows
         else "  (no units past their selling window)")
 
+    # Executive Demo Board
+    out.append("\n" + "#" * W)
+    out.append("EXECUTIVE DEMO BOARD — best proven fast-movers to put execs in (VIN-led)")
+    out.append("#" * W)
+    for model in ("QX80", "QX60", "QX65"):
+        picks = rep["executive_demos"][model]
+        out.append(f"\n{model}")
+        if not picks:
+            out.append("  (no proven fast combo yet)")
+        for i, p in enumerate(picks, 1):
+            out.append(f"  {i}. {p['trim']} {p['ext']}/{p['int']}  "
+                       f"[{p['reason']}]  on-lot {p['onlot']}")
+            if p["units"]:
+                for u in p["units"]:
+                    msrp = f"  ${int(u['msrp']):,}" if u["msrp"] else ""
+                    out.append(f"       VIN …{u['vin_last6']}  {u['year']} "
+                               f"{u['ext_int']}  {u['dis']}d{msrp}")
+            else:
+                out.append("       (none in stock — order / allocate one)")
+
     # 4. Demo Dashboard
     out.append("\n" + "#" * W)
     out.append("4) DEMO DASHBOARD — units pulled from sellable inventory")

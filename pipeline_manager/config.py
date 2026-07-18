@@ -78,6 +78,12 @@ class Settings:
     # --- tunable thresholds (brief §7/§14/§15/§17) ------------------------- #
     prove_bar: int = 2                   # R90 needed for a demoted combo to surface
     swap_threshold: int = 90             # demo age (days) before flagging a swap
+    # --- executive demo board (which combos to put execs into) ------------- #
+    demo_pick_max_dts: int = 45          # a demo gains miles: it must still turn fast
+    demo_pick_min_total: int = 2         # at least two sales ever — never a one-off
+    demo_pick_min_r180: int = 2          # two sales in 180d = repeat demand, not a whim
+    demo_picks_per_model: int = 3        # top combos to surface per model
+    demo_vins_per_combo: int = 2         # candidate VINs to offer per combo
     rate_cap: float = 5.0                # no config sells more than ~5/month
     paperweight_dts: int = 90            # DTS veto: >90 days can never earn a base
     wholesale_min_age: int = 60          # a unit must be older than MAX(this, DTS)
