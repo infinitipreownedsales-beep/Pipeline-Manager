@@ -35,20 +35,39 @@ function addTradeRow(t){ t=t||{};
   document.getElementById("tradeRows").appendChild(row);
   return row;
 }
-function readTrades(){
+function resolveCombo(label){
+  label=(label||"").trim();
+  if(COMBO_MAP[label]) return COMBO_MAP[label];
+  let p=label.split("|");                              // "QX80|8361|XKJ|A"
+  if(p.length===4) return {model:p[0].trim(),code:p[1].trim(),ext:p[2].trim(),int:p[3].trim()};
+  let m=label.match(/^([A-Za-z0-9]+).*?([A-Za-z0-9]{2,3})\/([A-Za-z0-9])\s*\((\d{4,5})\)/); // "MODEL … EXT/INT (CODE)"
+  if(m) return {model:m[1],code:m[4].slice(0,4),ext:m[2].toUpperCase(),int:m[3].toUpperCase()};
+  return null;
+}
+// Raw row contents — everything the user typed, saved verbatim so nothing is
+// ever lost until they delete the row (survives pipeline changes and reloads).
+function rawTrades(){
   let out=[];
   document.querySelectorAll("#tradeRows .traderow").forEach(row=>{
-    let label=row.querySelector(".t-combo").value.trim();
-    let days=row.querySelector(".t-days").value;
-    let date=row.querySelector(".t-date").value;
-    let c=COMBO_MAP[label];
-    if(!c || days==="") return;                       // need a valid combo + days
-    out.push({date:date,model:c.model,code:c.code,ext:c.ext,int:c.int,days:parseFloat(days),label:label});
+    out.push({date:row.querySelector(".t-date").value,
+              combo:row.querySelector(".t-combo").value,
+              days:row.querySelector(".t-days").value});
   });
   return out;
 }
-function persistTrades(){ try{ localStorage.setItem("pm_trades",JSON.stringify(readTrades())); }catch(e){} }
-function restoreTrades(){ try{ let t=JSON.parse(localStorage.getItem("pm_trades")||"[]"); t.forEach(addTradeRow); }catch(e){} }
+// Parsed, gradeable trades for the engine (rows that resolve to a combo + days).
+function readTrades(){
+  let out=[];
+  rawTrades().forEach(r=>{
+    let c=resolveCombo(r.combo);
+    if(!c || r.days==="") return;
+    out.push({date:r.date,model:c.model,code:c.code,ext:c.ext,int:c.int,days:parseFloat(r.days),label:r.combo});
+  });
+  return out;
+}
+function persistTrades(){ try{ localStorage.setItem("pm_trades",JSON.stringify(rawTrades())); }catch(e){} }
+function restoreTrades(){ try{ JSON.parse(localStorage.getItem("pm_trades")||"[]")
+  .forEach(r=>addTradeRow({date:r.date,label:r.combo,days:r.days})); }catch(e){} }
 
 function markFilled(){
   document.getElementById("inv").classList.toggle("ok", document.getElementById("inv").value.trim()!=="");
@@ -96,7 +115,7 @@ window.addEventListener("DOMContentLoaded",function(){
   document.getElementById("inv").addEventListener("input",markFilled);
   document.getElementById("sales").addEventListener("input",markFilled);
   buildComboList();
-  document.getElementById("addTrade").addEventListener("click",function(){ addTradeRow(); });
+  document.getElementById("addTrade").addEventListener("click",function(){ addTradeRow(); persistTrades(); });
   restoreTrades();
   function toggleManual(){ document.getElementById("manualwins").style.display =
     document.getElementById("wmode").value==="manual" ? "flex" : "none"; }
