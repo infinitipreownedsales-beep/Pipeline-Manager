@@ -785,10 +785,12 @@ function compute(scroll){
     HAS_RUN=true;
     try{ localStorage.setItem("pm_inv",invText); localStorage.setItem("pm_sales",salesText);
       localStorage.setItem("pm_set",JSON.stringify(readControls())); }catch(e){}
-    document.getElementById("datacard").style.display="none";
+    // NOTE: never collapse the data panel here — live recomputes (from editing a
+    // trade or a control) must leave the panel exactly as the user left it.
     if(scroll) document.getElementById("results").scrollIntoView({behavior:"smooth",block:"start"});
   }catch(e){ st.className="foot err"; st.textContent="Problem: "+e.message; }
 }
+function computeAndCollapse(){ compute(true); if(HAS_RUN) document.getElementById("datacard").style.display="none"; }
 function liveRecompute(){ if(HAS_RUN) compute(false); }
 function readControls(){ return {m:document.getElementById("ordmonth").value,mode:document.getElementById("mode").value,
   a80:document.getElementById("a80").value,a60:document.getElementById("a60").value,a65:document.getElementById("a65").value,
@@ -800,12 +802,12 @@ window.addEventListener("DOMContentLoaded",function(){
   let sel=document.getElementById("ordmonth"), now=new Date().getMonth();
   MONTHS.forEach((m,i)=>{ let o=document.createElement("option"); o.value=i+1; o.textContent=m; if(i===now) o.selected=true; sel.appendChild(o); });
   document.getElementById("today").value=new Date().toISOString().slice(0,10);
-  document.getElementById("run").addEventListener("click",function(){ compute(true); });
+  document.getElementById("run").addEventListener("click",computeAndCollapse);
   document.getElementById("editdata").addEventListener("click",function(){ let d=document.getElementById("datacard");
     d.style.display=d.style.display==="none"?"block":"none"; if(d.style.display!=="none") d.scrollIntoView({behavior:"smooth"}); });
   document.getElementById("loadsample").addEventListener("click",function(){
     document.getElementById("inv").value=SAMPLE.inv; document.getElementById("sales").value=SAMPLE.sales;
-    document.getElementById("ordmonth").value=9; markFilled(); compute(true); });
+    document.getElementById("ordmonth").value=9; markFilled(); computeAndCollapse(); });
   document.getElementById("clearall").addEventListener("click",function(){
     document.getElementById("inv").value=""; document.getElementById("sales").value=""; markFilled();
     document.getElementById("results").innerHTML=""; HAS_RUN=false;
@@ -829,7 +831,7 @@ window.addEventListener("DOMContentLoaded",function(){
       if(set.a80)document.getElementById("a80").value=set.a80; if(set.a60)document.getElementById("a60").value=set.a60; if(set.a65)document.getElementById("a65").value=set.a65;
       if(set.w80)document.getElementById("w80").value=set.w80; if(set.w60)document.getElementById("w60").value=set.w60; if(set.w65)document.getElementById("w65").value=set.w65; }
     markFilled();
-    if(i&&sa) compute(false);
+    if(i&&sa) computeAndCollapse();   // reload opens to the dashboard, panel collapsed
   }catch(e){}
 });
 
