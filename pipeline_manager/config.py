@@ -48,8 +48,12 @@ class Settings:
     allocations: dict = field(default_factory=lambda: {"QX80": 50, "QX60": 100, "QX65": 100})
 
     # --- production -> arrival lead per model, in months (brief §9/§12) ----- #
-    cpo_windows: dict = field(default_factory=lambda: {"QX80": 3, "QX60": 2, "QX65": 2})
-    min_cpo_window: int = 1
+    # "auto" derives a continuous, trend-weighted lead from each unit's
+    # production month and arrival date; a number pins it manually.
+    cpo_windows: dict = field(default_factory=lambda: {"QX80": "auto", "QX60": "auto", "QX65": "auto"})
+    min_cpo_window: float = 1.0          # a factory order can't arrive the month you place it
+    order_lead_pad: float = 0.0          # extra order->production months to add to the auto lead
+    lead_halflife: float = 6.0           # months; recency half-life for trend-weighting
 
     # --- control lists ----------------------------------------------------- #
     # Suppress forces NEED=0 immediately (discontinued combos). 8461 is always
@@ -99,5 +103,6 @@ class Settings:
             s.mode = "CPO"
         return s
 
-    def cpo_window(self, model: str) -> int:
-        return max(self.min_cpo_window, int(self.cpo_windows.get(model, 2)))
+    def window_setting(self, model: str):
+        """Raw window setting for a model: the string "auto" or a number."""
+        return self.cpo_windows.get(model, "auto")

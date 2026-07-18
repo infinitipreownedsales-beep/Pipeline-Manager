@@ -59,6 +59,10 @@ def render_text(res, rep) -> str:
     out.append(f"Learned configs: {rep['data_health']['learned_configs']}    "
                f"Roster combos: {len(s.roster)}    "
                f"Sold-but-unrostered: {len(rep['data_health']['orphans'])}")
+    if s.mode == "CPO" and res.arrival_windows:
+        leads = "   ".join(f"{m} {res.arrival_windows[m]:.1f}mo"
+                           for m in ("QX80", "QX60", "QX65"))
+        out.append(f"Arrival lead (production->lot, data-driven): {leads}")
     out.append("")
 
     # 1. Order Priority

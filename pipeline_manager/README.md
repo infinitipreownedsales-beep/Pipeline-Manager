@@ -110,10 +110,15 @@ python pipeline_manager/tests/test_engine.py     # or: pytest pipeline_manager/t
 
 ### One deliberate difference from the workbook
 
-- **CPO arrival window** defaults to the brief's canonical `QX80 +3 / QX60 +2 /
-  QX65 +2` months. The workbook additionally derived a live window from arrival
-  data; set `cpo_windows` in `config.json` to `{"QX80":5,"QX60":5,"QX65":1}` to
-  reproduce the workbook's exact numbers.
+- **CPO arrival window** is, by default, `"auto"`: a continuous, trend-weighted
+  production→arrival lead measured from each unit's production month and arrival
+  date (inbound = planned ETA − production; on-lot = realized). Because it is
+  fractional, seasonality at arrival is *interpolated* between months rather than
+  snapping onto a single peak month — which is what otherwise inflates a build.
+  `order_lead_pad` adds any order→production slotting time the exports can't see.
+  Pin it manually with `cpo_windows` (e.g. `{"QX80":3,"QX60":2,"QX65":2}` for the
+  brief's fixed months, or `{"QX80":5,"QX60":5,"QX65":1}` to reproduce the
+  workbook's exact numbers — the engine validates against those cell-for-cell).
 - **Wholesale eligibility** uses the brief's `MAX(60, DTS)` age floor (the
   workbook used 45); young inventory is never wholesale-flagged.
 

@@ -1,12 +1,16 @@
 /* ===================== wiring ===================== */
 function getSettings(){
+  let manual=document.getElementById("wmode").value==="manual";
+  let cw = manual ? {QX80:parseFloat(document.getElementById("w80").value||3),
+                     QX60:parseFloat(document.getElementById("w60").value||2),
+                     QX65:parseFloat(document.getElementById("w65").value||2)}
+                  : {QX80:"auto",QX60:"auto",QX65:"auto"};
   return { order_month: parseInt(document.getElementById("ordmonth").value,10),
     mode: document.getElementById("mode").value,
     allocations:{QX80:parseInt(document.getElementById("a80").value||0,10),
       QX60:parseInt(document.getElementById("a60").value||0,10), QX65:parseInt(document.getElementById("a65").value||0,10)},
-    cpo_windows:{QX80:parseInt(document.getElementById("w80").value||3,10),
-      QX60:parseInt(document.getElementById("w60").value||2,10), QX65:parseInt(document.getElementById("w65").value||2,10)},
-    min_cpo_window:1, suppress:DEFAULTS.suppress, demote:DEFAULTS.demote, overrides:DEFAULTS.overrides,
+    cpo_windows:cw, min_cpo_window:1, order_lead_pad:parseFloat(document.getElementById("wpad").value||0), lead_halflife:6,
+    suppress:DEFAULTS.suppress, demote:DEFAULTS.demote, overrides:DEFAULTS.overrides,
     demo_stocks:DEFAULTS.demo_stocks, demo_starts:DEFAULTS.demo_starts, aged_memory:[],
     prove_bar:2, swap_threshold:90, rate_cap:5.0, paperweight_dts:90, wholesale_min_age:60, stall_days:120, aged_days:60 }; }
 function markFilled(){
@@ -52,7 +56,11 @@ window.addEventListener("DOMContentLoaded",function(){
     try{ localStorage.removeItem("pm_inv"); localStorage.removeItem("pm_sales"); }catch(e){} });
   document.getElementById("inv").addEventListener("input",markFilled);
   document.getElementById("sales").addEventListener("input",markFilled);
-  ["ordmonth","mode","a80","a60","a65","w80","w60","w65","today"].forEach(id=>
+  function toggleManual(){ document.getElementById("manualwins").style.display =
+    document.getElementById("wmode").value==="manual" ? "flex" : "none"; }
+  document.getElementById("wmode").addEventListener("change",toggleManual);
+  toggleManual();
+  ["ordmonth","mode","a80","a60","a65","w80","w60","w65","today","wmode","wpad"].forEach(id=>
     document.getElementById(id).addEventListener("change",liveRecompute));
   wireFile("invfile","inv","invstat"); wireFile("salesfile","sales","salesstat");
   try{ let i=localStorage.getItem("pm_inv"), sa=localStorage.getItem("pm_sales");

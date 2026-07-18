@@ -164,6 +164,33 @@ def test_order_priority_ranking_matches_workbook():
 # --------------------------------------------------------------------------- #
 # The headline requirement: determinism
 # --------------------------------------------------------------------------- #
+def test_auto_window_is_data_driven_and_continuous():
+    """Auto windows come from real production->arrival leads, are continuous
+    (fractional), and — by not snapping arrival onto a peak month — pull the
+    QX80 build well below the fixed-3-month result."""
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    auto = engine.run(inv, sales, Settings(order_month=9, mode="CPO"), today=_AS_OF)
+    assert auto.settings.cpo_windows["QX80"] == "auto"        # default is auto
+    w = auto.arrival_windows
+    assert 1.5 < w["QX80"] < 3.0 and abs(w["QX80"] - round(w["QX80"])) > 0.05  # fractional
+    fixed3 = engine.run(inv, sales, Settings(order_month=9, mode="CPO",
+                        cpo_windows={"QX80": 3, "QX60": 2, "QX65": 2}), today=_AS_OF)
+    auto80 = sum(l.need for l in auto.lines if l.model == "QX80")
+    fixed80 = sum(l.need for l in fixed3.lines if l.model == "QX80")
+    assert auto80 < fixed80        # continuous window doesn't over-order at the Dec peak
+
+
+def test_projection_credits_residual_inbound():
+    """Configs with inbound units must project residual on-hand at arrival, not
+    assume a total sell-out (the 'we'll still have one or two' case)."""
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    res = engine.run(inv, sales, Settings(order_month=9, mode="CPO"), today=_AS_OF)
+    line = next(l for l in res.lines if l.key == "QX80|8361|XKJ|G")  # 1 lot + 2 inbound
+    assert line.inbound == 2 and line.proj_at_arrival > 0
+
+
 def test_recompute_is_deterministic():
     a = reports.build_all(_run())
     b = reports.build_all(_run())

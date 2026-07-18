@@ -68,7 +68,8 @@ function loadInventory(text){
       status:String(cell(row,ci.status)||"").trim(),my:String(cell(row,ci.my)||"").trim(),model:model,
       code:digitsOnly(code),desc:String(cell(row,ci.desc)||"").trim(),ext:ext,int:intr,
       msrp:coerceNum(cell(row,ci.msrp)),loc:loc,dis:coerceNum(cell(row,ci.dis)),key:buildKey(model,code,ext,intr),
-      arr:parseArrivalMonth(loc,eta),myear:modelYear(code),isDlr:loc.toUpperCase()==="DLR-INV"}); }
+      arr:parseArrivalMonth(loc,eta),myear:modelYear(code),prod:String(cell(row,ci.prod)||"").trim(),
+      isDlr:loc.toUpperCase()==="DLR-INV",isInbound:loc.toUpperCase()!=="DLR-INV"}); }
   return units; }
 function loadSales(text){
   let rows=parseTable(text), h=findHeader(rows,["Sales Month","VIN","MODEL CODE"]), cm=colmap(rows[h]);
@@ -138,18 +139,36 @@ function computePositions(inv, metrics, s){
     } else { p.inbound++; if(u.arr) p.arrivals[u.arr]=(p.arrivals[u.arr]||0)+1; } });
   return P; }
 function projRate(m,dts,s){ let ph=m?m.prate/2:0, dr=(m&&m.r90>0&&dts&&dts>0)?30.4/dts:0; return Math.min(s.rate_cap,Math.max(ph,dr)); }
-function projChain(model,pos,metric,seas,s){
-  let om=s.order_month, dts=metric?metric.dts:null, rate=projRate(metric,dts,s);
+function prodMidx(pm){ let p=String(pm).split("-"); if(p.length<2) return null; let y=parseInt(p[0],10),m=parseInt(p[1],10); return (isNaN(y)||isNaN(m))?null:y*12+m; }
+function computeArrivalWindows(inv, today, s){
+  // continuous, trend-weighted production->arrival lead per model
+  let cur=today.getFullYear()*12+(today.getMonth()+1), fb={QX80:3,QX60:2,QX65:2}, out={};
+  MODELS.forEach(model=>{ let wsum=0,lsum=0;
+    inv.forEach(u=>{ if(u.model!==model) return; let pm=prodMidx(u.prod); if(pm===null) return;
+      let lead;
+      if(u.isInbound && u.arr){ let arr=Math.floor(cur/12)*12+u.arr; while(arr<cur-1) arr+=12; lead=arr-pm; }
+      else if(u.isDlr){ lead=(cur-Math.round(u.dis/30.44))-pm; } else return;
+      if(lead<0||lead>12) return;
+      let w=Math.pow(0.5, Math.max(0,cur-pm)/Math.max(0.5,s.lead_halflife)); wsum+=w; lsum+=w*lead; });
+    out[model]= wsum===0 ? fb[model] : Math.max(s.min_cpo_window, lsum/wsum + s.order_lead_pad); });
+  return out; }
+function resolveWindows(inv, today, s){ let auto=computeArrivalWindows(inv,today,s), out={};
+  MODELS.forEach(model=>{ let v=s.cpo_windows[model];
+    out[model]= (typeof v==="string" && v.toLowerCase()==="auto") ? auto[model] : Math.max(s.min_cpo_window, parseFloat(v)); });
+  return out; }
+function interpSeas(idx, om, off){ let lo=Math.floor(off), fr=off-lo, a=idx[((om-1+lo)%12+12)%12], b=idx[((om-1+lo+1)%12+12)%12]; return a+(b-a)*fr; }
+function projChain(model,pos,metric,seas,s,n){
+  let om=s.order_month, rate=projRate(metric,metric?metric.dts:null,s);
   function arr(off){ return pos.arrivals[((om-1+off)%12)+1]||0; }
-  let later=0; for(let k=1;k<=5;k++) later+=arr(k);
+  let later=0; for(let k=1;k<=n;k++) later+=arr(k);
   let proj=[pos.onlot+Math.max(0,pos.inbound-later)];
-  for(let k=1;k<=5;k++){ let sm=seas[model].index[((om-1+(k-1))%12)]; proj.push(Math.max(pos.stalled,proj[k-1]-rate*sm)+arr(k)); }
+  for(let k=1;k<=n;k++){ let sm=seas[model].index[((om-1+(k-1))%12)]; proj.push(Math.max(pos.stalled,proj[k-1]-rate*sm)+arr(k)); }
   return proj; }
-function projectAtArrival(model,pos,metric,seas,s){
-  let chain=projChain(model,pos,metric,seas,s);
+function projAt(chain, off){ let lo=Math.floor(off); if(lo>=chain.length-1) return chain[chain.length-1]; let fr=off-lo; return chain[lo]+(chain[lo+1]-chain[lo])*fr; }
+function projectAtArrival(model,pos,metric,seas,s,window){
+  let chain=projChain(model,pos,metric,seas,s,Math.max(8,Math.ceil(window)+1));
   if(s.mode!=="CPO"){ let pr=pos.onlot+pos.inbound; return [xround(pr,1),chain]; }
-  let w=Math.max(s.min_cpo_window, s.cpo_windows[model]!==undefined?s.cpo_windows[model]:2);
-  return [xround(chain[w],1),chain]; }
+  return [xround(projAt(chain,window),1),chain]; }
 function baseForOrder(key, metrics){ let m=metrics[key]; return m?[m.base,true]:[1,false]; }
 function momFactor(m,dts){ let r90=m?m.r90:0,r180=m?m.r180:0,accel=m?m.momentum==="ACCEL":false,base;
   if(r90>=2||accel) base=1.0; else if(r90===1) base=0.6; else if(r90===0&&r180>=2) base=0.35; else if(r90===0&&r180===1) base=0.25; else base=0.15;
@@ -161,16 +180,16 @@ function matchesDemote(e,model,ext,intr,key){ function ok(fv,act){ fv=String(fv|
 function suppressed(code,ext,intr,s){ if(code==="8461") return true;
   return s.suppress.some(e=> String(e.code||"").trim().slice(0,4)===code && String(e.ext||"").trim()===ext && String(e.int||"").trim()===intr); }
 function buyGrade(mom,mf,need){ if(need<=0) return ""; if(mom==="ACCEL"||mf>=0.85) return "💚 STRONG"; if(mf>=0.35) return "🔵 STEADY"; return "🟡 SPECULATIVE"; }
-function buildLines(s,metrics,seas,positions,agedBrakes,overrideMap){
+function buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows){
   let lines=[];
   ROSTER.forEach((c,i)=>{
     let model=c.model,code=c.code,ext=c.ext,intr=c.int,key=model+"|"+code+"|"+ext+"|"+intr;
     let metric=metrics[key]||null, pos=positions[key]||{onlot:0,inbound:0,arrivals:{},stalled:0,aged:[],whole:[]}, dts=metric?metric.dts:null;
     let bf=baseForOrder(key,metrics), base=bf[0], found=bf[1], mf=momFactor(metric,dts);
     let seasOrder=seas[model].index[(s.order_month-1)%12];
-    let win=s.mode==="CPO"?Math.max(s.min_cpo_window, s.cpo_windows[model]!==undefined?s.cpo_windows[model]:2):0;
-    let seasArr=seas[model].index[(s.order_month-1+win)%12];
-    let pj=projectAtArrival(model,pos,metric,seas,s), proj=pj[0], chain=pj[1];
+    let win=s.mode==="CPO"?windows[model]:0;
+    let seasArr=interpSeas(seas[model].index, s.order_month, win);
+    let pj=projectAtArrival(model,pos,metric,seas,s,win), proj=pj[0], chain=pj[1];
     let sup=suppressed(code,ext,intr,s), dem=s.demote.some(e=>matchesDemote(e,model,ext,intr,key));
     let r90=metric?metric.r90:0, effDem=dem&&r90<s.prove_bar, blocked=sup||effDem;
     let needFloor=base===0?0:1;
@@ -200,6 +219,7 @@ function runEngine(inv,sales,s,today){
   let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,ROSTER), seas=computeSeasonality(sales,tb), positions=computePositions(inv,metrics,s);
   let agedBrakes={}; (s.aged_memory||[]).forEach(e=>{ if(e.active===undefined||e.active===1||e.active===true||e.active==="1") agedBrakes[e.key]=(agedBrakes[e.key]||0)+1; });
   let overrideMap={}; s.overrides.forEach(e=>{ overrideMap[e.key]=(overrideMap[e.key]||0)+parseInt(e.qty||0,10); });
-  let lines=buildLines(s,metrics,seas,positions,agedBrakes,overrideMap);
+  let windows=resolveWindows(inv,today,s);
+  let lines=buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows);
   let demoUnits=inv.filter(u=>u.isDlr&&isDemo(u.stock,s.demo_stocks)), orphans=findOrphans(sales,ROSTER);
-  return {settings:s,tb:tb,metrics:metrics,seas:seas,positions:positions,lines:lines,demoUnits:demoUnits,sales:sales,orphans:orphans,invCount:inv.length,salesCount:sales.length}; }
+  return {settings:s,tb:tb,metrics:metrics,seas:seas,positions:positions,lines:lines,demoUnits:demoUnits,sales:sales,orphans:orphans,invCount:inv.length,salesCount:sales.length,windows:windows}; }

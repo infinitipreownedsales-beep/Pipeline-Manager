@@ -108,6 +108,7 @@ class EngineResult:
     inventory: list
     sales: list
     orphans: list              # keys sold/stocked but not on the roster
+    arrival_windows: dict = field(default_factory=dict)  # model -> continuous lead (mo)
 
 
 # --------------------------------------------------------------------------- #
@@ -305,37 +306,124 @@ def _proj_rate(m: ConfigMetrics | None, dts: float | None, s: Settings) -> float
     return min(s.rate_cap, max(prate_half, dts_rate))
 
 
-def _proj_chain(model, pos, metric, seas, s: Settings) -> list:
-    """The six-month forward sell-down chain proj_0..proj_5.
+def _prod_midx(production_month):
+    """Parse a 'YYYY-MM' production month into a month index, or None."""
+    try:
+        y, m = str(production_month).split("-")[:2]
+        return int(y) * 12 + int(m)
+    except (ValueError, AttributeError):
+        return None
+
+
+def compute_arrival_windows(inventory, today: _dt.date, s: Settings) -> dict:
+    """Continuous, trend-weighted production->arrival lead per model.
+
+    Instead of a fixed number of months, we measure how long real units take
+    from their production month to landing on the lot:
+
+      * inbound units      -> (ETA arrival month) - (production month)   [planned]
+      * on-lot units       -> (today - days-in-stock) - (production month) [realized]
+
+    Samples are weighted by how recent each unit's production is (a trend, so
+    the current cadence dominates), averaged, and floored at min_cpo_window
+    (a factory order cannot arrive the month it is placed). order_lead_pad adds
+    any order->production slotting time the exports can't see (default 0).
+    """
+    cur = today.year * 12 + today.month
+    fallback = {"QX80": 3.0, "QX60": 2.0, "QX65": 2.0}
+    out = {}
+    for model in ("QX80", "QX60", "QX65"):
+        wsum = lsum = 0.0
+        for u in inventory:
+            if u.model != model:
+                continue
+            pm = _prod_midx(u.production_month)
+            if pm is None:
+                continue
+            if u.is_inbound and u.arrival_month:
+                arr = (cur // 12) * 12 + u.arrival_month
+                while arr < cur - 1:
+                    arr += 12
+                lead = arr - pm
+            elif u.is_dlr_inv:
+                lead = (cur - round(u.dis / 30.44)) - pm
+            else:
+                continue
+            if not (0 <= lead <= 12):
+                continue
+            w = 0.5 ** (max(0, cur - pm) / max(0.5, s.lead_halflife))
+            wsum += w
+            lsum += w * lead
+        if wsum == 0:
+            out[model] = fallback[model]
+        else:
+            out[model] = max(s.min_cpo_window, lsum / wsum + s.order_lead_pad)
+    return out
+
+
+def resolve_windows(inventory, today, s: Settings) -> dict:
+    """Per-model window value: the data-driven lead where set to "auto", else
+    the manual number (floored at min_cpo_window)."""
+    auto = compute_arrival_windows(inventory, today, s)
+    out = {}
+    for model in ("QX80", "QX60", "QX65"):
+        v = s.window_setting(model)
+        if isinstance(v, str) and v.strip().lower() == "auto":
+            out[model] = auto[model]
+        else:
+            out[model] = max(s.min_cpo_window, float(v))
+    return out
+
+
+def _interp_seas(seas_model, om, offset):
+    """Seasonality at a *continuous* arrival offset from the order month, so a
+    fractional window between two months blends their multipliers instead of
+    snapping onto one (peak) month."""
+    lo = int(math.floor(offset))
+    frac = offset - lo
+    a = seas_model[(om - 1 + lo) % 12]
+    b = seas_model[(om - 1 + lo + 1) % 12]
+    return a + (b - a) * frac
+
+
+def _proj_chain(model, pos, metric, seas, s: Settings, n=8) -> list:
+    """Forward sell-down chain proj_0..proj_n.
 
     Each month: sell down at the config's pace × that month's seasonality, never
     below the count of stalled units, then add whatever arrives that month.
     proj_0 swallows every inbound unit landing *before* the window opens so
-    pipeline metal already coming isn't ordered twice. Computed the same way in
-    every mode (only the headline PROJ@ARR switches on mode).
+    pipeline metal already coming isn't ordered twice.
     """
     om = s.order_month
-    dts = metric.dts if metric else None
-    rate = _proj_rate(metric, dts, s)
+    rate = _proj_rate(metric, metric.dts if metric else None, s)
 
     def arrivals_at(offset):
         return pos.arrivals.get(((om - 1 + offset) % 12) + 1, 0)
 
-    later = sum(arrivals_at(k) for k in range(1, 6))
+    later = sum(arrivals_at(k) for k in range(1, n + 1))
     proj = [pos.onlot + max(0, pos.inbound_total - later)]
-    for k in range(1, 6):
+    for k in range(1, n + 1):
         seas_m = seas[model][(om - 1 + (k - 1)) % 12]
         proj.append(max(pos.stalled, proj[k - 1] - rate * seas_m) + arrivals_at(k))
     return proj
 
 
-def project_at_arrival(key, model, pos, metric, seas, s: Settings):
-    """Return (projection_at_arrival, full six-month proj chain)."""
-    chain = _proj_chain(model, pos, metric, seas, s)
+def _proj_at(chain, offset):
+    """On-hand projection at a continuous month offset (linear between months)."""
+    lo = int(math.floor(offset))
+    if lo >= len(chain) - 1:
+        return chain[-1]
+    frac = offset - lo
+    return chain[lo] + (chain[lo + 1] - chain[lo]) * frac
+
+
+def project_at_arrival(model, pos, metric, seas, s: Settings, window):
+    """Return (projection_at_arrival, full proj chain) for a fractional window."""
+    chain = _proj_chain(model, pos, metric, seas, s, n=max(8, int(math.ceil(window)) + 1))
     if s.mode != "CPO":
         proj = pos.onlot + pos.inbound_total
         return xround(proj, 1), chain
-    return xround(chain[s.cpo_window(model)], 1), chain
+    return xround(_proj_at(chain, window), 1), chain
 
 
 # --------------------------------------------------------------------------- #
@@ -449,7 +537,7 @@ def _buy_grade(momentum, mom_factor, need) -> str:
     return "🟡 SPECULATIVE"
 
 
-def build_lines(s, metrics, seas, positions, aged_brakes, override_map) -> list:
+def build_lines(s, metrics, seas, positions, aged_brakes, override_map, windows) -> list:
     lines: list[OrderLine] = []
     for i, cfg in enumerate(s.roster):
         model, code, ext, interior = cfg["model"], cfg["code"], cfg["ext"], cfg["int"]
@@ -461,10 +549,10 @@ def build_lines(s, metrics, seas, positions, aged_brakes, override_map) -> list:
         base, found = _base_for_order(key, metrics)
         mf = _mom_factor(metric, dts, s)
         seas_order = seas[model][(s.order_month - 1) % 12]
-        window = s.cpo_window(model) if s.mode == "CPO" else 0
-        seas_arr = seas[model][(s.order_month - 1 + window) % 12]
+        window = windows[model] if s.mode == "CPO" else 0.0
+        seas_arr = _interp_seas(seas[model], s.order_month, window)
 
-        proj_at_arr, chain = project_at_arrival(key, model, pos, metric, seas, s)
+        proj_at_arr, chain = project_at_arrival(model, pos, metric, seas, s, window)
 
         suppressed = _suppressed(key, model, code, ext, interior, s)
         demoted = any(_matches(e, model, ext, interior, key) for e in s.demote)
@@ -548,7 +636,8 @@ def run(inventory, sales, settings: Settings, today: _dt.date | None = None) -> 
     for e in settings.overrides:
         override_map[e["key"]] = override_map.get(e["key"], 0) + int(e.get("qty", 0))
 
-    lines = build_lines(settings, metrics, seas, positions, aged_brakes, override_map)
+    windows = resolve_windows(inventory, today, settings)
+    lines = build_lines(settings, metrics, seas, positions, aged_brakes, override_map, windows)
     demo_units = [u for u in inventory
                   if u.is_dlr_inv and _is_demo(u.stock, settings.demo_stocks)]
     orphans = _find_orphans(sales, inventory, settings.roster)
@@ -557,4 +646,5 @@ def run(inventory, sales, settings: Settings, today: _dt.date | None = None) -> 
         settings=settings, time=tb, metrics=metrics, seasonality=seas,
         positions=positions, lines=lines, demo_units=demo_units,
         inventory=inventory, sales=sales, orphans=orphans,
+        arrival_windows=windows,
     )

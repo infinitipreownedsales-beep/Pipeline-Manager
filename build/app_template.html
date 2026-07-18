@@ -168,12 +168,18 @@
       <div class="fld" style="margin-left:6px"><label>As-of date</label><input type="date" id="today"></div>
       <span id="status" class="foot"></span>
     </div>
-    <details class="exp"><summary>Advanced — CPO arrival window (months)</summary>
-      <div style="display:flex;gap:12px;margin-top:8px;align-items:flex-end">
-        <div class="fld"><label>QX80</label><input type="number" id="w80" value="3" style="width:60px"></div>
-        <div class="fld"><label>QX60</label><input type="number" id="w60" value="2" style="width:60px"></div>
-        <div class="fld"><label>QX65</label><input type="number" id="w65" value="2" style="width:60px"></div>
-        <span class="foot">Brief's canonical windows. Set 5 / 5 / 1 to match the old workbook exactly.</span>
+    <details class="exp"><summary>Advanced — CPO arrival window</summary>
+      <div style="display:flex;gap:12px;margin-top:8px;align-items:flex-end;flex-wrap:wrap">
+        <div class="fld"><label>Window source</label><select id="wmode">
+          <option value="auto">Auto — from your production &amp; arrival dates</option>
+          <option value="manual">Manual — fixed months</option></select></div>
+        <div class="fld"><label>+ Order→production lead (mo)</label><input type="number" id="wpad" value="0" step="0.5" style="width:80px"></div>
+        <div id="manualwins" style="display:none;gap:12px;align-items:flex-end">
+          <div class="fld"><label>QX80</label><input type="number" id="w80" value="3" step="0.5" style="width:60px"></div>
+          <div class="fld"><label>QX60</label><input type="number" id="w60" value="2" step="0.5" style="width:60px"></div>
+          <div class="fld"><label>QX65</label><input type="number" id="w65" value="2" step="0.5" style="width:60px"></div>
+        </div>
+        <span class="foot">Auto measures how long your real units take from production to landing on the lot (continuous, trend-weighted). Add order→production lead if your factory slotting pushes arrival later.</span>
       </div>
     </details>
   </div>
