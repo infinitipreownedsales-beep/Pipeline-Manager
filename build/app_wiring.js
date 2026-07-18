@@ -13,7 +13,7 @@ function getSettings(){
     suppress:DEFAULTS.suppress, demote:DEFAULTS.demote, overrides:DEFAULTS.overrides,
     demo_stocks:DEFAULTS.demo_stocks, demo_starts:DEFAULTS.demo_starts, aged_memory:[],
     prove_bar:2, swap_threshold:90, rate_cap:5.0, paperweight_dts:90, wholesale_min_age:60, stall_days:120, aged_days:60,
-    anticipate_demo_returns:true, trades:readTrades(),
+    smooth_base:true, anticipate_demo_returns:true, trades:readTrades(),
     demo_pick_max_dts:45, demo_pick_min_total:2, demo_pick_min_r180:2, demo_picks_per_model:3, demo_vins_per_combo:2 }; }
 /* ---- outbound dealer trade log ---- */
 const COMBO_MAP = {};

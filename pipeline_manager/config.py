@@ -96,6 +96,11 @@ class Settings:
     demo_vins_per_combo: int = 2         # candidate VINs to offer per combo
     rate_cap: float = 5.0                # no config sells more than ~5/month
     paperweight_dts: int = 90            # DTS veto: >90 days can never earn a base
+    # Carry the 60-day pace as a continuous base and round only once, at the
+    # final order number — so a config sitting on a rounding boundary can't flip
+    # its base (and, amplified by seasonality, its NEED) day to day. Off = the
+    # workbook's round-the-pace-early behavior (kept for its parity tests).
+    smooth_base: bool = True
     wholesale_min_age: int = 60          # a unit must be older than MAX(this, DTS)
     stall_days: int = 120                # units this old are "stalled" in projection
     aged_days: int = 60                  # on-lot units older than this are "aged"

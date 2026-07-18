@@ -37,12 +37,12 @@ def _load(fname):
 def _run(**kw):
     inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
     sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
-    # Pinned windows and demo-return modeling OFF reproduce the source workbook,
-    # which used fixed months and fully suppressed demos. Both are validated
-    # against the workbook cell-for-cell; the data-driven window and
-    # demo-return anticipation are newer layers with their own tests.
+    # Pinned windows, demo-return modeling OFF, and the legacy rounded floor
+    # reproduce the source workbook. All three are validated against the workbook
+    # cell-for-cell; the data-driven window, demo-return anticipation, and the
+    # continuous smooth base are newer layers with their own tests.
     s = Settings(order_month=9, mode="CPO", anticipate_demo_returns=False,
-                 cpo_windows={"QX80": 5, "QX60": 5, "QX65": 1}, **kw)
+                 smooth_base=False, cpo_windows={"QX80": 5, "QX60": 5, "QX65": 1}, **kw)
     return engine.run(inv, sales, s, today=_AS_OF)
 
 
@@ -258,6 +258,24 @@ def test_outbound_trades_grade_velocity():
         [{"date": "2026-07", "model": "QX80", "code": "8311", "ext": "KH3", "int": "G", "days": 115}])
     assert fast_total == base_total + 1 and fast_r90 == base_r90 + 1
     assert fast_dts < base_dts < slow_dts        # 15-day speeds it up, 115-day slows it
+
+
+def test_smooth_base_is_stable_across_the_month():
+    """The continuous base must not flip day-to-day on a rounding boundary the way
+    the legacy rounded floor does (the QBE/C 2<->3 wobble)."""
+    import datetime as _d
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    key = "QX80|8311|QBE|C"
+    smooth, legacy = [], []
+    for day in (1, 8, 15, 22, 28):
+        d = _d.date(2026, 7, day)
+        smooth.append(engine.run(inv, sales, Settings(order_month=9, mode="CPO",
+                      smooth_base=True), today=d).metrics[key].base)
+        legacy.append(engine.run(inv, sales, Settings(order_month=9, mode="CPO",
+                      smooth_base=False), today=d).metrics[key].base)
+    assert max(legacy) - min(legacy) >= 1        # legacy visibly flips (2<->3)
+    assert max(smooth) - min(smooth) < 1         # smooth base drifts, never flips a whole unit
 
 
 def test_recompute_is_deterministic():

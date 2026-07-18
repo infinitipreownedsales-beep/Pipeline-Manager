@@ -103,8 +103,8 @@ function tradeRecords(trades){ let out=[]; (trades||[]).forEach(t=>{
   let key=buildKey(model,code,ext,intr); if(!key||!model) return;
   let days=(t.days===null||t.days===undefined||t.days==="")?null:coerceNum(t.days,null);
   out.push({key:key,model:model,midx:tradeMidx(t.date),days:days}); }); return out; }
-function computeMetrics(sales, tb, roster, trades){
-  let M={};
+function computeMetrics(sales, tb, roster, s){
+  let M={}, trades=s.trades, smooth=s.smooth_base!==false;
   sales.forEach(s=>{ if(!s.firstVin||!s.key||!s.model) return;
     let m=M[s.key]; if(!m){ m={key:s.key,model:s.model,code:s.code.slice(0,4),ext:s.ext,int:s.int,total:0,dtsSum:0,dtsCnt:0,r90:0,r180:0,dts:null,hist60:0,prate:0,momentum:"dormant",floor:0,base:0}; M[s.key]=m; }
     m.total++; if(s.dts!==null){ m.dtsSum+=s.dts; m.dtsCnt++; }
@@ -124,10 +124,11 @@ function computeMetrics(sales, tb, roster, trades){
     else if(m.r90===0 && m.r180>0) m.momentum="on cadence";
     else if(m.r90>0 && recent60<m.hist60*0.6) m.momentum="cooling";
     else if(m.r90>0) m.momentum="steady"; else m.momentum="dormant";
-    if(m.prate>=0.5 && m.dts!==null && m.dts<=90) m.floor=Math.max(1,xround(m.prate,0));
+    if(m.prate>=0.5 && m.dts!==null && m.dts<=90) m.floor = smooth?Math.max(1,m.prate):Math.max(1,xround(m.prate,0));
     else if(m.dts!==null && m.dts<=60 && m.r180>0) m.floor=1; else m.floor=0;
     let adj=m.momentum==="ACCEL"?1:(m.momentum==="cooling"?-1:0);
-    m.base=m.floor===0?0:Math.max(1,m.floor+adj); });
+    let base=m.floor===0?0:Math.max(1,m.floor+adj);
+    m.base = smooth?base:Math.round(base); });
   return M; }
 function computeSeasonality(sales, tb){
   let latestCalm=tb.latest?((tb.latest-1)%12)+1:0, out={};
@@ -252,7 +253,7 @@ function findOrphans(sales,roster){ let rk={}; roster.forEach(c=>rk[c.model+"|"+
   let seen={}; sales.forEach(s=>{ if(s.firstVin&&s.key&&!rk[s.key]) seen[s.key]=(seen[s.key]||0)+1; });
   return Object.keys(seen).map(k=>({key:k,sales:seen[k]})).sort((a,b)=>b.sales-a.sales); }
 function runEngine(inv,sales,s,today){
-  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,ROSTER,s.trades), seas=computeSeasonality(sales,tb), positions=computePositions(inv,metrics,s);
+  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,ROSTER,s), seas=computeSeasonality(sales,tb), positions=computePositions(inv,metrics,s);
   let agedBrakes={}; (s.aged_memory||[]).forEach(e=>{ if(e.active===undefined||e.active===1||e.active===true||e.active==="1") agedBrakes[e.key]=(agedBrakes[e.key]||0)+1; });
   let overrideMap={}; s.overrides.forEach(e=>{ overrideMap[e.key]=(overrideMap[e.key]||0)+parseInt(e.qty||0,10); });
   let windows=resolveWindows(inv,today,s);

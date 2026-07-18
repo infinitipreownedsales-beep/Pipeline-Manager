@@ -271,15 +271,22 @@ def _classify(m: ConfigMetrics, tb: TimeBase, s: Settings) -> None:
 
     # Velocity floor. The DTS<=90 gate is the paperweight veto: a config that
     # takes longer than that to sell can never earn a stocking base.
+    #
+    # smooth_base (default, best logic): carry the 60-day pace as a *continuous*
+    # value so a hairline change (e.g. the elapsed-time drift within a month)
+    # can't flip the base by a whole unit and get amplified by seasonality. The
+    # single rounding happens once, at the final order number.
+    # Legacy (workbook parity): round the pace into an integer floor here.
     if m.prate >= 0.5 and m.dts is not None and m.dts <= s.paperweight_dts:
-        m.floor = max(1, xround(m.prate))
+        m.floor = max(1.0, m.prate) if s.smooth_base else float(max(1, xround(m.prate)))
     elif m.dts is not None and m.dts <= 60 and m.r180 > 0:
-        m.floor = 1
+        m.floor = 1.0
     else:
-        m.floor = 0
+        m.floor = 0.0
 
     m.mom_adj = 1 if m.momentum == "ACCEL" else (-1 if m.momentum == "cooling" else 0)
-    m.base = 0 if m.floor == 0 else max(1, m.floor + m.mom_adj)
+    base = 0.0 if m.floor == 0 else max(1.0, m.floor + m.mom_adj)
+    m.base = base if s.smooth_base else int(base)
 
 
 # --------------------------------------------------------------------------- #

@@ -131,6 +131,12 @@ python pipeline_manager/tests/test_engine.py     # or: pytest pipeline_manager/t
   workbook's exact numbers — the engine validates against those cell-for-cell).
 - **Wholesale eligibility** uses the brief's `MAX(60, DTS)` age floor (the
   workbook used 45); young inventory is never wholesale-flagged.
+- **Continuous base** (`smooth_base`, default on): the 60-day pace is carried as
+  a continuous value and rounded only once, at the final order number. The
+  workbook rounded the pace into an integer floor *early*, which let a config
+  sitting on a rounding boundary flip its base by a whole unit day-to-day (and
+  seasonality then amplified it). Set `smooth_base: false` for the legacy
+  behavior (its parity tests pin it off).
 
 ## Files
 
