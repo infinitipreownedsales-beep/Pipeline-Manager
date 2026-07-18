@@ -237,6 +237,29 @@ def test_demo_return_is_anticipated_and_held():
     assert lon.need <= loff.need                         # so we don't over-order
 
 
+def test_outbound_trades_grade_velocity():
+    """A dealer trade out grades that config like a sale: it counts toward
+    volume and recency, and its days-in-stock moves DTS — fast trades faster,
+    slow trades slower."""
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    key = "QX80|8311|KH3|G"
+
+    def dts_total(trades):
+        r = engine.run(inv, sales, Settings(order_month=9, mode="CPO", trades=trades),
+                       today=_AS_OF)
+        m = r.metrics[key]
+        return m.dts, m.total, m.r90
+
+    base_dts, base_total, base_r90 = dts_total([])
+    fast_dts, fast_total, fast_r90 = dts_total(
+        [{"date": "2026-07", "model": "QX80", "code": "8311", "ext": "KH3", "int": "G", "days": 15}])
+    slow_dts, _, _ = dts_total(
+        [{"date": "2026-07", "model": "QX80", "code": "8311", "ext": "KH3", "int": "G", "days": 115}])
+    assert fast_total == base_total + 1 and fast_r90 == base_r90 + 1
+    assert fast_dts < base_dts < slow_dts        # 15-day speeds it up, 115-day slows it
+
+
 def test_recompute_is_deterministic():
     a = reports.build_all(_run())
     b = reports.build_all(_run())

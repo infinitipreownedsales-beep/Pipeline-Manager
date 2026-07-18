@@ -74,6 +74,11 @@ class Settings:
     })
     # Aged-unit brakes that persist after a unit leaves the lot (brief §11).
     aged_memory: list = field(default_factory=list)
+    # Outbound dealer trades — a trade out is a sale out the other door. Each
+    # entry {date, code (or model+code), ext, int, days} grades that config's
+    # speed to enter/exit inventory exactly like a showroom sale (a 15-day trade
+    # reads fast; a 115-day trade reads slow). Empty by default; add via the app.
+    trades: list = field(default_factory=list)
 
     # --- tunable thresholds (brief §7/§14/§15/§17) ------------------------- #
     prove_bar: int = 2                   # R90 needed for a demoted combo to surface

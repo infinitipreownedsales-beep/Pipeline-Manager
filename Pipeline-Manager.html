@@ -116,6 +116,14 @@
   details.exp summary::-webkit-details-marker{display:none}
   details.exp summary::before{content:"▸ ";color:var(--muted)}
   details.exp[open] summary::before{content:"▾ "}
+  /* trade log editor */
+  .traderow{display:grid;grid-template-columns:140px 1fr 120px 34px;gap:8px;align-items:center;margin-bottom:6px}
+  .traderow.thead{margin-bottom:4px}
+  .traderow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .traderow input{width:100%}
+  .traderow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 0;font-size:14px}
+  .traderow .del:hover{border-color:var(--bad);color:var(--bad)}
+  @media(max-width:640px){.traderow{grid-template-columns:1fr 1fr;}.traderow.thead{display:none}}
   /* executive demo board */
   .demogrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
   @media(max-width:900px){.demogrid{grid-template-columns:1fr}}
@@ -178,6 +186,13 @@
       <div><label class="top">Speed-to-Sell (sales history)</label>
         <textarea id="sales" placeholder="Paste the Speed-to-Sell export here (with its header row)…"></textarea>
         <div class="filerow"><input type="file" id="salesfile" accept=".csv,.txt,.tsv"><span id="salesstat"></span></div></div>
+    </div>
+    <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
+      <label class="top">Outbound dealer trade log <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— a trade out is a sale out the other door; days-in-stock grades its speed to enter/exit inventory</span></label>
+      <div id="tradeHead" class="traderow thead"><span>Date</span><span>Combo</span><span>Days in stock</span><span></span></div>
+      <div id="tradeRows"></div>
+      <button class="ghost" id="addTrade" style="margin-top:8px">＋ Add trade</button>
+      <datalist id="combolist"></datalist>
     </div>
     <div style="margin-top:11px;display:flex;gap:9px;align-items:center;flex-wrap:wrap">
       <button class="primary" id="run">Compute order ▶</button>
@@ -310,12 +325,22 @@ function timeBase(sales, today){
   let latest=Math.max.apply(null,midxs), earliest=Math.min.apply(null,midxs), open=latest===cur;
   let part=open?Math.max(0.05,today.getDate()/daysInMonth(today)):1, span=Math.max(0.25,(latest-earliest+1)-(1-part));
   return {latest:latest,earliest:earliest,cur:cur,part:part,span:span,el90:2+part,el180:5+part,open:open,today:today}; }
-function computeMetrics(sales, tb, roster){
+function tradeMidx(v){ if(!v) return null; let m=String(v).match(/^(\d{4})[-/]?(\d{2})/); return m?parseInt(m[1],10)*12+parseInt(m[2],10):null; }
+function tradeRecords(trades){ let out=[]; (trades||[]).forEach(t=>{
+  let code=digitsOnly(t.code), model=t.model||modelFromCode(code), ext=String(t.ext||"").trim(), intr=String(t.int||t.interior||"").trim();
+  let key=buildKey(model,code,ext,intr); if(!key||!model) return;
+  let days=(t.days===null||t.days===undefined||t.days==="")?null:coerceNum(t.days,null);
+  out.push({key:key,model:model,midx:tradeMidx(t.date),days:days}); }); return out; }
+function computeMetrics(sales, tb, roster, trades){
   let M={};
   sales.forEach(s=>{ if(!s.firstVin||!s.key||!s.model) return;
     let m=M[s.key]; if(!m){ m={key:s.key,model:s.model,code:s.code.slice(0,4),ext:s.ext,int:s.int,total:0,dtsSum:0,dtsCnt:0,r90:0,r180:0,dts:null,hist60:0,prate:0,momentum:"dormant",floor:0,base:0}; M[s.key]=m; }
     m.total++; if(s.dts!==null){ m.dtsSum+=s.dts; m.dtsCnt++; }
     if(s.midx>tb.latest-3) m.r90++; if(s.midx>tb.latest-6) m.r180++; });
+  tradeRecords(trades).forEach(tr=>{ let m=M[tr.key];
+    if(!m){ let p=tr.key.split("|"); m={key:tr.key,model:tr.model,code:p[1],ext:p[2],int:p[3],total:0,dtsSum:0,dtsCnt:0,r90:0,r180:0,dts:null,hist60:0,prate:0,momentum:"dormant",floor:0,base:0}; M[tr.key]=m; }
+    m.total++; if(tr.days!==null){ m.dtsSum+=tr.days; m.dtsCnt++; }
+    if(tr.midx&&tb.latest){ if(tr.midx>tb.latest-3) m.r90++; if(tr.midx>tb.latest-6) m.r180++; } });
   roster.forEach(c=>{ let k=c.model+"|"+c.code+"|"+c.ext+"|"+c.int;
     if(!M[k]) M[k]={key:k,model:c.model,code:c.code,ext:c.ext,int:c.int,total:0,dtsSum:0,dtsCnt:0,r90:0,r180:0,dts:null,hist60:0,prate:0,momentum:"dormant",floor:0,base:0}; });
   Object.values(M).forEach(m=>{
@@ -455,7 +480,7 @@ function findOrphans(sales,roster){ let rk={}; roster.forEach(c=>rk[c.model+"|"+
   let seen={}; sales.forEach(s=>{ if(s.firstVin&&s.key&&!rk[s.key]) seen[s.key]=(seen[s.key]||0)+1; });
   return Object.keys(seen).map(k=>({key:k,sales:seen[k]})).sort((a,b)=>b.sales-a.sales); }
 function runEngine(inv,sales,s,today){
-  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,ROSTER), seas=computeSeasonality(sales,tb), positions=computePositions(inv,metrics,s);
+  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,ROSTER,s.trades), seas=computeSeasonality(sales,tb), positions=computePositions(inv,metrics,s);
   let agedBrakes={}; (s.aged_memory||[]).forEach(e=>{ if(e.active===undefined||e.active===1||e.active===true||e.active==="1") agedBrakes[e.key]=(agedBrakes[e.key]||0)+1; });
   let overrideMap={}; s.overrides.forEach(e=>{ overrideMap[e.key]=(overrideMap[e.key]||0)+parseInt(e.qty||0,10); });
   let windows=resolveWindows(inv,today,s);
@@ -574,9 +599,10 @@ function render(res){
   let winTxt = s.mode==="CPO"
     ? " · arrival lead "+MODELS.map(m=>m+" "+(res.windows[m]).toFixed(1)+"mo").join(" / ")
     : "";
+  let tradeTxt = (s.trades&&s.trades.length) ? " · <b style='color:var(--teal)'>"+s.trades.length+" dealer trade"+(s.trades.length>1?"s":"")+" graded</b>" : "";
   H.push("<div class='foot noprint' style='margin:-6px 2px 6px'>Recomputed "+tb.today.toISOString().slice(0,10)+
     " · order month <b style='color:var(--ink2)'>"+MONTHS[s.order_month-1]+"</b> · mode <b style='color:var(--ink2)'>"+s.mode+
-    "</b>"+winTxt+" · "+res.invCount+" inventory units · "+res.salesCount+" sales rows</div>");
+    "</b>"+winTxt+" · "+res.invCount+" inventory units · "+res.salesCount+" sales rows"+tradeTxt+"</div>");
 
   // 1. ORDER PRIORITY
   H.push(sec(1,"Order Priority","teal = where you'll be at arrival · orange = whole trucks to order"));
@@ -706,8 +732,43 @@ function getSettings(){
     suppress:DEFAULTS.suppress, demote:DEFAULTS.demote, overrides:DEFAULTS.overrides,
     demo_stocks:DEFAULTS.demo_stocks, demo_starts:DEFAULTS.demo_starts, aged_memory:[],
     prove_bar:2, swap_threshold:90, rate_cap:5.0, paperweight_dts:90, wholesale_min_age:60, stall_days:120, aged_days:60,
-    anticipate_demo_returns:true,
+    anticipate_demo_returns:true, trades:readTrades(),
     demo_pick_max_dts:45, demo_pick_min_total:2, demo_pick_min_r180:2, demo_picks_per_model:3, demo_vins_per_combo:2 }; }
+/* ---- outbound dealer trade log ---- */
+const COMBO_MAP = {};
+function comboLabel(c){ return c.model+" "+(c.trim||"")+" "+c.ext+"/"+c.int+" ("+c.code+")"; }
+function buildComboList(){
+  let dl=document.getElementById("combolist"); dl.innerHTML="";
+  ROSTER.forEach(c=>{ let label=comboLabel(c); COMBO_MAP[label]={model:c.model,code:c.code,ext:c.ext,int:c.int};
+    let o=document.createElement("option"); o.value=label; dl.appendChild(o); });
+}
+function addTradeRow(t){ t=t||{};
+  let row=document.createElement("div"); row.className="traderow";
+  row.innerHTML =
+    "<input type='date' class='t-date' value='"+(t.date||"")+"'>"+
+    "<input class='t-combo' list='combolist' placeholder='pick a combo…' value=\""+(t.label||"")+"\">"+
+    "<input type='number' class='t-days' min='0' placeholder='days' value='"+(t.days!=null?t.days:"")+"'>"+
+    "<button class='del' title='remove'>✕</button>";
+  row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistTrades(); });
+  row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistTrades(); }));
+  document.getElementById("tradeRows").appendChild(row);
+  return row;
+}
+function readTrades(){
+  let out=[];
+  document.querySelectorAll("#tradeRows .traderow").forEach(row=>{
+    let label=row.querySelector(".t-combo").value.trim();
+    let days=row.querySelector(".t-days").value;
+    let date=row.querySelector(".t-date").value;
+    let c=COMBO_MAP[label];
+    if(!c || days==="") return;                       // need a valid combo + days
+    out.push({date:date,model:c.model,code:c.code,ext:c.ext,int:c.int,days:parseFloat(days),label:label});
+  });
+  return out;
+}
+function persistTrades(){ try{ localStorage.setItem("pm_trades",JSON.stringify(readTrades())); }catch(e){} }
+function restoreTrades(){ try{ let t=JSON.parse(localStorage.getItem("pm_trades")||"[]"); t.forEach(addTradeRow); }catch(e){} }
+
 function markFilled(){
   document.getElementById("inv").classList.toggle("ok", document.getElementById("inv").value.trim()!=="");
   document.getElementById("sales").classList.toggle("ok", document.getElementById("sales").value.trim()!==""); }
@@ -751,6 +812,9 @@ window.addEventListener("DOMContentLoaded",function(){
     try{ localStorage.removeItem("pm_inv"); localStorage.removeItem("pm_sales"); }catch(e){} });
   document.getElementById("inv").addEventListener("input",markFilled);
   document.getElementById("sales").addEventListener("input",markFilled);
+  buildComboList();
+  document.getElementById("addTrade").addEventListener("click",function(){ addTradeRow(); });
+  restoreTrades();
   function toggleManual(){ document.getElementById("manualwins").style.display =
     document.getElementById("wmode").value==="manual" ? "flex" : "none"; }
   document.getElementById("wmode").addEventListener("change",toggleManual);

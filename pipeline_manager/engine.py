@@ -147,6 +147,37 @@ def compute_time_base(sales: list[Sale], today: _dt.date) -> TimeBase:
 # --------------------------------------------------------------------------- #
 # Per-config metrics (learned from sales history)
 # --------------------------------------------------------------------------- #
+def _trade_midx(value):
+    """Month index from a trade date: YYYY-MM-DD, YYYY-MM, or YYYYMM."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, (_dt.date, _dt.datetime)):
+        return value.year * 12 + value.month
+    s = str(value).strip()
+    m = re.match(r"^(\d{4})[-/]?(\d{2})", s)
+    if m:
+        return int(m.group(1)) * 12 + int(m.group(2))
+    return None
+
+
+def _trade_records(trades, tb: TimeBase) -> list:
+    """Normalise raw trade dicts into {key, model, midx, days} records."""
+    from .keys import build_key, coerce_num, digits_only, model_from_code
+    out = []
+    for t in trades or []:
+        code = digits_only(t.get("code"))
+        model = t.get("model") or model_from_code(code)
+        ext = str(t.get("ext", "")).strip()
+        interior = str(t.get("int", t.get("interior", ""))).strip()
+        key = build_key(model, code, ext, interior)
+        if not key or not model:
+            continue
+        days = coerce_num(t.get("days"), None) if t.get("days") not in (None, "") else None
+        out.append({"key": key, "model": model,
+                    "midx": _trade_midx(t.get("date")), "days": days})
+    return out
+
+
 def compute_metrics(sales: list[Sale], tb: TimeBase, s: Settings,
                     roster: list[dict]) -> dict:
     """Build ConfigMetrics for every config the sales history has seen, plus a
@@ -172,6 +203,26 @@ def compute_metrics(sales: list[Sale], tb: TimeBase, s: Settings,
             m.r90 += 1
         if sale.midx > tb.latest_midx - 6:
             m.r180 += 1
+
+    # Fold in outbound dealer trades. A trade out is a sale out the other door:
+    # it grades that config's speed to enter/exit inventory (its days-in-stock
+    # feeds DTS), counts toward lifetime and recent demand, and so moves PRATE,
+    # momentum, and the sell/wholesale rate exactly like a showroom sale.
+    for tr in _trade_records(getattr(s, "trades", []), tb):
+        m = metrics.get(tr["key"])
+        if m is None:
+            _, code, ext, interior = tr["key"].split("|")
+            m = ConfigMetrics(tr["key"], tr["model"], code, ext, interior)
+            metrics[tr["key"]] = m
+        m.total += 1
+        if tr["days"] is not None:
+            m._dts_sum = getattr(m, "_dts_sum", 0.0) + tr["days"]
+            m._dts_cnt = getattr(m, "_dts_cnt", 0) + 1
+        if tr["midx"] and tb.latest_midx:
+            if tr["midx"] > tb.latest_midx - 3:
+                m.r90 += 1
+            if tr["midx"] > tb.latest_midx - 6:
+                m.r180 += 1
 
     # Seed every roster combo the sales history never mentioned as a *known*
     # zero config.  This is the found-with-base-0 case (a dormant catalog combo),

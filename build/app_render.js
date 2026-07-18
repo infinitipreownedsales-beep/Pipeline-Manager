@@ -107,9 +107,10 @@ function render(res){
   let winTxt = s.mode==="CPO"
     ? " · arrival lead "+MODELS.map(m=>m+" "+(res.windows[m]).toFixed(1)+"mo").join(" / ")
     : "";
+  let tradeTxt = (s.trades&&s.trades.length) ? " · <b style='color:var(--teal)'>"+s.trades.length+" dealer trade"+(s.trades.length>1?"s":"")+" graded</b>" : "";
   H.push("<div class='foot noprint' style='margin:-6px 2px 6px'>Recomputed "+tb.today.toISOString().slice(0,10)+
     " · order month <b style='color:var(--ink2)'>"+MONTHS[s.order_month-1]+"</b> · mode <b style='color:var(--ink2)'>"+s.mode+
-    "</b>"+winTxt+" · "+res.invCount+" inventory units · "+res.salesCount+" sales rows</div>");
+    "</b>"+winTxt+" · "+res.invCount+" inventory units · "+res.salesCount+" sales rows"+tradeTxt+"</div>");
 
   // 1. ORDER PRIORITY
   H.push(sec(1,"Order Priority","teal = where you'll be at arrival · orange = whole trucks to order"));

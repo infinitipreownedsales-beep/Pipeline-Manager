@@ -13,8 +13,43 @@ function getSettings(){
     suppress:DEFAULTS.suppress, demote:DEFAULTS.demote, overrides:DEFAULTS.overrides,
     demo_stocks:DEFAULTS.demo_stocks, demo_starts:DEFAULTS.demo_starts, aged_memory:[],
     prove_bar:2, swap_threshold:90, rate_cap:5.0, paperweight_dts:90, wholesale_min_age:60, stall_days:120, aged_days:60,
-    anticipate_demo_returns:true,
+    anticipate_demo_returns:true, trades:readTrades(),
     demo_pick_max_dts:45, demo_pick_min_total:2, demo_pick_min_r180:2, demo_picks_per_model:3, demo_vins_per_combo:2 }; }
+/* ---- outbound dealer trade log ---- */
+const COMBO_MAP = {};
+function comboLabel(c){ return c.model+" "+(c.trim||"")+" "+c.ext+"/"+c.int+" ("+c.code+")"; }
+function buildComboList(){
+  let dl=document.getElementById("combolist"); dl.innerHTML="";
+  ROSTER.forEach(c=>{ let label=comboLabel(c); COMBO_MAP[label]={model:c.model,code:c.code,ext:c.ext,int:c.int};
+    let o=document.createElement("option"); o.value=label; dl.appendChild(o); });
+}
+function addTradeRow(t){ t=t||{};
+  let row=document.createElement("div"); row.className="traderow";
+  row.innerHTML =
+    "<input type='date' class='t-date' value='"+(t.date||"")+"'>"+
+    "<input class='t-combo' list='combolist' placeholder='pick a combo…' value=\""+(t.label||"")+"\">"+
+    "<input type='number' class='t-days' min='0' placeholder='days' value='"+(t.days!=null?t.days:"")+"'>"+
+    "<button class='del' title='remove'>✕</button>";
+  row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistTrades(); });
+  row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistTrades(); }));
+  document.getElementById("tradeRows").appendChild(row);
+  return row;
+}
+function readTrades(){
+  let out=[];
+  document.querySelectorAll("#tradeRows .traderow").forEach(row=>{
+    let label=row.querySelector(".t-combo").value.trim();
+    let days=row.querySelector(".t-days").value;
+    let date=row.querySelector(".t-date").value;
+    let c=COMBO_MAP[label];
+    if(!c || days==="") return;                       // need a valid combo + days
+    out.push({date:date,model:c.model,code:c.code,ext:c.ext,int:c.int,days:parseFloat(days),label:label});
+  });
+  return out;
+}
+function persistTrades(){ try{ localStorage.setItem("pm_trades",JSON.stringify(readTrades())); }catch(e){} }
+function restoreTrades(){ try{ let t=JSON.parse(localStorage.getItem("pm_trades")||"[]"); t.forEach(addTradeRow); }catch(e){} }
+
 function markFilled(){
   document.getElementById("inv").classList.toggle("ok", document.getElementById("inv").value.trim()!=="");
   document.getElementById("sales").classList.toggle("ok", document.getElementById("sales").value.trim()!==""); }
@@ -58,6 +93,9 @@ window.addEventListener("DOMContentLoaded",function(){
     try{ localStorage.removeItem("pm_inv"); localStorage.removeItem("pm_sales"); }catch(e){} });
   document.getElementById("inv").addEventListener("input",markFilled);
   document.getElementById("sales").addEventListener("input",markFilled);
+  buildComboList();
+  document.getElementById("addTrade").addEventListener("click",function(){ addTradeRow(); });
+  restoreTrades();
   function toggleManual(){ document.getElementById("manualwins").style.display =
     document.getElementById("wmode").value==="manual" ? "flex" : "none"; }
   document.getElementById("wmode").addEventListener("change",toggleManual);

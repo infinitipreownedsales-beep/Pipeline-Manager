@@ -31,6 +31,12 @@
     { "key": "QX80|8361|XLF|G", "active": 1 }
   ],
 
+  "_trades_comment": "Outbound dealer trades. Each is a sale out the other door; 'days' is days-in-stock at trade (grades speed to enter/exit inventory). date drives recency (R90/R180).",
+  "trades": [
+    { "date": "2026-06-25", "model": "QX80", "code": "8361", "ext": "XKJ", "int": "A", "days": 45 },
+    { "date": "2026-06-25", "model": "QX80", "code": "8361", "ext": "XLF", "int": "G", "days": 217 }
+  ],
+
   "prove_bar": 2,
   "swap_threshold": 90,
   "rate_cap": 5.0,

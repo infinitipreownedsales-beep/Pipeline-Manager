@@ -97,12 +97,22 @@ function timeBase(sales, today){
   let latest=Math.max.apply(null,midxs), earliest=Math.min.apply(null,midxs), open=latest===cur;
   let part=open?Math.max(0.05,today.getDate()/daysInMonth(today)):1, span=Math.max(0.25,(latest-earliest+1)-(1-part));
   return {latest:latest,earliest:earliest,cur:cur,part:part,span:span,el90:2+part,el180:5+part,open:open,today:today}; }
-function computeMetrics(sales, tb, roster){
+function tradeMidx(v){ if(!v) return null; let m=String(v).match(/^(\d{4})[-/]?(\d{2})/); return m?parseInt(m[1],10)*12+parseInt(m[2],10):null; }
+function tradeRecords(trades){ let out=[]; (trades||[]).forEach(t=>{
+  let code=digitsOnly(t.code), model=t.model||modelFromCode(code), ext=String(t.ext||"").trim(), intr=String(t.int||t.interior||"").trim();
+  let key=buildKey(model,code,ext,intr); if(!key||!model) return;
+  let days=(t.days===null||t.days===undefined||t.days==="")?null:coerceNum(t.days,null);
+  out.push({key:key,model:model,midx:tradeMidx(t.date),days:days}); }); return out; }
+function computeMetrics(sales, tb, roster, trades){
   let M={};
   sales.forEach(s=>{ if(!s.firstVin||!s.key||!s.model) return;
     let m=M[s.key]; if(!m){ m={key:s.key,model:s.model,code:s.code.slice(0,4),ext:s.ext,int:s.int,total:0,dtsSum:0,dtsCnt:0,r90:0,r180:0,dts:null,hist60:0,prate:0,momentum:"dormant",floor:0,base:0}; M[s.key]=m; }
     m.total++; if(s.dts!==null){ m.dtsSum+=s.dts; m.dtsCnt++; }
     if(s.midx>tb.latest-3) m.r90++; if(s.midx>tb.latest-6) m.r180++; });
+  tradeRecords(trades).forEach(tr=>{ let m=M[tr.key];
+    if(!m){ let p=tr.key.split("|"); m={key:tr.key,model:tr.model,code:p[1],ext:p[2],int:p[3],total:0,dtsSum:0,dtsCnt:0,r90:0,r180:0,dts:null,hist60:0,prate:0,momentum:"dormant",floor:0,base:0}; M[tr.key]=m; }
+    m.total++; if(tr.days!==null){ m.dtsSum+=tr.days; m.dtsCnt++; }
+    if(tr.midx&&tb.latest){ if(tr.midx>tb.latest-3) m.r90++; if(tr.midx>tb.latest-6) m.r180++; } });
   roster.forEach(c=>{ let k=c.model+"|"+c.code+"|"+c.ext+"|"+c.int;
     if(!M[k]) M[k]={key:k,model:c.model,code:c.code,ext:c.ext,int:c.int,total:0,dtsSum:0,dtsCnt:0,r90:0,r180:0,dts:null,hist60:0,prate:0,momentum:"dormant",floor:0,base:0}; });
   Object.values(M).forEach(m=>{
@@ -242,7 +252,7 @@ function findOrphans(sales,roster){ let rk={}; roster.forEach(c=>rk[c.model+"|"+
   let seen={}; sales.forEach(s=>{ if(s.firstVin&&s.key&&!rk[s.key]) seen[s.key]=(seen[s.key]||0)+1; });
   return Object.keys(seen).map(k=>({key:k,sales:seen[k]})).sort((a,b)=>b.sales-a.sales); }
 function runEngine(inv,sales,s,today){
-  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,ROSTER), seas=computeSeasonality(sales,tb), positions=computePositions(inv,metrics,s);
+  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,ROSTER,s.trades), seas=computeSeasonality(sales,tb), positions=computePositions(inv,metrics,s);
   let agedBrakes={}; (s.aged_memory||[]).forEach(e=>{ if(e.active===undefined||e.active===1||e.active===true||e.active==="1") agedBrakes[e.key]=(agedBrakes[e.key]||0)+1; });
   let overrideMap={}; s.overrides.forEach(e=>{ overrideMap[e.key]=(overrideMap[e.key]||0)+parseInt(e.qty||0,10); });
   let windows=resolveWindows(inv,today,s);

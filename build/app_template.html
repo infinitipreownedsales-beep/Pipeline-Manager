@@ -116,6 +116,14 @@
   details.exp summary::-webkit-details-marker{display:none}
   details.exp summary::before{content:"▸ ";color:var(--muted)}
   details.exp[open] summary::before{content:"▾ "}
+  /* trade log editor */
+  .traderow{display:grid;grid-template-columns:140px 1fr 120px 34px;gap:8px;align-items:center;margin-bottom:6px}
+  .traderow.thead{margin-bottom:4px}
+  .traderow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .traderow input{width:100%}
+  .traderow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 0;font-size:14px}
+  .traderow .del:hover{border-color:var(--bad);color:var(--bad)}
+  @media(max-width:640px){.traderow{grid-template-columns:1fr 1fr;}.traderow.thead{display:none}}
   /* executive demo board */
   .demogrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
   @media(max-width:900px){.demogrid{grid-template-columns:1fr}}
@@ -178,6 +186,13 @@
       <div><label class="top">Speed-to-Sell (sales history)</label>
         <textarea id="sales" placeholder="Paste the Speed-to-Sell export here (with its header row)…"></textarea>
         <div class="filerow"><input type="file" id="salesfile" accept=".csv,.txt,.tsv"><span id="salesstat"></span></div></div>
+    </div>
+    <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
+      <label class="top">Outbound dealer trade log <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— a trade out is a sale out the other door; days-in-stock grades its speed to enter/exit inventory</span></label>
+      <div id="tradeHead" class="traderow thead"><span>Date</span><span>Combo</span><span>Days in stock</span><span></span></div>
+      <div id="tradeRows"></div>
+      <button class="ghost" id="addTrade" style="margin-top:8px">＋ Add trade</button>
+      <datalist id="combolist"></datalist>
     </div>
     <div style="margin-top:11px;display:flex;gap:9px;align-items:center;flex-wrap:wrap">
       <button class="primary" id="run">Compute order ▶</button>

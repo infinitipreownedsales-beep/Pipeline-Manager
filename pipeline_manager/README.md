@@ -60,9 +60,14 @@ python -m pipeline_manager --help
    EXT CODE, INT CODE`, ~23 months of history.
 
 Everything a human turns to steer the engine — order month, mode, allocations,
-the suppress/demote/override lists, the demo roster, aged-unit brakes — is
-*control state*, not data. It lives in `config.json` (see `config.example.json`),
-defaulting to the state the source workbook shipped with.
+the suppress/demote/override lists, the demo roster, aged-unit brakes, the
+outbound dealer **trade log** — is *control state*, not data. It lives in
+`config.json` (see `config.example.json`), defaulting to the state the source
+workbook shipped with. Each outbound trade (`{date, code, ext, int, days}`) is a
+sale out the other door: its days-in-stock grades that config's speed to enter
+and exit inventory exactly like a showroom sale (a 15-day trade reads fast, a
+115-day trade slow), feeding DTS, recent demand, and the sell/wholesale rate.
+The app has an editable trade-log panel; the CLI reads it from `config.json`.
 
 ## The five outputs
 
