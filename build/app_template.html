@@ -174,6 +174,8 @@
   .lchip{background:#0c1420;border:1px solid var(--line);border-radius:7px;padding:2px 8px;font-size:11px;color:var(--ink2);font-variant-numeric:tabular-nums}
   .lchip b{color:var(--teal);font-weight:700}
   .lbonus-ok{color:var(--good);font-weight:700} .lbonus-no{color:var(--bad);font-weight:700}
+  .loancard.upside{border-color:rgba(248,113,113,.45)}
+  .lwarn{font-size:11px;color:var(--bad);background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);border-radius:7px;padding:4px 8px;margin:2px 0 6px}
   .lmodeled{font-size:10px;color:var(--muted);border:1px dashed var(--line2);border-radius:6px;padding:1px 6px}
   .lmeasured{font-size:10px;color:var(--teal);border:1px solid var(--teal-hd);border-radius:6px;padding:1px 6px}
   .lkpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:6px 0 14px}
@@ -306,6 +308,9 @@
         <div class="fld"><label>ICV $ QX80</label><input type="number" id="licv80" value="0" title="one-time allowance per unit"></div>
         <div class="fld"><label>ICV $ QX60</label><input type="number" id="licv60" value="0" title="one-time allowance per unit"></div>
         <div class="fld"><label>ICV $ QX65</label><input type="number" id="licv65" value="0" title="one-time allowance per unit"></div>
+        <div class="fld"><label>Rebate QX80</label><input type="number" id="reb80" value="0" title="current customer rebate — new sells at invoice minus this"></div>
+        <div class="fld"><label>Rebate QX60</label><input type="number" id="reb60" value="0" title="current customer rebate — new sells at invoice minus this"></div>
+        <div class="fld"><label>Rebate QX65</label><input type="number" id="reb65" value="0" title="current customer rebate — new sells at invoice minus this"></div>
         <div class="fld"><label>Write-down %/mo</label><input type="number" id="ldepr" value="1.25" step="0.05"></div>
         <div class="fld"><label>% taken off</label><select id="lbase"><option value="cost">Invoice cost</option><option value="msrp">MSRP</option></select></div>
         <div class="fld"><label>Min mo (ICV)</label><input type="number" id="lmin" value="3"></div>
@@ -315,7 +320,7 @@
         <div class="fld"><label>Velocity bonus $</label><input type="number" id="lbonus" value="2500"></div>
         <div class="fld"><label>Miles/mo</label><input type="number" id="lmpm" value="1200"></div>
         <div class="fld"><label>Recon $</label><input type="number" id="lrecon" value="0"></div>
-        <div class="fld"><label>Used % of invoice</label><input type="number" id="lret" value="1.00" step="0.01" title="modeled used price as a share of your invoice/new selling price"></div>
+        <div class="fld"><label>Used % of cheapest-new</label><input type="number" id="lret" value="0.80" step="0.01" title="modeled used price as a share of the cheapest new price (invoice − rebate), until real used data is pasted"></div>
         <div class="fld"><label>Fleet target</label><input type="number" id="lfleet" value="20"></div>
       </div>
       <div style="margin-top:10px">

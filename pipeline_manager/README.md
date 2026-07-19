@@ -96,20 +96,21 @@ quickly once it has miles; repeat demand only, never a one-off), VIN-led where
 in stock and flagged to order when not.
 
 And a **Loaner / ICV Program** dashboard — which units to cycle through the
-courtesy fleet for the best *preowned* profit. INFINITI's one-time ICV allowance
-(booked the month the unit is reported into service) and the 1.25%/month
-write-down both lower a unit's cost basis; a unit must serve ≥ 3 months to keep
-the ICV and be retailed within 7 months under 10k miles for the $2,500 velocity
-bonus. The board computes each candidate's used gross after those
-write-downs and flags whether it clears the used window, ranks the best combos to
-designate (VIN-led, opportunity cost weighed since loaners replace retailable
-units), and shows the in-service fleet with each unit's age, miles, ICV earned
-and a cascading release schedule to hold ~20 in service. Preowned velocity and
-price come from a pasted used/CPO sales report when you have one, or are modeled
-from the new-car demand signal until you do (used price defaults to a share of
-*invoice*, since this store prices new at invoice — so a nearly-new loaner's used
-front gross is essentially the write-downs it banked, with backend on top). All
-ICV / write-down / bonus / price figures are editable.
+courtesy fleet without losing money on the *preowned* side, done as three math
+problems: **(1)** the true cost per combo (invoice); **(2)** the used value — what
+a comparable current / 1-model-year-old unit sells for, modeled until you paste
+real data as **80% of the cheapest new price**, where cheapest-new = *invoice −
+rebate* (what a customer can buy a new one for); **(3)** the result — the one-time
+ICV allowance, the 1.25%/month write-down, and the $2,500 velocity bonus reduce
+the cost basis *only when the unit retires from the fleet*, and **preowned gross =
+used value − that adjusted cost** tells you whether the resale profits or is
+**upside down** (cost above street/auction value — you'd re-buy it cheaper). The
+board ranks candidates by that gross, flags upside-down units, checks the bonus
+window, and shows the in-service fleet with each unit's age, miles, ICV earned
+and a cascading release schedule to hold the fleet target. Used velocity and price
+come from your own used sales and public wholesale/auction comps when pasted;
+otherwise the 80% floor stands in. All rebate / ICV / write-down / bonus / price
+figures are editable.
 
 ## How the engine thinks (the short version)
 

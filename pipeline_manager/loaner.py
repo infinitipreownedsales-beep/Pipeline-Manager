@@ -5,14 +5,26 @@ The one thing the retail engine can't see is how a unit moves on the *preowned*
 side — so this module is where preowned velocity and price live, either measured
 from a pasted used/CPO sales history or modeled from the new-car demand signal.
 
-The money model (all of it lowers the unit's cost basis):
+Three math problems, done in order:
 
-    icv_total   = ICV[model]                          (ONE-TIME, booked the month
-                                                       the unit is reported in)
-    depr_total  = (cost or MSRP) x depr% x service_months
-    bonus       = velocity_bonus  IF  retailed within max_months AND under mile_cap
+  1. COST — the true cost per combo (invoice, from the inventory export).
+  2. USED VALUE — what a comparable current / 1-MY-old unit sells for. Until real
+     data is pasted this is modeled as 80% of the CHEAPEST NEW price, and the
+     cheapest new price is invoice MINUS the current rebate (what a customer can
+     buy a *new* one for). Real used sales + public wholesale/auction comps
+     replace the 80% — that street price is what you could re-buy the unit for,
+     so a written-down cost above it means you're upside down.
+  3. RESULT — the write-downs only reduce the preowned cost basis WHEN the unit
+     retires from the fleet; then preowned_gross tells you if the retail resale
+     is at (or near) profit.
+
+    cheapest_new  = cost - rebate[model]
+    used_price    = measured  ELSE  preowned_price_pct x cheapest_new   (~0.80)
+    icv_total     = ICV[model]                      (ONE-TIME, booked at report-in)
+    depr_total    = (cost or MSRP) x depr% x service_months
+    bonus         = velocity_bonus IF retailed within max_months AND under mile_cap
     adjusted_cost = cost - icv_total - depr_total - bonus
-    used_gross    = expected_used_price - adjusted_cost - recon
+    preowned_gross = used_price - adjusted_cost - recon      (can be negative)
 
 The ICV is a single allowance per vehicle, not a monthly one; the unit must stay
 in service >= min months to keep it. Only the write-down accrues monthly.
@@ -104,10 +116,16 @@ def compute_preowned(s, metrics, inventory) -> dict:
             agg["p"] += price
             agg["pc"] += 1
 
+    def modeled_price(tkey):
+        model = tkey.split("|")[0]
+        rebate = float((s.rebates or {}).get(model, 0) or 0)
+        cheapest_new = max(0.0, cost_trim.get(tkey, 0.0) - rebate)
+        return cheapest_new * s.preowned_price_pct
+
     out: dict[str, PreownedStat] = {}
     for tkey, a in measured.items():
         dts = a["d"] / a["dc"] if a["dc"] else _model_avg_dts(metrics, tkey.split("|")[0])
-        price = a["p"] / a["pc"] if a["pc"] else (cost_trim.get(tkey, 0.0) * s.preowned_price_pct)
+        price = a["p"] / a["pc"] if a["pc"] else modeled_price(tkey)
         out[tkey] = PreownedStat(round(dts, 1), round(price, 0), a["n"], modeled=False)
 
     # Modeled fallback for every trim in the pipeline not already measured.
@@ -117,8 +135,7 @@ def compute_preowned(s, metrics, inventory) -> dict:
             continue
         model = tkey.split("|")[0]
         used_dts = _trim_new_dts(metrics, tkey) or _model_avg_dts(metrics, model) or 45.0
-        used_price = cost_trim.get(tkey, 0.0) * s.preowned_price_pct
-        out[tkey] = PreownedStat(round(used_dts, 1), round(used_price, 0), 0, modeled=True)
+        out[tkey] = PreownedStat(round(used_dts, 1), round(modeled_price(tkey), 0), 0, modeled=True)
     return out
 
 
@@ -147,11 +164,12 @@ def _model_avg_dts(metrics, model) -> float | None:
 # --------------------------------------------------------------------------- #
 # The shared money model (Python + JS must agree)
 # --------------------------------------------------------------------------- #
-def loaner_economics(cost, msrp, model, used_dts, used_price, s) -> dict:
+def loaner_economics(cost, msrp, model, used_dts, used_price, s, rebate=0.0) -> dict:
     """Full loaner P&L for one unit at the planned service length.
 
-    Returns the write-down stack, whether the velocity bonus is captured, the
-    adjusted cost basis, and the used gross that results.
+    Returns the cheapest-new price, the write-down stack, whether the velocity
+    bonus is captured, the adjusted cost basis, and the preowned gross that
+    results (negative = upside down: you could re-buy it cheaper on the street).
     """
     icv = float((s.loaner_icv or {}).get(model, 0) or 0)
     svc = max(0, int(s.loaner_service_months))
@@ -165,14 +183,19 @@ def loaner_economics(cost, msrp, model, used_dts, used_price, s) -> dict:
     bonus_ok = (sale_month <= s.loaner_max_months) and (miles_at_sale < s.loaner_mile_cap)
     bonus = float(s.loaner_velocity_bonus) if bonus_ok else 0.0
 
+    cheapest_new = max(0.0, cost - float(rebate or 0))
     adjusted_cost = cost - icv_total - depr_total - bonus
-    used_gross = (used_price or 0) - adjusted_cost - float(s.loaner_recon)
+    preowned_gross = (used_price or 0) - adjusted_cost - float(s.loaner_recon)
     return {
-        "cost": round(cost, 0), "msrp": round(msrp, 0),
+        "cost": round(cost, 0), "msrp": round(msrp, 0), "rebate": round(float(rebate or 0), 0),
+        "cheapest_new": round(cheapest_new, 0),
         "icv_total": round(icv_total, 0), "depr_total": round(depr_total, 0),
         "bonus": round(bonus, 0), "bonus_ok": bonus_ok,
         "adjusted_cost": round(adjusted_cost, 0),
-        "used_price": round(used_price or 0, 0), "used_gross": round(used_gross, 0),
+        "used_price": round(used_price or 0, 0),
+        # kept as `used_gross` for the report/UI key, but it is the preowned gross
+        "used_gross": round(preowned_gross, 0),
+        "upside_down": preowned_gross < 0,
         "sale_month": round(sale_month, 1), "miles_at_sale": int(miles_at_sale),
         "service_months": svc,
     }
@@ -184,15 +207,15 @@ def loaner_economics(cost, msrp, model, used_dts, used_price, s) -> dict:
 def _loaner_score(econ, pstat, metric) -> float:
     """Rank a config as a loaner candidate.
 
-    Primary: real used gross (scaled to a ~0-40 band). Then reward fast used
-    turn and a captured bonus. Lightly penalize burning a very fast NEW seller
-    (opportunity cost — you'd rather retail those new).
+    Primary: preowned gross — the profit (or loss) once it retires from the fleet
+    and retails used. Losses drag hard (an upside-down unit you'd re-buy cheaper on
+    the street is the opposite of a good loaner). Then reward fast used turn and a
+    captured bonus, and lightly penalize burning a very fast NEW seller.
     """
     gross = econ["used_gross"]
-    gross_band = max(-10.0, min(40.0, gross / 250.0))        # $10k gross -> 40
+    gross_band = max(-60.0, min(40.0, gross / 500.0))         # $20k gross -> 40; losses drag
     vel = max(0.0, (60 - (pstat.used_dts or 60)) / 60.0) * 20  # faster used = better
     bonus_band = 10.0 if econ["bonus_ok"] else 0.0
-    # Opportunity cost: a config selling fast new loses a quick new sale.
     opp = 0.0
     if metric and metric.dts is not None and metric.r90 >= 2 and metric.dts <= 30:
         opp = -8.0
@@ -225,11 +248,14 @@ def loaner_candidates(res) -> dict:
             if cost <= 0 and msrp <= 0:
                 continue
             metric = res.metrics.get(l.key)
+            rebate = float((s.rebates or {}).get(model, 0) or 0)
             # Measured used price is trim-level (its data granularity); a modeled
-            # price is anchored to THIS config's own invoice, so at 100% the used
-            # gross is exactly the write-downs (never "sell used above invoice").
-            used_price = cost * s.preowned_price_pct if pstat.modeled else pstat.used_price
-            econ = loaner_economics(cost, msrp, model, pstat.used_dts, used_price, s)
+            # price is anchored to THIS config's own cheapest-new (invoice - rebate)
+            # at preowned_price_pct (~80%).
+            used_price = (max(0.0, cost - rebate) * s.preowned_price_pct
+                          if pstat.modeled else pstat.used_price)
+            econ = loaner_economics(cost, msrp, model, pstat.used_dts, used_price, s,
+                                    rebate=rebate)
             pos = res.positions.get(l.key)
             # Fresh, low-days, non-demo units are the natural loaner picks.
             fresh = sorted(pos.onlot_units, key=lambda u: u.dis) if pos else []
@@ -255,8 +281,11 @@ def loaner_candidates(res) -> dict:
 
 def _cand_reason(econ, pstat, line) -> str:
     src = "modeled" if pstat.modeled else f"{pstat.count} used sales"
-    bits = [f"${int(econ['used_gross']):,} used gross",
+    g = int(econ["used_gross"])
+    bits = [(f"${g:,} preowned profit" if g >= 0 else f"-${abs(g):,} preowned LOSS"),
             f"{int(pstat.used_dts)}-day used turn ({src})"]
+    if econ["upside_down"]:
+        bits.append("⚠ upside-down vs. street")
     bits.append("✓ bonus" if econ["bonus_ok"] else "✗ misses bonus window")
     if line.dts is not None and line.dts <= 30 and line.momentum in ("ACCEL", "steady"):
         bits.append("fast new-seller — weigh opportunity cost")

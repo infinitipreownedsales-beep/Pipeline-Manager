@@ -296,8 +296,10 @@ function trimNewDts(metrics,model,code){ let v=[]; Object.values(metrics).forEac
   return v.length?v.reduce((a,b)=>a+b,0)/v.length:null; }
 function modelAvgDts(metrics,model){ let v=[]; Object.values(metrics).forEach(m=>{ if(m.model===model&&m.dts!==null&&m.total>0) v.push(m.dts); });
   return v.length?v.reduce((a,b)=>a+b,0)/v.length:null; }
+function modelRebate(s,model){ return parseFloat((s.rebates||{})[model]||0)||0; }
 function computePreowned(s,metrics,inv){
   let rm=repMaps(inv), measured={};
+  function modeledPrice(tk){ let model=tk.split("|")[0]; let cn=Math.max(0,(rm.costTrim[tk]||0)-modelRebate(s,model)); return cn*s.preowned_price_pct; }
   (s.preowned_sales||[]).forEach(r=>{ let code=digitsOnly(r.code).slice(0,4), model=String(r.model||"").trim().toUpperCase();
     if(!model||!code) return; let tk=model+"|"+code, days=loanerNum(r.days), price=loanerNum(r.price)||loanerNum(r.gross);
     let a=measured[tk]||(measured[tk]={d:0,dc:0,p:0,pc:0,n:0}); a.n++;
@@ -305,31 +307,33 @@ function computePreowned(s,metrics,inv){
   let out={};
   Object.keys(measured).forEach(tk=>{ let a=measured[tk], model=tk.split("|")[0];
     let dts=a.dc?a.d/a.dc:(modelAvgDts(metrics,model)||45);
-    let price=a.pc?a.p/a.pc:((rm.costTrim[tk]||0)*s.preowned_price_pct);
+    let price=a.pc?a.p/a.pc:modeledPrice(tk);
     out[tk]={usedDts:Math.round(dts*10)/10,usedPrice:Math.round(price),count:a.n,modeled:false}; });
   let trims={}; inv.forEach(u=>{ if(u.key) trims[u.model+"|"+u.key.split("|")[1]]=1; });
   Object.keys(trims).forEach(tk=>{ if(out[tk]) return; let p=tk.split("|"), model=p[0], code=p[1];
     let dts=trimNewDts(metrics,model,code)||modelAvgDts(metrics,model)||45;
-    let price=(rm.costTrim[tk]||0)*s.preowned_price_pct;
-    out[tk]={usedDts:Math.round(dts*10)/10,usedPrice:Math.round(price),count:0,modeled:true}; });
+    out[tk]={usedDts:Math.round(dts*10)/10,usedPrice:Math.round(modeledPrice(tk)),count:0,modeled:true}; });
   return out; }
-function loanerEconomics(cost,msrp,model,usedDts,usedPrice,s){
+function loanerEconomics(cost,msrp,model,usedDts,usedPrice,s,rebate){
+  rebate=parseFloat(rebate||0)||0;
   let icv=parseFloat((s.loaner_icv||{})[model]||0)||0, svc=Math.max(0,parseInt(s.loaner_service_months,10)||0);
   let icvTotal=icv, baseVal=(String(s.loaner_depr_base).toLowerCase()==="msrp")?msrp:cost;  // ICV is one-time
   let deprTotal=baseVal*(s.loaner_depr_pct/100)*svc;
   let usedMonths=(usedDts||0)/DPM, saleMonth=svc+usedMonths, miles=s.loaner_miles_per_month*svc;
   let bonusOk=(saleMonth<=s.loaner_max_months)&&(miles<s.loaner_mile_cap), bonus=bonusOk?parseFloat(s.loaner_velocity_bonus):0;
-  let adj=cost-icvTotal-deprTotal-bonus, gross=(usedPrice||0)-adj-parseFloat(s.loaner_recon||0);
-  return {cost:Math.round(cost),msrp:Math.round(msrp),icvTotal:Math.round(icvTotal),deprTotal:Math.round(deprTotal),
-    bonus:Math.round(bonus),bonusOk:bonusOk,adjustedCost:Math.round(adj),usedPrice:Math.round(usedPrice||0),
-    usedGross:Math.round(gross),saleMonth:Math.round(saleMonth*10)/10,milesAtSale:Math.round(miles),serviceMonths:svc}; }
+  let cheapestNew=Math.max(0,cost-rebate), adj=cost-icvTotal-deprTotal-bonus, gross=(usedPrice||0)-adj-parseFloat(s.loaner_recon||0);
+  return {cost:Math.round(cost),msrp:Math.round(msrp),rebate:Math.round(rebate),cheapestNew:Math.round(cheapestNew),
+    icvTotal:Math.round(icvTotal),deprTotal:Math.round(deprTotal),bonus:Math.round(bonus),bonusOk:bonusOk,
+    adjustedCost:Math.round(adj),usedPrice:Math.round(usedPrice||0),usedGross:Math.round(gross),upsideDown:gross<0,
+    saleMonth:Math.round(saleMonth*10)/10,milesAtSale:Math.round(miles),serviceMonths:svc}; }
 function loanerScore(econ,pstat,metric){
-  let gb=Math.max(-10,Math.min(40,econ.usedGross/250));
+  let gb=Math.max(-60,Math.min(40,econ.usedGross/500));
   let vel=Math.max(0,(60-(pstat.usedDts||60))/60)*20, bb=econ.bonusOk?10:0;
   let opp=(metric&&metric.dts!==null&&metric.r90>=2&&metric.dts<=30)?-8:0, mb=pstat.modeled?0:3;
   return gb+vel+bb+opp+mb; }
-function loanerCandReason(econ,pstat,line){ let src=pstat.modeled?"modeled":(pstat.count+" used sales");
-  let bits=["$"+Math.round(econ.usedGross).toLocaleString()+" used gross",Math.round(pstat.usedDts)+"-day used turn ("+src+")"];
+function loanerCandReason(econ,pstat,line){ let src=pstat.modeled?"modeled":(pstat.count+" used sales"); let g=Math.round(econ.usedGross);
+  let bits=[(g>=0?"$"+g.toLocaleString()+" preowned profit":"-$"+Math.abs(g).toLocaleString()+" preowned LOSS"),Math.round(pstat.usedDts)+"-day used turn ("+src+")"];
+  if(econ.upsideDown) bits.push("⚠ upside-down vs. street");
   bits.push(econ.bonusOk?"✓ bonus":"✗ misses bonus window");
   if(line.dts!==null&&line.dts<=30&&(line.mom==="ACCEL"||line.mom==="steady")) bits.push("fast new-seller — weigh opportunity cost");
   return bits.join(" · "); }
@@ -338,10 +342,10 @@ function loanerCandidates(res){ let s=res.settings, rm=repMaps(res.inv), pre=res
     res.lines.forEach(l=>{ if(l.model!==model||l.suppressed) return;
       let code=l.key.split("|")[1], tk=model+"|"+code, pstat=pre[tk]; if(!pstat) return;
       let cm=repCostMsrp(l.key,model,code,rm), cost=cm[0], msrp=cm[1]; if(cost<=0&&msrp<=0) return;
-      let metric=res.metrics[l.key]||null;
-      // modeled price anchors to this config's own invoice (measured stays trim-level)
-      let usedPrice=pstat.modeled?(cost*s.preowned_price_pct):pstat.usedPrice;
-      let econ=loanerEconomics(cost,msrp,model,pstat.usedDts,usedPrice,s);
+      let metric=res.metrics[l.key]||null, rebate=modelRebate(s,model);
+      // modeled price anchors to this config's cheapest-new (invoice - rebate); measured stays trim-level
+      let usedPrice=pstat.modeled?(Math.max(0,cost-rebate)*s.preowned_price_pct):pstat.usedPrice;
+      let econ=loanerEconomics(cost,msrp,model,pstat.usedDts,usedPrice,s,rebate);
       let pos=res.positions[l.key], fresh=pos?pos.onlotUnits.slice().sort((a,b)=>a.dis-b.dis):[];
       let units=fresh.slice(0,s.demo_vins_per_combo).map(u=>({stock:u.stock||"—",vin:(u.serial||u.stock),
         vin_last6:(u.serial||u.stock)?(u.serial||u.stock).slice(-6):"—",dis:Math.round(u.dis),msrp:u.msrp,cost:u.cost,

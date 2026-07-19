@@ -114,11 +114,16 @@ class Settings:
     loaner_velocity_bonus: float = 2500  # bonus $ when retailed in window & under cap
     loaner_miles_per_month: int = 1200   # miles a loaner accrues per month in service
     loaner_recon: float = 0.0            # per-unit recon/pack cost when retailed used
-    # Modeled used price as a share of INVOICE. This store prices new at invoice
-    # (speed-to-sell; the backend makes the money), so a nearly-new loaner retails
-    # used at ~that same invoice point -> 1.0. Used only until real preowned data
-    # is pasted; nudge up/down for a CPO premium or a mileage haircut.
-    preowned_price_pct: float = 1.0
+    # Customer rebate per model — the store sells new at invoice MINUS rebates
+    # (its cheapest new price), and that rebated price is the competition a used
+    # unit is valued against. Editable; changes with the incentive of the month.
+    rebates: dict = field(default_factory=lambda: {"QX80": 0, "QX60": 0, "QX65": 0})
+    # Modeled used price as a share of the CHEAPEST NEW price (invoice - rebate).
+    # 0.80 is a deliberately conservative floor "until you have better preowned
+    # data" — replace it by pasting your own used sales and public wholesale /
+    # auction comps (what a comparable unit costs on the street). If the written-
+    # down cost basis lands ABOVE that street value, the unit is upside down.
+    preowned_price_pct: float = 0.80
     # Current in-service fleet: each {stock, start (YYYY-MM-DD)[, miles, note]}.
     # Stock#s are prefix-matched and pulled out of sellable inventory.
     loaner_units: list = field(default_factory=list)

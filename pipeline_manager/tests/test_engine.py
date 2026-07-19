@@ -327,13 +327,34 @@ def test_loaner_economics_writes_down_cost_and_banks_bonus():
     s = Settings(loaner_icv={"QX80": 600, "QX60": 500, "QX65": 500},
                  loaner_depr_pct=1.25, loaner_service_months=3,
                  loaner_velocity_bonus=2500, loaner_recon=0)
-    # cost 60,000; MSRP 66,000; used sells in 30 days at 58,000.
-    e = loaner.loaner_economics(60000, 66000, "QX60", 30, 58000, s)
+    # cost 60,000; MSRP 66,000; used sells in 30 days at 58,000; $3k rebate.
+    e = loaner.loaner_economics(60000, 66000, "QX60", 30, 58000, s, rebate=3000)
     assert e["icv_total"] == 500                  # ONE-TIME allowance, not x months
     assert e["depr_total"] == round(60000 * 0.0125 * 3)   # 2,250 off invoice cost (monthly)
     assert e["bonus_ok"] and e["bonus"] == 2500   # 3mo + ~1mo <= 7, miles 3,600 < 10k
+    assert e["cheapest_new"] == 57000             # invoice 60k - rebate 3k
     assert e["adjusted_cost"] == 60000 - 500 - 2250 - 2500
-    assert e["used_gross"] == 58000 - e["adjusted_cost"]
+    assert e["used_gross"] == 58000 - e["adjusted_cost"]   # preowned gross
+
+
+def test_loaner_modeled_used_price_is_80pct_of_cheapest_new_and_flags_upside_down():
+    from pipeline_manager import loaner
+    # Modeled QX80: invoice ~110k, $10k rebate -> cheapest-new 100k, used ~80k.
+    # Write-downs (a few k) can't cover the ~30k drop, so it is upside down.
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    res = engine.run(inv, sales, Settings(
+        loaner_icv={"QX80": 650, "QX60": 500, "QX65": 500},
+        rebates={"QX80": 10000, "QX60": 0, "QX65": 0}), today=_AS_OF)
+    q80 = res.loaner_board if False else reports.loaner_board(res)["QX80"]
+    assert q80, "expected QX80 candidates"
+    for p in q80:
+        e = p["econ"]
+        # used price modeled at 80% of (invoice - rebate)
+        assert abs(e["used_price"] - 0.80 * e["cheapest_new"]) <= 1
+        assert e["cheapest_new"] == e["cost"] - 10000
+        # deeply discounted new -> conservative used floor -> upside down here
+        assert e["upside_down"] and p["net_value"] < 0
 
 
 def test_loaner_bonus_forfeited_when_used_turn_blows_the_window():

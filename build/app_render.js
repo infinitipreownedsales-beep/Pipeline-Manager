@@ -110,15 +110,17 @@ function loanerRender(res){
     H.push("<div class='democol'><div class='demohd'>"+model+"</div>");
     if(!picks.length){ H.push("<div class='empty'>No candidate — need cost/MSRP on units in the pipeline.</div>"); }
     picks.forEach((p,i)=>{ let e=p.econ, medal=["①","②","③","④","⑤"][i]||("#"+(i+1));
-      H.push("<div class='loancard democard"+(i===0?" top":"")+"'>"+
+      H.push("<div class='loancard democard"+(i===0?" top":"")+(e.upsideDown?" upside":"")+"'>"+
         "<div class='demorank'>"+medal+"</div>"+
         "<div class='demotrim'>"+esc(p.trim)+" <span class='demoei'>"+esc(p.ext)+"/"+esc(p.int)+"</span></div>"+
-        "<div class='money'><span class='net' style='color:"+(p.netValue>=0?"var(--good)":"var(--bad)")+"'>"+money(p.netValue)+"</span><span class='netlab'>used gross</span>"+
-          " <span class='"+(p.modeled?"lmodeled":"lmeasured")+"' title='"+(p.modeled?"modeled from new-car demand":"measured from your preowned sales")+"'>"+(p.modeled?"modeled":"measured")+"</span></div>"+
+        "<div class='money'><span class='net' style='color:"+(p.netValue>=0?"var(--good)":"var(--bad)")+"'>"+money(p.netValue)+"</span><span class='netlab'>preowned "+(p.netValue>=0?"profit":"LOSS")+"</span>"+
+          " <span class='"+(p.modeled?"lmodeled":"lmeasured")+"' title='"+(p.modeled?"modeled: 80% of cheapest-new":"measured from your preowned/auction data")+"'>"+(p.modeled?"modeled":"measured")+"</span></div>"+
+        (e.upsideDown?"<div class='lwarn'>⚠ upside-down — written-down cost is above street value; you'd re-buy it cheaper at auction</div>":"")+
         "<div class='demowhy' style='margin:4px 0 6px'>"+dtsCell(p.usedDts)+" <span class='demometa'>used turn</span> "+
           (e.bonusOk?"<span class='lbonus-ok'>✓ $"+Math.round(e.bonus).toLocaleString()+" bonus</span>":"<span class='lbonus-no'>✗ misses bonus</span>")+"</div>"+
         "<div class='lchips'>"+
-          "<span class='lchip'>cost "+money(e.cost)+"</span>"+
+          "<span class='lchip'>invoice "+money(e.cost)+"</span>"+
+          (e.rebate?"<span class='lchip'>rebate <b>-"+money(e.rebate).slice(1)+"</b></span><span class='lchip'>cheapest-new "+money(e.cheapestNew)+"</span>":"")+
           "<span class='lchip'>ICV <b>-"+money(e.icvTotal).slice(1)+"</b></span>"+
           "<span class='lchip'>write-down <b>-"+money(e.deprTotal).slice(1)+"</b></span>"+
           (e.bonus?"<span class='lchip'>bonus <b>-"+money(e.bonus).slice(1)+"</b></span>":"")+
@@ -132,7 +134,7 @@ function loanerRender(res){
       H.push("</div>"); });
     H.push("</div>"); });
   H.push("</div>");
-  if(anyModeled) H.push("<div class='foot'>“modeled” picks estimate used speed &amp; price from your new-car demand (used turn ≈ new days-to-sell; price ≈ "+Math.round((res.settings.preowned_price_pct||1)*100)+"% of invoice — your new selling price). At invoice, the used front gross ≈ the write-downs you banked (ICV + write-down + bonus), and you still make backend on the used deal. Paste a preowned/CPO sales report in ✎ Data to replace the estimate with your real used numbers.</div>");
+  if(anyModeled) H.push("<div class='foot'>“modeled” picks estimate used price at "+Math.round((res.settings.preowned_price_pct||0.8)*100)+"% of your <b>cheapest new price</b> (invoice − rebate) and used turn ≈ new days-to-sell — a deliberately conservative floor. The write-downs (ICV + monthly write-down + bonus) only help the cost <i>when the unit retires from the fleet</i>; preowned profit is what's left after that. Paste your own used sales or public wholesale/auction comps in ✎ Data to replace the estimate — that street price is what you could re-buy the unit for, so never carry it internally for more.</div>");
   return H.join("");
 }
 
