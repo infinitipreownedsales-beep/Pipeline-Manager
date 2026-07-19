@@ -315,7 +315,7 @@ function computePreowned(s,metrics,inv){
   return out; }
 function loanerEconomics(cost,msrp,model,usedDts,usedPrice,s){
   let icv=parseFloat((s.loaner_icv||{})[model]||0)||0, svc=Math.max(0,parseInt(s.loaner_service_months,10)||0);
-  let icvTotal=icv*svc, baseVal=(String(s.loaner_depr_base).toLowerCase()==="msrp")?msrp:cost;
+  let icvTotal=icv, baseVal=(String(s.loaner_depr_base).toLowerCase()==="msrp")?msrp:cost;  // ICV is one-time
   let deprTotal=baseVal*(s.loaner_depr_pct/100)*svc;
   let usedMonths=(usedDts||0)/DPM, saleMonth=svc+usedMonths, miles=s.loaner_miles_per_month*svc;
   let bonusOk=(saleMonth<=s.loaner_max_months)&&(miles<s.loaner_mile_cap), bonus=bonusOk?parseFloat(s.loaner_velocity_bonus):0;
@@ -363,7 +363,7 @@ function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], rele
     else if(nearCap||nearTime){ status="🔴 RELEASE NOW"; releasing++; }
     else status="🟢 READY";
     rows.push({stock:stock,model:model,vehicle:u?u.desc:"",ext_int:u?(u.ext+"/"+u.int):"",
-      months:Math.round(months*10)/10,miles:Math.round(miles),icv_earned:Math.round(icv*Math.min(months,s.loaner_max_months)),
+      months:Math.round(months*10)/10,miles:Math.round(miles),icv_secured:eligible?Math.round(icv):0,icv:Math.round(icv),
       eligible:eligible,status:status,release_by:releaseAt?releaseAt.toISOString().slice(0,10):"",note:String(e.note||"").trim()}); });
   rows.sort((a,b)=>b.months-a.months);
   let inService=rows.length, afterRelease=inService-releasing, toAdd=Math.max(0,s.loaner_fleet_target-afterRelease);

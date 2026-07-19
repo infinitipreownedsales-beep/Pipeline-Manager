@@ -329,10 +329,10 @@ def test_loaner_economics_writes_down_cost_and_banks_bonus():
                  loaner_velocity_bonus=2500, loaner_recon=0)
     # cost 60,000; MSRP 66,000; used sells in 30 days at 58,000.
     e = loaner.loaner_economics(60000, 66000, "QX60", 30, 58000, s)
-    assert e["icv_total"] == 1500                 # 500 x 3 months
-    assert e["depr_total"] == round(60000 * 0.0125 * 3)   # 2,250 off invoice cost
+    assert e["icv_total"] == 500                  # ONE-TIME allowance, not x months
+    assert e["depr_total"] == round(60000 * 0.0125 * 3)   # 2,250 off invoice cost (monthly)
     assert e["bonus_ok"] and e["bonus"] == 2500   # 3mo + ~1mo <= 7, miles 3,600 < 10k
-    assert e["adjusted_cost"] == 60000 - 1500 - 2250 - 2500
+    assert e["adjusted_cost"] == 60000 - 500 - 2250 - 2500
     assert e["used_gross"] == 58000 - e["adjusted_cost"]
 
 

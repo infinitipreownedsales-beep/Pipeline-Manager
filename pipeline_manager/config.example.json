@@ -49,7 +49,7 @@
     { "date": "2026-06-25", "model": "QX80", "code": "8361", "ext": "XLF", "int": "G", "days": 217 }
   ],
 
-  "_loaner_comment": "Courtesy-vehicle (ICV) program. ICV allowance + the monthly write-down both lower the unit's cost basis; a unit must serve >= min months for ICV and retail within max months under the mile cap for the velocity bonus. 'loaner_units' are pulled from sellable inventory like demos. 'preowned_sales' (optional) give real used velocity/price; without it the board models them from new-car demand and preowned_retention x MSRP.",
+  "_loaner_comment": "Courtesy-vehicle (ICV) program. The ICV is a ONE-TIME allowance booked the month the unit is reported in; it plus the monthly write-down lower the unit's cost basis. A unit must serve >= min months to keep the ICV and retail within max months under the mile cap for the velocity bonus. 'loaner_units' are pulled from sellable inventory like demos. 'preowned_sales' (optional) give real used velocity/price; without it the board models them from new-car demand and preowned_retention x MSRP (a placeholder — paste real used data to replace it).",
   "loaner_fleet_target": 20,
   "loaner_icv": { "QX80": 650, "QX60": 500, "QX65": 500 },
   "loaner_depr_pct": 1.25,

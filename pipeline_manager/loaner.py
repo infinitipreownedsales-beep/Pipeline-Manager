@@ -7,11 +7,15 @@ from a pasted used/CPO sales history or modeled from the new-car demand signal.
 
 The money model (all of it lowers the unit's cost basis):
 
-    icv_total   = ICV[model]              x service_months
-    depr_total  = (cost or MSRP) x depr%  x service_months
+    icv_total   = ICV[model]                          (ONE-TIME, booked the month
+                                                       the unit is reported in)
+    depr_total  = (cost or MSRP) x depr% x service_months
     bonus       = velocity_bonus  IF  retailed within max_months AND under mile_cap
     adjusted_cost = cost - icv_total - depr_total - bonus
     used_gross    = expected_used_price - adjusted_cost - recon
+
+The ICV is a single allowance per vehicle, not a monthly one; the unit must stay
+in service >= min months to keep it. Only the write-down accrues monthly.
 
 A unit is a good loaner when that used_gross is real money *and* it clears the
 used market fast enough to retail inside the max_months / mile_cap window (so the
@@ -150,7 +154,7 @@ def loaner_economics(cost, msrp, model, used_dts, used_price, s) -> dict:
     """
     icv = float((s.loaner_icv or {}).get(model, 0) or 0)
     svc = max(0, int(s.loaner_service_months))
-    icv_total = icv * svc
+    icv_total = icv                          # one-time allowance, booked once
     base_val = cost if str(s.loaner_depr_base).lower() != "msrp" else msrp
     depr_total = base_val * (s.loaner_depr_pct / 100.0) * svc
 
@@ -304,7 +308,9 @@ def loaner_fleet(res) -> dict:
             "vehicle": u.description if u else "",
             "ext_int": f"{u.ext}/{u.interior}" if u else "",
             "months": round(months, 1), "miles": int(miles),
-            "icv_earned": int(icv * min(months, s.loaner_max_months)),
+            # ICV is a one-time allowance, secured only once the unit clears the
+            # min-months floor; 0 (pending) while it is still on HOLD.
+            "icv_secured": int(icv) if eligible else 0, "icv": int(icv),
             "eligible": eligible, "status": status,
             "release_by": release_at.isoformat() if release_at else "",
             "note": str(e.get("note", "")).strip(),

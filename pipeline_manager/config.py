@@ -93,9 +93,10 @@ class Settings:
     trades: list = field(default_factory=list)
 
     # --- loaner / ICV courtesy-vehicle program ----------------------------- #
-    # INFINITI pays a monthly ICV allowance the store books as a write-down
-    # against the unit's cost; the store also depreciates the unit a fixed % per
-    # month it is in service. A unit must serve >= min months to be ICV-eligible
+    # INFINITI pays a one-time ICV allowance (booked the month the unit is
+    # reported into service) the store applies as a write-down against the unit's
+    # cost; the store also depreciates the unit a fixed % per month it is in
+    # service. A unit must serve >= min months to keep the ICV / be eligible
     # and be retailed within max months with < mile_cap miles to earn the
     # velocity bonus. All of it lowers the cost basis, so the "best" loaner is one
     # whose reduced basis becomes real used-car gross AND clears the used market

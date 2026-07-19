@@ -96,10 +96,11 @@ quickly once it has miles; repeat demand only, never a one-off), VIN-led where
 in stock and flagged to order when not.
 
 And a **Loaner / ICV Program** dashboard — which units to cycle through the
-courtesy fleet for the best *preowned* profit. INFINITI's monthly ICV allowance
-and the 1.25%/month write-down both lower a unit's cost basis; a unit must serve
-≥ 3 months to earn ICV and be retailed within 7 months under 10k miles for the
-$2,500 velocity bonus. The board computes each candidate's used gross after those
+courtesy fleet for the best *preowned* profit. INFINITI's one-time ICV allowance
+(booked the month the unit is reported into service) and the 1.25%/month
+write-down both lower a unit's cost basis; a unit must serve ≥ 3 months to keep
+the ICV and be retailed within 7 months under 10k miles for the $2,500 velocity
+bonus. The board computes each candidate's used gross after those
 write-downs and flags whether it clears the used window, ranks the best combos to
 designate (VIN-led, opportunity cost weighed since loaners replace retailable
 units), and shows the in-service fleet with each unit's age, miles, ICV earned

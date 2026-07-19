@@ -92,10 +92,10 @@ function loanerRender(res){
   // current in-service fleet + cascading release
   if(plan.rows.length){
     H.push("<div class='dc-sub'>In-service fleet <span class='dc-note'>cascading release — 🔴 pull now, 🟢 eligible, 🅗 hold for ICV</span></div>");
-    H.push(tbl(["Stock","Model","Vehicle","Ext/Int","In svc","Miles","ICV earned","Release by","Status","Note"],
+    H.push(tbl(["Stock","Model","Vehicle","Ext/Int","In svc","Miles","ICV (once)","Release by","Status","Note"],
       ["","","","","num","num","num","","",""],
       plan.rows.map(r=>[esc(r.stock),r.model,{html:"<span class='dim'>"+esc(r.vehicle)+"</span>"},esc(r.ext_int),
-        r.months+"mo",r.miles.toLocaleString(),{html:"<span class='teal' style='color:var(--teal)'>"+money(r.icv_earned)+"</span>"},
+        r.months+"mo",r.miles.toLocaleString(),{html:r.icv_secured?("<span style='color:var(--teal)'>"+money(r.icv_secured)+"</span>"):("<span class='dim' title='booked but not secured until it clears the min-months floor'>"+money(r.icv)+" pending</span>")},
         {html:"<span class='dim'>"+esc(r.release_by)+"</span>"},
         {html:"<b>"+esc(r.status)+"</b>"},{html:r.note?esc(r.note):"<span class='dim'>—</span>"}])));
   } else {
