@@ -174,6 +174,21 @@
   .lchip{background:#0c1420;border:1px solid var(--line);border-radius:7px;padding:2px 8px;font-size:11px;color:var(--ink2);font-variant-numeric:tabular-nums}
   .lchip b{color:var(--teal);font-weight:700}
   .lbonus-ok{color:var(--good);font-weight:700} .lbonus-no{color:var(--bad);font-weight:700}
+  /* power-ranked build sequence */
+  .bseqwrap{margin:8px 0 6px}
+  .bseqhd{font-weight:700;font-size:12.5px;color:var(--ink2);margin-bottom:6px}
+  .bseqsub{font-weight:500;color:var(--muted);font-size:11px}
+  .bseq{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .bstep{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:4px 9px;font-size:12.5px;white-space:nowrap}
+  .bstep .bnum{color:var(--muted);font-weight:700;font-size:10.5px}
+  .bstep .bqty{font-weight:800;color:var(--orange)}
+  .bstep .demoei{color:var(--muted);font-weight:600}
+  .bstep .btag{font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
+  .bstep .bloss{color:var(--bad)}
+  .bstep.fleet{border-color:rgba(94,234,212,.4)}
+  .bstep.fleet .bqty{color:var(--teal)}
+  .bstep.alt{opacity:.45}
+  .bseqcut{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;padding:0 4px}
   .loancard.upside{border-color:rgba(248,113,113,.45)}
   .lwarn{font-size:11px;color:var(--bad);background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);border-radius:7px;padding:4px 8px;margin:2px 0 6px}
   .lmodeled{font-size:10px;color:var(--muted);border:1px dashed var(--line2);border-radius:6px;padding:1px 6px}
@@ -322,6 +337,7 @@
         <div class="fld"><label>Recon $</label><input type="number" id="lrecon" value="0"></div>
         <div class="fld"><label>Used % of cheapest-new</label><input type="number" id="lret" value="0.80" step="0.01" title="modeled used price as a share of the cheapest new price (invoice − rebate), until real used data is pasted"></div>
         <div class="fld"><label>Fleet target</label><input type="number" id="lfleet" value="20"></div>
+        <div class="fld"><label>Order decay</label><input type="number" id="ldecay" value="1.0" step="0.5" title="how fast each extra unit of a combo yields to the next in the build sequence (0 = order a whole combo before the next)"></div>
       </div>
       <div style="margin-top:10px">
         <label class="top" style="margin-bottom:5px">Preowned sales <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— optional. Paste a used/CPO sales report with <b>Model</b>, <b>Model Code</b>, <b>Days to sell</b> (or days in stock) and <b>Price</b> (or Gross) columns. Blank = the board models used speed &amp; price from your new-car demand.</span></label>
@@ -705,25 +721,50 @@ function loanerCandReason(econ,pstat,line){ let src=pstat.modeled?"modeled":(pst
   bits.push(econ.bonusOk?"✓ bonus":"✗ misses bonus window");
   if(line.dts!==null&&line.dts<=30&&(line.mom==="ACCEL"||line.mom==="steady")) bits.push("fast new-seller — weigh opportunity cost");
   return bits.join(" · "); }
-function loanerCandidates(res){ let s=res.settings, rm=repMaps(res.inv), pre=res.preowned, out={};
-  MODELS.forEach(model=>{ let picks=[];
-    res.lines.forEach(l=>{ if(l.model!==model||l.suppressed) return;
-      let code=l.key.split("|")[1], tk=model+"|"+code, pstat=pre[tk]; if(!pstat) return;
-      let cm=repCostMsrp(l.key,model,code,rm), cost=cm[0], msrp=cm[1]; if(cost<=0&&msrp<=0) return;
-      let metric=res.metrics[l.key]||null, rebate=modelRebate(s,model);
-      // modeled price anchors to this config's cheapest-new (invoice - rebate); measured stays trim-level
-      let usedPrice=pstat.modeled?(Math.max(0,cost-rebate)*s.preowned_price_pct):pstat.usedPrice;
-      let econ=loanerEconomics(cost,msrp,model,pstat.usedDts,usedPrice,s,rebate);
-      let pos=res.positions[l.key], fresh=pos?pos.onlotUnits.slice().sort((a,b)=>a.dis-b.dis):[];
-      let units=fresh.slice(0,s.demo_vins_per_combo).map(u=>({stock:u.stock||"—",vin:(u.serial||u.stock),
-        vin_last6:(u.serial||u.stock)?(u.serial||u.stock).slice(-6):"—",dis:Math.round(u.dis),msrp:u.msrp,cost:u.cost,
-        year:u.myear||u.my||"",ext_int:u.ext+"/"+u.int}));
-      let score=loanerScore(econ,pstat,metric)+(units.length?4:0);
-      picks.push({trim:l.trim,ext:l.ext,int:l.int,key:l.key,usedDts:pstat.usedDts,usedPrice:econ.usedPrice,
-        modeled:pstat.modeled,score:Math.round(score*10)/10,netValue:econ.usedGross,econ:econ,newDts:l.dts,
-        onlot:l.onlot,inStock:units.length>0,units:units,reason:loanerCandReason(econ,pstat,l)}); });
-    picks.sort((a,b)=>b.score-a.score); out[model]=picks.slice(0,s.demo_picks_per_model); });
-  return out; }
+function allCandidates(res){ let s=res.settings, rm=repMaps(res.inv), pre=res.preowned, out=[];
+  res.lines.forEach(l=>{ if(l.suppressed) return; let model=l.model;
+    let code=l.key.split("|")[1], tk=model+"|"+code, pstat=pre[tk]; if(!pstat) return;
+    let cm=repCostMsrp(l.key,model,code,rm), cost=cm[0], msrp=cm[1]; if(cost<=0&&msrp<=0) return;
+    let metric=res.metrics[l.key]||null, rebate=modelRebate(s,model);
+    let usedPrice=pstat.modeled?(Math.max(0,cost-rebate)*s.preowned_price_pct):pstat.usedPrice;
+    let econ=loanerEconomics(cost,msrp,model,pstat.usedDts,usedPrice,s,rebate);
+    let pos=res.positions[l.key], fresh=pos?pos.onlotUnits.slice().sort((a,b)=>a.dis-b.dis):[];
+    let units=fresh.slice(0,s.demo_vins_per_combo).map(u=>({stock:u.stock||"—",vin:(u.serial||u.stock),
+      vin_last6:(u.serial||u.stock)?(u.serial||u.stock).slice(-6):"—",dis:Math.round(u.dis),msrp:u.msrp,cost:u.cost,
+      year:u.myear||u.my||"",ext_int:u.ext+"/"+u.int}));
+    let score=loanerScore(econ,pstat,metric)+(units.length?4:0);
+    out.push({model:model,trim:l.trim,ext:l.ext,int:l.int,key:l.key,usedDts:pstat.usedDts,usedPrice:econ.usedPrice,
+      modeled:pstat.modeled,score:Math.round(score*10)/10,netValue:econ.usedGross,econ:econ,newDts:l.dts,
+      onlot:l.onlot,inStock:units.length>0,units:units,reason:loanerCandReason(econ,pstat,l)}); });
+  out.sort((a,b)=>b.score-a.score); return out; }
+function loanerCandidates(res){ let s=res.settings, out={}; MODELS.forEach(m=>out[m]=[]);
+  allCandidates(res).forEach(p=>out[p.model].push(p));
+  MODELS.forEach(m=>out[m]=out[m].slice(0,s.demo_picks_per_model)); return out; }
+function loanerOrderPlan(res){ let s=res.settings, svc=Math.max(1,parseInt(s.loaner_service_months,10)||1);
+  let intake=Math.max(0,Math.round(s.loaner_fleet_target/svc)), ranked=allCandidates(res);
+  let fleetUnits=[], perModel={}; MODELS.forEach(m=>perModel[m]=0);
+  if(intake&&ranked.length){ let i=0, guard=0, counts={};
+    while(fleetUnits.length<intake && guard<intake*ranked.length+ranked.length){
+      let c=ranked[i%ranked.length]; counts[c.key]=(counts[c.key]||0)+1;
+      fleetUnits.push({model:c.model,key:c.key,trim:c.trim,ext:c.ext,int:c.int,econ:c.econ,netValue:c.netValue,n:counts[c.key]});
+      perModel[c.model]++; i++; guard++; } }
+  return {intake:intake,serviceMonths:svc,fleetUnits:fleetUnits,perModel:perModel}; }
+function buildSequence(res){ let s=res.settings, plan=loanerOrderPlan(res), decay=(s.order_unit_decay!==undefined?s.order_unit_decay:1.0), out={};
+  MODELS.forEach(model=>{ let alloc=s.allocations[model]||0;
+    let fleet=plan.fleetUnits.filter(fu=>fu.model===model), seq=[];
+    fleet.forEach(fu=>{ let e=fu.econ; seq.push({stream:"fleet",trim:fu.trim,ext:fu.ext,int:fu.int,key:fu.key,score:1e9,netValue:fu.netValue,upsideDown:e.upsideDown}); });
+    let retail=[];
+    res.lines.forEach(l=>{ if(l.model!==model||l.suppressed||l.need<=0||l.priority<=-1) return;
+      for(let n=0;n<l.need;n++) retail.push({stream:"retail",trim:l.trim,ext:l.ext,int:l.int,key:l.key,score:l.priority-decay*n,dts:l.dts,momentum:l.mom,n:n+1}); });
+    retail.sort((a,b)=>b.score-a.score); seq=seq.concat(retail);
+    let groups=[];
+    seq.forEach((u,i)=>{ let tier=i<alloc?"build":"alt";
+      let g=groups[groups.length-1];
+      if(g&&g.key===u.key&&g.stream===u.stream&&g.tier===tier) g.qty++;
+      else groups.push({key:u.key,trim:u.trim,ext:u.ext,int:u.int,stream:u.stream,tier:tier,qty:1,netValue:u.netValue,dts:u.dts,momentum:u.momentum,upsideDown:u.upsideDown||false}); });
+    let buildTotal=groups.filter(g=>g.tier==="build").reduce((a,g)=>a+g.qty,0);
+    out[model]={allocation:alloc,fleet:fleet.length,retail_build:buildTotal-fleet.length,groups:groups,total_units:seq.length}; });
+  return {intake:plan.intake,serviceMonths:plan.serviceMonths,perModel:out}; }
 function loanerMatchUnit(stock,inv){ for(let i=0;i<inv.length;i++){ if(stock&&inv[i].stock.indexOf(stock)===0) return inv[i]; } return null; }
 function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], releasing=0;
   (s.loaner_units||[]).forEach(e=>{ let stock=String(e.stock||"").trim(); if(!stock) return;
@@ -758,6 +799,7 @@ function runEngine(inv,sales,s,today){
   res.preowned=computePreowned(s,metrics,inv);
   res.loanerBoard=loanerCandidates(res);
   res.loanerFleetPlan=loanerFleet(res);
+  res.buildSeq=buildSequence(res);
   return res; }
 
 /* ===================== reports + rendering ===================== */
@@ -836,6 +878,26 @@ function executiveDemos(res){ let s=res.settings, out={};
 function fleetTargets(res){ let out={}; MODELS.forEach(model=>{ let r=res.seas[model].rate;
     out[model]=[]; for(let m=0;m<12;m++) out[model].push(xround(r[m]+r[(m+1)%12],0)); }); return out; }
 function money(n){ n=Math.round(n||0); return (n<0?"-$":"$")+Math.abs(n).toLocaleString(); }
+
+/* ---- power-ranked build sequence (per model) ---- */
+function buildSeqBlock(res, model){
+  let bs=res.buildSeq, d=bs&&bs.perModel?bs.perModel[model]:null; if(!d||!d.groups.length) return "";
+  let steps=[], n=0, shownAltNote=false, H=[];
+  H.push("<div class='bseqwrap'><div class='bseqhd'>Build sequence <span class='bseqsub'>order in this order · "+
+    d.fleet+" fleet + "+d.retail_build+" retail of "+d.allocation+" allocation"+
+    (bs.intake?" · cascade intake ~"+bs.intake+"/mo":"")+"</span></div><div class='bseq'>");
+  d.groups.forEach(g=>{
+    if(g.tier==="alt" && !shownAltNote){ H.push("<span class='bseqcut'>▸ beyond allocation</span>"); shownAltNote=true; }
+    n++;
+    let cls="bstep "+(g.stream==="fleet"?"fleet":"")+(g.tier==="alt"?" alt":"");
+    let tag=g.stream==="fleet"?"<span class='btag'>fleet"+(g.upsideDown?" · <span class='bloss'>loss</span>":"")+"</span>":"";
+    let dts=(g.stream==="retail"&&g.dts!=null)?" <span class='btag'>"+Math.round(g.dts)+"d</span>":"";
+    H.push("<span class='"+cls+"'><span class='bnum'>"+n+".</span><span class='bqty'>"+g.qty+"×</span> "+
+      esc(g.trim)+" <span class='demoei'>"+esc(g.ext)+"/"+esc(g.int)+"</span>"+tag+dts+"</span>");
+  });
+  H.push("</div></div>");
+  return H.join("");
+}
 
 /* ---- loaner / ICV program dashboard ---- */
 function loanerRender(res){
@@ -964,7 +1026,8 @@ function render(res){
         {html:l.proj.toFixed(1)+(l.demoReturning?" <span title='includes "+l.demoReturning+" demo returning to inventory, held as slow stock' style='color:var(--warn)'>↩"+l.demoReturning+"</span>":"")},
         {html:"<b>"+l.orderTarget+"</b>"}, {html:l.need>0?l.need:"<span class='dim'>0</span>"}, r.cum ]; });
     H.push(tbl(["#","Build?","Trim","Ext","Int","DTS","Momentum","Grade","Lot","Inb","PROJ@ARR","Tgt","NEED","Cum"],
-      ["num","","","","","num","","","num","num","num teal","num","num need","num"], rows)); });
+      ["num","","","","","num","","","num","num","num teal","num","num need","num"], rows));
+    H.push(buildSeqBlock(res, model)); });
 
   // 2. SIX-MONTH ROLLING PLAN
   H.push(sec(2,"6-Month Rolling Order Plan","when to place each truck — orders by arrival month"));
@@ -1119,9 +1182,10 @@ function getSettings(){
     loaner_mile_cap:numVal("lcap",10000), loaner_velocity_bonus:numVal("lbonus",2500),
     loaner_miles_per_month:numVal("lmpm",1200), loaner_recon:numVal("lrecon",0),
     rebates:{QX80:numVal("reb80",0),QX60:numVal("reb60",0),QX65:numVal("reb65",0)},
-    preowned_price_pct:numVal("lret",0.80), loaner_units:readFleet(), preowned_sales:readPreowned() }; }
+    preowned_price_pct:numVal("lret",0.80), order_unit_decay:numVal("ldecay",1.0),
+    loaner_units:readFleet(), preowned_sales:readPreowned() }; }
 function numVal(id,def){ let el=document.getElementById(id); if(!el) return def; let v=parseFloat(el.value); return isNaN(v)?def:v; }
-const LOANCFG_IDS=["lfleet","licv80","licv60","licv65","reb80","reb60","reb65","ldepr","lbase","lmin","lmax","lsvc","lcap","lbonus","lmpm","lrecon","lret"];
+const LOANCFG_IDS=["lfleet","licv80","licv60","licv65","reb80","reb60","reb65","ldepr","lbase","lmin","lmax","lsvc","lcap","lbonus","lmpm","lrecon","lret","ldecay"];
 function persistLoanCfg(){ try{ let o={}; LOANCFG_IDS.forEach(id=>o[id]=document.getElementById(id).value); localStorage.setItem("pm_loancfg",JSON.stringify(o)); }catch(e){} }
 function restoreLoanCfg(){ try{ let o=JSON.parse(localStorage.getItem("pm_loancfg")||"null"); if(!o) return;
   LOANCFG_IDS.forEach(id=>{ if(o[id]!==undefined&&document.getElementById(id)) document.getElementById(id).value=o[id]; }); }catch(e){} }

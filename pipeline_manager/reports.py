@@ -255,6 +255,67 @@ def loaner_fleet(res: EngineResult) -> dict:
     return loaner.loaner_fleet(res)
 
 
+def build_sequence(res: EngineResult) -> dict:
+    """Power-ranked, unit-by-unit build sequence per model (Problem 3).
+
+    The loaner fleet's cascade intake is reserved first (required maintenance,
+    best-preowned combos), netted out of the model's allocation. The rest of the
+    allocation is filled by retail need expanded to individual units, where each
+    successive unit of a combo decays in priority (order_unit_decay) — so a
+    dominant combo front-loads several units, but a marginal combo yields after
+    one or two and a stronger combo's later units can still outrank it. Runs of
+    the same combo are grouped: "order 3× A, then 2× B, then 2 more× A".
+    """
+    from . import loaner
+    s = res.settings
+    plan = loaner.loaner_order_plan(res)
+    decay = getattr(s, "order_unit_decay", 2.0)
+    out = {}
+    for model in MODELS:
+        alloc = s.allocations.get(model, 0)
+        fleet_units = [fu for fu in plan["fleet_units"] if fu["model"] == model]
+        seq = []
+        # 1) fleet slots first — required maintenance, netted out of allocation
+        for fu in fleet_units:
+            e = fu["econ"]
+            seq.append({"stream": "fleet", "trim": fu["trim"], "ext": fu["ext"],
+                        "int": fu["int"], "key": fu["key"], "score": 1e9,
+                        "net_value": fu["net_value"], "upside_down": e["upside_down"]})
+        # 2) retail need expanded to units with marginal-decay priority
+        retail = []
+        for l in res.lines:
+            if l.model != model or l.suppressed or l.need <= 0 or l.priority <= -1:
+                continue
+            for n in range(int(l.need)):
+                retail.append({"stream": "retail", "trim": l.trim, "ext": l.ext,
+                               "int": l.interior, "key": l.key,
+                               "score": l.priority - decay * n,
+                               "dts": l.dts, "momentum": l.momentum, "n": n + 1})
+        retail.sort(key=lambda u: -u["score"])
+        seq += retail
+        # number, tier by allocation, and run-length-group consecutive same combo
+        groups, alloc_units = [], 0
+        for i, u in enumerate(seq):
+            tier = "build" if i < alloc else "alt"
+            if groups and groups[-1]["key"] == u["key"] and groups[-1]["stream"] == u["stream"] \
+                    and groups[-1]["tier"] == tier:
+                groups[-1]["qty"] += 1
+            else:
+                groups.append({"key": u["key"], "trim": u["trim"], "ext": u["ext"],
+                               "int": u["int"], "stream": u["stream"], "tier": tier,
+                               "qty": 1, "net_value": u.get("net_value"),
+                               "dts": u.get("dts"), "momentum": u.get("momentum"),
+                               "upside_down": u.get("upside_down", False)})
+        build_total = sum(g["qty"] for g in groups if g["tier"] == "build")
+        out[model] = {
+            "allocation": alloc, "fleet": len(fleet_units),
+            "retail_build": build_total - len(fleet_units),
+            "groups": groups, "total_units": len(seq),
+        }
+    return {"intake": plan["intake"], "service_months": plan["service_months"],
+            "per_model": out}
+
+
 # --------------------------------------------------------------------------- #
 # 5. Pace Check
 # --------------------------------------------------------------------------- #
@@ -352,6 +413,7 @@ def build_all(res: EngineResult) -> dict:
         "executive_demos": executive_demos(res),
         "loaner_board": loaner_board(res),
         "loaner_fleet": loaner_fleet(res),
+        "build_sequence": build_sequence(res),
         "pace_check": pace_check(res),
         "fleet_targets": fleet_targets(res),
         "data_health": data_health(res),

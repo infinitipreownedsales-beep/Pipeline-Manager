@@ -72,7 +72,11 @@ The app has an editable trade-log panel; the CLI reads it from `config.json`.
 ## The five outputs
 
 1. **Order Priority** — ranked `✓ BUILD` / `↑ alt` / `○ option` worklist with
-   NEED per config, cut over by each model's allocation.
+   NEED per config, cut over by each model's allocation. It also prints a
+   **power-ranked build sequence**: the exact unit-by-unit order to place
+   ("3× A, then 2× B, then 2 more× A"), with the loaner fleet's cascade intake
+   reserved first (netted out of allocation, best-preowned combos) and the rest
+   filled by retail need under a marginal-decay ranking (`order_unit_decay`).
 2. **Overstock / Wholesale** — over-target configs, wholesale-now counts, aged flags.
 3. **Wholesale VIN sheet** — printable, VIN-led list of aged eligible units.
 4. **Demo Dashboard** — units pulled from sellable inventory, ages, swap flags.

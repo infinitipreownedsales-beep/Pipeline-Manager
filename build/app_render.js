@@ -75,6 +75,26 @@ function fleetTargets(res){ let out={}; MODELS.forEach(model=>{ let r=res.seas[m
     out[model]=[]; for(let m=0;m<12;m++) out[model].push(xround(r[m]+r[(m+1)%12],0)); }); return out; }
 function money(n){ n=Math.round(n||0); return (n<0?"-$":"$")+Math.abs(n).toLocaleString(); }
 
+/* ---- power-ranked build sequence (per model) ---- */
+function buildSeqBlock(res, model){
+  let bs=res.buildSeq, d=bs&&bs.perModel?bs.perModel[model]:null; if(!d||!d.groups.length) return "";
+  let steps=[], n=0, shownAltNote=false, H=[];
+  H.push("<div class='bseqwrap'><div class='bseqhd'>Build sequence <span class='bseqsub'>order in this order · "+
+    d.fleet+" fleet + "+d.retail_build+" retail of "+d.allocation+" allocation"+
+    (bs.intake?" · cascade intake ~"+bs.intake+"/mo":"")+"</span></div><div class='bseq'>");
+  d.groups.forEach(g=>{
+    if(g.tier==="alt" && !shownAltNote){ H.push("<span class='bseqcut'>▸ beyond allocation</span>"); shownAltNote=true; }
+    n++;
+    let cls="bstep "+(g.stream==="fleet"?"fleet":"")+(g.tier==="alt"?" alt":"");
+    let tag=g.stream==="fleet"?"<span class='btag'>fleet"+(g.upsideDown?" · <span class='bloss'>loss</span>":"")+"</span>":"";
+    let dts=(g.stream==="retail"&&g.dts!=null)?" <span class='btag'>"+Math.round(g.dts)+"d</span>":"";
+    H.push("<span class='"+cls+"'><span class='bnum'>"+n+".</span><span class='bqty'>"+g.qty+"×</span> "+
+      esc(g.trim)+" <span class='demoei'>"+esc(g.ext)+"/"+esc(g.int)+"</span>"+tag+dts+"</span>");
+  });
+  H.push("</div></div>");
+  return H.join("");
+}
+
 /* ---- loaner / ICV program dashboard ---- */
 function loanerRender(res){
   let board=res.loanerBoard||{}, plan=res.loanerFleetPlan||{rows:[],in_service:0,target:0,releasing_now:0,to_add:0};
@@ -202,7 +222,8 @@ function render(res){
         {html:l.proj.toFixed(1)+(l.demoReturning?" <span title='includes "+l.demoReturning+" demo returning to inventory, held as slow stock' style='color:var(--warn)'>↩"+l.demoReturning+"</span>":"")},
         {html:"<b>"+l.orderTarget+"</b>"}, {html:l.need>0?l.need:"<span class='dim'>0</span>"}, r.cum ]; });
     H.push(tbl(["#","Build?","Trim","Ext","Int","DTS","Momentum","Grade","Lot","Inb","PROJ@ARR","Tgt","NEED","Cum"],
-      ["num","","","","","num","","","num","num","num teal","num","num need","num"], rows)); });
+      ["num","","","","","num","","","num","num","num teal","num","num need","num"], rows));
+    H.push(buildSeqBlock(res, model)); });
 
   // 2. SIX-MONTH ROLLING PLAN
   H.push(sec(2,"6-Month Rolling Order Plan","when to place each truck — orders by arrival month"));

@@ -412,6 +412,30 @@ def test_measured_preowned_overrides_modeled():
     assert st.modeled is False and st.count == 2 and st.used_dts == 15.0
 
 
+def test_build_sequence_reserves_fleet_and_power_ranks_retail():
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    s = Settings(order_month=9, loaner_fleet_target=20, loaner_service_months=4,
+                 allocations={"QX80": 50, "QX60": 100, "QX65": 100})
+    res = engine.run(inv, sales, s, today=_AS_OF)
+    bs = reports.build_sequence(res)
+    assert bs["intake"] == round(20 / 4)          # auto cascade = target / service months
+    total_fleet = sum(d["fleet"] for d in bs["per_model"].values())
+    assert total_fleet == bs["intake"]            # every fleet slot placed
+    for model, d in bs["per_model"].items():
+        # build units never exceed allocation; fleet is reserved first
+        build = sum(g["qty"] for g in d["groups"] if g["tier"] == "build")
+        assert build <= d["allocation"]
+        streams = [g["stream"] for g in d["groups"]]
+        if d["fleet"] and "retail" in streams:
+            assert streams.index("fleet") < streams.index("retail")
+    # decay 0 keeps a combo's units contiguous (whole combo before the next)
+    s0 = Settings(order_month=9, loaner_fleet_target=0, order_unit_decay=0.0)
+    g0 = reports.build_sequence(engine.run(inv, sales, s0, today=_AS_OF))["per_model"]["QX80"]["groups"]
+    keys = [g["key"] for g in g0]
+    assert len(keys) == len(set(keys))            # no combo appears in two separate runs
+
+
 def test_recompute_is_deterministic():
     a = reports.build_all(_run())
     b = reports.build_all(_run())

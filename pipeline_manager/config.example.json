@@ -63,6 +63,7 @@
   "loaner_recon": 0,
   "rebates": { "QX80": 10000, "QX60": 0, "QX65": 0 },
   "preowned_price_pct": 0.80,
+  "order_unit_decay": 1.0,
   "loaner_units": [
     { "stock": "N15174", "start": "2026-04-01", "miles": 6200, "note": "service loaner" }
   ],

@@ -223,60 +223,95 @@ def _loaner_score(econ, pstat, metric) -> float:
     return gross_band + vel + bonus_band + opp + measured_bonus
 
 
+def _all_candidates(res) -> list:
+    """Every non-suppressed config priced as a loaner candidate, with econ."""
+    s = res.settings
+    cost_key, msrp_key, cost_trim, msrp_trim = _rep_maps(res.inventory)
+    pre = res.preowned
+    out = []
+    for l in res.lines:
+        if l.suppressed:
+            continue
+        model = l.model
+        code = l.key.split("|")[1]
+        pstat = pre.get(f"{model}|{code}")
+        if not pstat:
+            continue
+        cost, msrp = rep_cost_msrp(l.key, model, code, cost_key, msrp_key,
+                                   cost_trim, msrp_trim)
+        if cost <= 0 and msrp <= 0:
+            continue
+        metric = res.metrics.get(l.key)
+        rebate = float((s.rebates or {}).get(model, 0) or 0)
+        # Measured used price is trim-level; a modeled price anchors to THIS
+        # config's cheapest-new (invoice - rebate) at preowned_price_pct (~80%).
+        used_price = (max(0.0, cost - rebate) * s.preowned_price_pct
+                      if pstat.modeled else pstat.used_price)
+        econ = loaner_economics(cost, msrp, model, pstat.used_dts, used_price, s,
+                                rebate=rebate)
+        pos = res.positions.get(l.key)
+        fresh = sorted(pos.onlot_units, key=lambda u: u.dis) if pos else []
+        units = [{
+            "stock": u.stock or "—", "vin": (u.serial or u.stock),
+            "vin_last6": (u.serial or u.stock)[-6:] if (u.serial or u.stock) else "—",
+            "dis": int(u.dis), "msrp": u.msrp, "cost": u.inv_cost,
+            "year": u.model_year or u.my or "", "ext_int": f"{u.ext}/{u.interior}",
+        } for u in fresh[:s.demo_vins_per_combo]]
+        score = _loaner_score(econ, pstat, metric) + (4 if units else 0)
+        out.append({
+            "model": model, "trim": l.trim, "ext": l.ext, "int": l.interior, "key": l.key,
+            "used_dts": pstat.used_dts, "used_price": econ["used_price"],
+            "modeled": pstat.modeled, "score": round(score, 1),
+            "net_value": econ["used_gross"], "econ": econ,
+            "new_dts": l.dts, "onlot": l.onlot, "in_stock": bool(units),
+            "units": units, "reason": _cand_reason(econ, pstat, l),
+        })
+    out.sort(key=lambda p: -p["score"])
+    return out
+
+
 def loaner_candidates(res) -> dict:
     """Per model, the best configs to designate as loaners, VIN-led from current
-    sellable inventory (like the executive demo board). A strong config with
-    nothing on the lot is flagged to earmark on the next order."""
+    sellable inventory (like the executive demo board)."""
     s = res.settings
-    inv = res.inventory
-    cost_key, msrp_key, cost_trim, msrp_trim = _rep_maps(inv)
-    pre = res.preowned
+    out = {m: [] for m in MODELS}
+    for p in _all_candidates(res):
+        out[p["model"]].append(p)
+    return {m: out[m][:s.demo_picks_per_model] for m in MODELS}
 
-    out = {}
-    for model in MODELS:
-        picks = []
-        for l in res.lines:
-            if l.model != model or l.suppressed:
-                continue
-            code = l.key.split("|")[1]
-            tkey = f"{model}|{code}"
-            pstat = pre.get(tkey)
-            if not pstat:
-                continue
-            cost, msrp = rep_cost_msrp(l.key, model, code, cost_key, msrp_key,
-                                       cost_trim, msrp_trim)
-            if cost <= 0 and msrp <= 0:
-                continue
-            metric = res.metrics.get(l.key)
-            rebate = float((s.rebates or {}).get(model, 0) or 0)
-            # Measured used price is trim-level (its data granularity); a modeled
-            # price is anchored to THIS config's own cheapest-new (invoice - rebate)
-            # at preowned_price_pct (~80%).
-            used_price = (max(0.0, cost - rebate) * s.preowned_price_pct
-                          if pstat.modeled else pstat.used_price)
-            econ = loaner_economics(cost, msrp, model, pstat.used_dts, used_price, s,
-                                    rebate=rebate)
-            pos = res.positions.get(l.key)
-            # Fresh, low-days, non-demo units are the natural loaner picks.
-            fresh = sorted(pos.onlot_units, key=lambda u: u.dis) if pos else []
-            units = [{
-                "stock": u.stock or "—", "vin": (u.serial or u.stock),
-                "vin_last6": (u.serial or u.stock)[-6:] if (u.serial or u.stock) else "—",
-                "dis": int(u.dis), "msrp": u.msrp, "cost": u.inv_cost,
-                "year": u.model_year or u.my or "", "ext_int": f"{u.ext}/{u.interior}",
-            } for u in fresh[:s.demo_vins_per_combo]]
-            score = _loaner_score(econ, pstat, metric) + (4 if units else 0)
-            picks.append({
-                "trim": l.trim, "ext": l.ext, "int": l.interior, "key": l.key,
-                "used_dts": pstat.used_dts, "used_price": econ["used_price"],
-                "modeled": pstat.modeled, "score": round(score, 1),
-                "net_value": econ["used_gross"], "econ": econ,
-                "new_dts": l.dts, "onlot": l.onlot, "in_stock": bool(units),
-                "units": units, "reason": _cand_reason(econ, pstat, l),
-            })
-        picks.sort(key=lambda p: -p["score"])
-        out[model] = picks[:s.demo_picks_per_model]
-    return out
+
+def loaner_order_plan(res) -> dict:
+    """Problem 3 — how many fresh units to bring into the loaner fleet on this
+    order (auto cascade), and which combos fill those slots (best preowned
+    economics). The fleet replaces retailable units, so these are netted out of
+    each model's allocation in the build sequence.
+
+    Cascade intake = fleet_target / service_months (to hold the target in service
+    when each unit serves that many months, one cascades in as one cascades out).
+    Slots are filled round-robin over the best-preowned combos so the fleet spans
+    the strongest economics rather than piling onto a single config.
+    """
+    s = res.settings
+    svc = max(1, int(s.loaner_service_months))
+    intake = max(0, round(s.loaner_fleet_target / svc))
+    ranked = _all_candidates(res)                # best preowned first
+    fleet_units, per_model = [], {m: 0 for m in MODELS}
+    if intake and ranked:
+        i, guard = 0, 0
+        counts = {}
+        # round-robin one unit per combo, cycling, until intake is filled
+        while len(fleet_units) < intake and guard < intake * len(ranked) + len(ranked):
+            c = ranked[i % len(ranked)]
+            counts[c["key"]] = counts.get(c["key"], 0) + 1
+            fleet_units.append({"model": c["model"], "key": c["key"], "trim": c["trim"],
+                                "ext": c["ext"], "int": c["int"],
+                                "econ": c["econ"], "net_value": c["net_value"],
+                                "n": counts[c["key"]]})
+            per_model[c["model"]] += 1
+            i += 1
+            guard += 1
+    return {"intake": intake, "service_months": svc,
+            "fleet_units": fleet_units, "per_model": per_model}
 
 
 def _cand_reason(econ, pstat, line) -> str:
