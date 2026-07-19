@@ -322,6 +322,75 @@ def test_suppress_by_code_removes_from_order_priority_only():
     assert any(l.key == "QX60|8411|ZZZ|Q" for l in r2.lines)
 
 
+def test_loaner_economics_writes_down_cost_and_banks_bonus():
+    from pipeline_manager import loaner
+    s = Settings(loaner_icv={"QX80": 600, "QX60": 500, "QX65": 500},
+                 loaner_depr_pct=1.25, loaner_service_months=3,
+                 loaner_velocity_bonus=2500, loaner_recon=0)
+    # cost 60,000; MSRP 66,000; used sells in 30 days at 58,000.
+    e = loaner.loaner_economics(60000, 66000, "QX60", 30, 58000, s)
+    assert e["icv_total"] == 1500                 # 500 x 3 months
+    assert e["depr_total"] == round(60000 * 0.0125 * 3)   # 2,250 off invoice cost
+    assert e["bonus_ok"] and e["bonus"] == 2500   # 3mo + ~1mo <= 7, miles 3,600 < 10k
+    assert e["adjusted_cost"] == 60000 - 1500 - 2250 - 2500
+    assert e["used_gross"] == 58000 - e["adjusted_cost"]
+
+
+def test_loaner_bonus_forfeited_when_used_turn_blows_the_window():
+    from pipeline_manager import loaner
+    s = Settings(loaner_max_months=7, loaner_service_months=3)
+    # A 5-month used turn: 3 + ~5 = 8 months > 7 -> bonus lost.
+    slow = loaner.loaner_economics(60000, 66000, "QX60", 150, 58000, s)
+    assert not slow["bonus_ok"] and slow["bonus"] == 0
+    fast = loaner.loaner_economics(60000, 66000, "QX60", 20, 58000, s)
+    assert fast["bonus_ok"] and fast["used_gross"] > slow["used_gross"]
+
+
+def test_loaner_depr_base_msrp_uses_window_sticker():
+    from pipeline_manager import loaner
+    s = Settings(loaner_depr_base="msrp", loaner_depr_pct=1.25, loaner_service_months=4)
+    e = loaner.loaner_economics(60000, 80000, "QX80", 30, 70000, s)
+    assert e["depr_total"] == round(80000 * 0.0125 * 4)   # off MSRP, not cost
+
+
+def test_in_service_loaners_leave_sellable_inventory():
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    onlot = [u for u in inv if u.is_dlr_inv]
+    victim = onlot[0]
+    base = engine.run(inv, sales, Settings(), today=_AS_OF)
+    with_loaner = engine.run(inv, sales, Settings(
+        loaner_units=[{"stock": victim.stock, "start": "2026-04-01"}]), today=_AS_OF)
+    assert with_loaner.positions[victim.key].onlot == base.positions[victim.key].onlot - 1
+
+
+def test_loaner_board_ranks_by_used_gross_and_flags_bonus():
+    res = engine.run(
+        load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv")),
+        load_sales(os.path.join(_PKG, "sample_data", "sales.csv")),
+        Settings(loaner_icv={"QX80": 600, "QX60": 500, "QX65": 500}), today=_AS_OF)
+    board = reports.loaner_board(res)
+    assert set(board) == {"QX80", "QX60", "QX65"}
+    for picks in board.values():
+        # sorted by score, descending
+        assert picks == sorted(picks, key=lambda p: -p["score"])
+        for p in picks:
+            assert "used_gross" in p["econ"] and "bonus_ok" in p["econ"]
+
+
+def test_measured_preowned_overrides_modeled():
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    modeled = engine.run(inv, sales, Settings(), today=_AS_OF)
+    measured = engine.run(inv, sales, Settings(preowned_sales=[
+        {"model": "QX60", "code": "8411", "days": 12, "price": 48000},
+        {"model": "QX60", "code": "8411", "days": 18, "price": 47000},
+    ]), today=_AS_OF)
+    assert modeled.preowned["QX60|8411"].modeled is True
+    st = measured.preowned["QX60|8411"]
+    assert st.modeled is False and st.count == 2 and st.used_dts == 15.0
+
+
 def test_recompute_is_deterministic():
     a = reports.build_all(_run())
     b = reports.build_all(_run())

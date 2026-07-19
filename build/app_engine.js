@@ -67,7 +67,7 @@ function loadInventory(text){
     units.push({stock:String(cell(row,ci.stock)||"").trim(),serial:String(cell(row,ci.serial)||"").trim(),
       status:String(cell(row,ci.status)||"").trim(),my:String(cell(row,ci.my)||"").trim(),model:model,
       code:digitsOnly(code),desc:String(cell(row,ci.desc)||"").trim(),ext:ext,int:intr,
-      msrp:coerceNum(cell(row,ci.msrp)),loc:loc,dis:coerceNum(cell(row,ci.dis)),key:buildKey(model,code,ext,intr),
+      msrp:coerceNum(cell(row,ci.msrp)),cost:coerceNum(cell(row,ci.inv)),loc:loc,dis:coerceNum(cell(row,ci.dis)),key:buildKey(model,code,ext,intr),
       arr:parseArrivalMonth(loc,eta),myear:modelYear(code),prod:String(cell(row,ci.prod)||"").trim(),
       eta:eta==null?"":String(eta).trim(),
       isDlr:loc.toUpperCase()==="DLR-INV",isInbound:loc.toUpperCase()!=="DLR-INV"}); }
@@ -147,11 +147,11 @@ function matchPrevLoaner(u, list){
 function loanerDaysOut(e){ let t=new Date(e.taken), r=new Date(e.returned);
   if(isNaN(t.getTime())||isNaN(r.getTime())) return null; return Math.max(0,Math.round((r-t)/86400000)); }
 function effDis(u){ return (u.retailDis!==undefined&&u.retailDis!==null)?u.retailDis:u.dis; }
-function computePositions(inv, metrics, s, today){
-  let P={};
+function computePositions(inv, metrics, s, today, loanerPrefixes){
+  let P={}; loanerPrefixes=loanerPrefixes||[];
   inv.forEach(u=>{ if(!u.key) return; let p=P[u.key]; if(!p){ p={onlot:0,inbound:0,arrivals:{},stalled:0,aged:[],whole:[],onlotUnits:[]}; P[u.key]=p; }
-    let demo=isDemo(u.stock,s.demo_stocks);
-    if(u.isDlr){ if(demo) return;
+    let demo=isDemo(u.stock,s.demo_stocks), loaner=isDemo(u.stock,loanerPrefixes);
+    if(u.isDlr){ if(demo||loaner) return;
       let entry=matchPrevLoaner(u,s.prev_loaners);
       if(entry){ u.prevLoaner=true; let dout=loanerDaysOut(entry);
         if(dout!==null) u.retailDis=Math.max(0,u.dis-dout);
@@ -276,8 +276,102 @@ function priority(dts,mom,need,proj,orderTgt,seasArr,effDem,idx){
 function findOrphans(sales,roster){ let rk={}; roster.forEach(c=>rk[c.model+"|"+c.code+"|"+c.ext+"|"+c.int]=1);
   let seen={}; sales.forEach(s=>{ if(s.firstVin&&s.key&&!rk[s.key]) seen[s.key]=(seen[s.key]||0)+1; });
   return Object.keys(seen).map(k=>({key:k,sales:seen[k]})).sort((a,b)=>b.sales-a.sales); }
+/* ---- loaner / ICV program (ported 1:1 from pipeline_manager/loaner.py) ---- */
+function loanerNum(v){ if(v===null||v===undefined||v==="") return null;
+  let n=parseFloat(String(v).replace(/[$,]/g,"").trim()); return isNaN(n)?null:n; }
+function loanerStockPrefixes(s){ return (s.loaner_units||[]).map(e=>String(e.stock||"").trim()).filter(x=>x); }
+function repMaps(inv){ let cs={},ms={},cn={},tcs={},tms={},tcn={};
+  inv.forEach(u=>{ if(!u.key) return; let code=u.key.split("|")[1], tk=u.model+"|"+code;
+    if(u.cost){ cs[u.key]=(cs[u.key]||0)+u.cost; cn[u.key]=(cn[u.key]||0)+1; tcs[tk]=(tcs[tk]||0)+u.cost; tcn[tk]=(tcn[tk]||0)+1; }
+    if(u.msrp){ ms[u.key]=(ms[u.key]||0)+u.msrp; tms[tk]=(tms[tk]||0)+u.msrp; } });
+  let costKey={},msrpKey={},costTrim={},msrpTrim={};
+  Object.keys(cs).forEach(k=>{ if(cn[k]) costKey[k]=cs[k]/cn[k]; });
+  Object.keys(ms).forEach(k=>{ if(cn[k]) msrpKey[k]=ms[k]/cn[k]; });
+  Object.keys(tcs).forEach(k=>{ if(tcn[k]) costTrim[k]=tcs[k]/tcn[k]; });
+  Object.keys(tms).forEach(k=>{ if(tcn[k]) msrpTrim[k]=tms[k]/tcn[k]; });
+  return {costKey:costKey,msrpKey:msrpKey,costTrim:costTrim,msrpTrim:msrpTrim}; }
+function repCostMsrp(key,model,code,rm){ let tk=model+"|"+code;
+  return [rm.costKey[key]||rm.costTrim[tk]||0, rm.msrpKey[key]||rm.msrpTrim[tk]||0]; }
+function trimNewDts(metrics,model,code){ let v=[]; Object.values(metrics).forEach(m=>{ if(m.model===model&&m.code===code&&m.dts!==null&&m.total>0) v.push(m.dts); });
+  return v.length?v.reduce((a,b)=>a+b,0)/v.length:null; }
+function modelAvgDts(metrics,model){ let v=[]; Object.values(metrics).forEach(m=>{ if(m.model===model&&m.dts!==null&&m.total>0) v.push(m.dts); });
+  return v.length?v.reduce((a,b)=>a+b,0)/v.length:null; }
+function computePreowned(s,metrics,inv){
+  let rm=repMaps(inv), measured={};
+  (s.preowned_sales||[]).forEach(r=>{ let code=digitsOnly(r.code).slice(0,4), model=String(r.model||"").trim().toUpperCase();
+    if(!model||!code) return; let tk=model+"|"+code, days=loanerNum(r.days), price=loanerNum(r.price)||loanerNum(r.gross);
+    let a=measured[tk]||(measured[tk]={d:0,dc:0,p:0,pc:0,n:0}); a.n++;
+    if(days!==null){ a.d+=days; a.dc++; } if(price!==null){ a.p+=price; a.pc++; } });
+  let out={};
+  Object.keys(measured).forEach(tk=>{ let a=measured[tk], model=tk.split("|")[0];
+    let dts=a.dc?a.d/a.dc:(modelAvgDts(metrics,model)||45);
+    let price=a.pc?a.p/a.pc:((rm.msrpTrim[tk]||0)*s.preowned_retention);
+    out[tk]={usedDts:Math.round(dts*10)/10,usedPrice:Math.round(price),count:a.n,modeled:false}; });
+  let trims={}; inv.forEach(u=>{ if(u.key) trims[u.model+"|"+u.key.split("|")[1]]=1; });
+  Object.keys(trims).forEach(tk=>{ if(out[tk]) return; let p=tk.split("|"), model=p[0], code=p[1];
+    let dts=trimNewDts(metrics,model,code)||modelAvgDts(metrics,model)||45;
+    let price=(rm.msrpTrim[tk]||0)*s.preowned_retention;
+    out[tk]={usedDts:Math.round(dts*10)/10,usedPrice:Math.round(price),count:0,modeled:true}; });
+  return out; }
+function loanerEconomics(cost,msrp,model,usedDts,usedPrice,s){
+  let icv=parseFloat((s.loaner_icv||{})[model]||0)||0, svc=Math.max(0,parseInt(s.loaner_service_months,10)||0);
+  let icvTotal=icv*svc, baseVal=(String(s.loaner_depr_base).toLowerCase()==="msrp")?msrp:cost;
+  let deprTotal=baseVal*(s.loaner_depr_pct/100)*svc;
+  let usedMonths=(usedDts||0)/DPM, saleMonth=svc+usedMonths, miles=s.loaner_miles_per_month*svc;
+  let bonusOk=(saleMonth<=s.loaner_max_months)&&(miles<s.loaner_mile_cap), bonus=bonusOk?parseFloat(s.loaner_velocity_bonus):0;
+  let adj=cost-icvTotal-deprTotal-bonus, gross=(usedPrice||0)-adj-parseFloat(s.loaner_recon||0);
+  return {cost:Math.round(cost),msrp:Math.round(msrp),icvTotal:Math.round(icvTotal),deprTotal:Math.round(deprTotal),
+    bonus:Math.round(bonus),bonusOk:bonusOk,adjustedCost:Math.round(adj),usedPrice:Math.round(usedPrice||0),
+    usedGross:Math.round(gross),saleMonth:Math.round(saleMonth*10)/10,milesAtSale:Math.round(miles),serviceMonths:svc}; }
+function loanerScore(econ,pstat,metric){
+  let gb=Math.max(-10,Math.min(40,econ.usedGross/250));
+  let vel=Math.max(0,(60-(pstat.usedDts||60))/60)*20, bb=econ.bonusOk?10:0;
+  let opp=(metric&&metric.dts!==null&&metric.r90>=2&&metric.dts<=30)?-8:0, mb=pstat.modeled?0:3;
+  return gb+vel+bb+opp+mb; }
+function loanerCandReason(econ,pstat,line){ let src=pstat.modeled?"modeled":(pstat.count+" used sales");
+  let bits=["$"+Math.round(econ.usedGross).toLocaleString()+" used gross",Math.round(pstat.usedDts)+"-day used turn ("+src+")"];
+  bits.push(econ.bonusOk?"✓ bonus":"✗ misses bonus window");
+  if(line.dts!==null&&line.dts<=30&&(line.mom==="ACCEL"||line.mom==="steady")) bits.push("fast new-seller — weigh opportunity cost");
+  return bits.join(" · "); }
+function loanerCandidates(res){ let s=res.settings, rm=repMaps(res.inv), pre=res.preowned, out={};
+  MODELS.forEach(model=>{ let picks=[];
+    res.lines.forEach(l=>{ if(l.model!==model||l.suppressed) return;
+      let code=l.key.split("|")[1], tk=model+"|"+code, pstat=pre[tk]; if(!pstat) return;
+      let cm=repCostMsrp(l.key,model,code,rm), cost=cm[0], msrp=cm[1]; if(cost<=0&&msrp<=0) return;
+      let metric=res.metrics[l.key]||null, econ=loanerEconomics(cost,msrp,model,pstat.usedDts,pstat.usedPrice,s);
+      let pos=res.positions[l.key], fresh=pos?pos.onlotUnits.slice().sort((a,b)=>a.dis-b.dis):[];
+      let units=fresh.slice(0,s.demo_vins_per_combo).map(u=>({stock:u.stock||"—",vin:(u.serial||u.stock),
+        vin_last6:(u.serial||u.stock)?(u.serial||u.stock).slice(-6):"—",dis:Math.round(u.dis),msrp:u.msrp,cost:u.cost,
+        year:u.myear||u.my||"",ext_int:u.ext+"/"+u.int}));
+      let score=loanerScore(econ,pstat,metric)+(units.length?4:0);
+      picks.push({trim:l.trim,ext:l.ext,int:l.int,key:l.key,usedDts:pstat.usedDts,usedPrice:pstat.usedPrice,
+        modeled:pstat.modeled,score:Math.round(score*10)/10,netValue:econ.usedGross,econ:econ,newDts:l.dts,
+        onlot:l.onlot,inStock:units.length>0,units:units,reason:loanerCandReason(econ,pstat,l)}); });
+    picks.sort((a,b)=>b.score-a.score); out[model]=picks.slice(0,s.demo_picks_per_model); });
+  return out; }
+function loanerMatchUnit(stock,inv){ for(let i=0;i<inv.length;i++){ if(stock&&inv[i].stock.indexOf(stock)===0) return inv[i]; } return null; }
+function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], releasing=0;
+  (s.loaner_units||[]).forEach(e=>{ let stock=String(e.stock||"").trim(); if(!stock) return;
+    let start=new Date(e.start), hasStart=!isNaN(start.getTime());
+    let months=hasStart?((today-start)/86400000/DPM):0, miles=loanerNum(e.miles);
+    if(miles===null) miles=s.loaner_miles_per_month*months;
+    let u=loanerMatchUnit(stock,res.inv), model=u?u.model:String(e.model||"").trim().toUpperCase();
+    let icv=parseFloat((s.loaner_icv||{})[model]||0)||0;
+    let releaseAt=hasStart?new Date(start.getTime()+Math.round(s.loaner_max_months*DPM)*86400000):null;
+    let eligible=months>=s.loaner_min_months, nearCap=miles>=s.loaner_mile_cap*0.9, nearTime=months>=s.loaner_max_months-1, status;
+    if(!eligible) status="🅗 HOLD · "+Math.max(0,Math.ceil((s.loaner_min_months-months)*DPM))+"d to ICV";
+    else if(nearCap||nearTime){ status="🔴 RELEASE NOW"; releasing++; }
+    else status="🟢 READY";
+    rows.push({stock:stock,model:model,vehicle:u?u.desc:"",ext_int:u?(u.ext+"/"+u.int):"",
+      months:Math.round(months*10)/10,miles:Math.round(miles),icv_earned:Math.round(icv*Math.min(months,s.loaner_max_months)),
+      eligible:eligible,status:status,release_by:releaseAt?releaseAt.toISOString().slice(0,10):"",note:String(e.note||"").trim()}); });
+  rows.sort((a,b)=>b.months-a.months);
+  let inService=rows.length, afterRelease=inService-releasing, toAdd=Math.max(0,s.loaner_fleet_target-afterRelease);
+  return {target:s.loaner_fleet_target,in_service:inService,releasing_now:releasing,to_add:toAdd,rows:rows}; }
+
 function runEngine(inv,sales,s,today){
-  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,effectiveRoster(s),s), seas=computeSeasonality(sales,tb), positions=computePositions(inv,metrics,s,today);
+  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,effectiveRoster(s),s), seas=computeSeasonality(sales,tb);
+  let loanerPrefixes=loanerStockPrefixes(s), positions=computePositions(inv,metrics,s,today,loanerPrefixes);
   let agedBrakes={}; (s.aged_memory||[]).forEach(e=>{ if(e.active===undefined||e.active===1||e.active===true||e.active==="1") agedBrakes[e.key]=(agedBrakes[e.key]||0)+1; });
   let overrideMap={}; s.overrides.forEach(e=>{ overrideMap[e.key]=(overrideMap[e.key]||0)+parseInt(e.qty||0,10); });
   let windows=resolveWindows(inv,today,s);
@@ -285,4 +379,8 @@ function runEngine(inv,sales,s,today){
   let demoReturns=computeDemoReturns(demoUnits,s,today);
   let lines=buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demoReturns);
   let orphans=findOrphans(sales,effectiveRoster(s));
-  return {settings:s,tb:tb,metrics:metrics,seas:seas,positions:positions,lines:lines,demoUnits:demoUnits,sales:sales,orphans:orphans,inv:inv,invCount:inv.length,salesCount:sales.length,windows:windows}; }
+  let res={settings:s,tb:tb,metrics:metrics,seas:seas,positions:positions,lines:lines,demoUnits:demoUnits,sales:sales,orphans:orphans,inv:inv,invCount:inv.length,salesCount:sales.length,windows:windows};
+  res.preowned=computePreowned(s,metrics,inv);
+  res.loanerBoard=loanerCandidates(res);
+  res.loanerFleetPlan=loanerFleet(res);
+  return res; }

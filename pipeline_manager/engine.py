@@ -112,6 +112,7 @@ class EngineResult:
     sales: list
     orphans: list              # keys sold/stocked but not on the roster
     arrival_windows: dict = field(default_factory=dict)  # model -> continuous lead (mo)
+    preowned: dict = field(default_factory=dict)  # model|code -> PreownedStat
 
 
 # --------------------------------------------------------------------------- #
@@ -358,16 +359,18 @@ def _loaner_days_out(entry) -> int | None:
 
 
 def compute_positions(inventory: list[InventoryUnit], metrics: dict, s: Settings,
-                      today: _dt.date) -> dict:
+                      today: _dt.date, loaner_prefixes: list | None = None) -> dict:
+    loaner_prefixes = loaner_prefixes or []
     positions: dict[str, InvPosition] = {}
     for u in inventory:
         if not u.key:
             continue
         pos = positions.setdefault(u.key, InvPosition())
         demo = _is_demo(u.stock, s.demo_stocks)
+        loaner = _is_demo(u.stock, loaner_prefixes)
         if u.is_dlr_inv:
-            if demo:
-                continue  # demo units are out of all sell/order/overstock math
+            if demo or loaner:
+                continue  # demos and in-service loaners are out of sellable math
             # Returned loaner: subtract only the hidden demo period (taken ->
             # returned) from days-in-stock, so the days it was publicly available
             # before and after the demo still count as real market time. (A bare
@@ -811,11 +814,13 @@ def _find_orphans(sales, inventory, roster) -> list:
 # Orchestration
 # --------------------------------------------------------------------------- #
 def run(inventory, sales, settings: Settings, today: _dt.date | None = None) -> EngineResult:
+    from . import loaner as _loaner
     today = today or _dt.date.today()
     tb = compute_time_base(sales, today)
     metrics = compute_metrics(sales, tb, settings, settings.effective_roster())
     seas = compute_seasonality(sales, tb)
-    positions = compute_positions(inventory, metrics, settings, today)
+    loaner_prefixes = _loaner.loaner_stock_prefixes(settings)
+    positions = compute_positions(inventory, metrics, settings, today, loaner_prefixes)
 
     aged_brakes: dict[str, int] = {}
     for e in settings.aged_memory:
@@ -832,10 +837,11 @@ def run(inventory, sales, settings: Settings, today: _dt.date | None = None) -> 
     lines = build_lines(settings, metrics, seas, positions, aged_brakes,
                         override_map, windows, demo_returns)
     orphans = _find_orphans(sales, inventory, settings.effective_roster())
+    preowned = _loaner.compute_preowned(settings, metrics, inventory)
 
     return EngineResult(
         settings=settings, time=tb, metrics=metrics, seasonality=seas,
         positions=positions, lines=lines, demo_units=demo_units,
         inventory=inventory, sales=sales, orphans=orphans,
-        arrival_windows=windows,
+        arrival_windows=windows, preowned=preowned,
     )

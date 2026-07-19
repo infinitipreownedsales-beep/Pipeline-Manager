@@ -73,6 +73,68 @@ function executiveDemos(res){ let s=res.settings, out={};
   return out; }
 function fleetTargets(res){ let out={}; MODELS.forEach(model=>{ let r=res.seas[model].rate;
     out[model]=[]; for(let m=0;m<12;m++) out[model].push(xround(r[m]+r[(m+1)%12],0)); }); return out; }
+function money(n){ n=Math.round(n||0); return (n<0?"-$":"$")+Math.abs(n).toLocaleString(); }
+
+/* ---- loaner / ICV program dashboard ---- */
+function loanerRender(res){
+  let board=res.loanerBoard||{}, plan=res.loanerFleetPlan||{rows:[],in_service:0,target:0,releasing_now:0,to_add:0};
+  let H=[];
+  // fleet status KPIs
+  H.push("<div class='lkpis'>");
+  H.push("<div class='lkpi'><div class='lab'>In service</div><div class='big'>"+plan.in_service+" <span style='font-size:14px;color:var(--muted)'>/ "+plan.target+" target</span></div></div>");
+  H.push("<div class='lkpi'><div class='lab'>Releasing now</div><div class='big' style='color:"+(plan.releasing_now?"var(--bad)":"var(--muted)")+"'>"+plan.releasing_now+"</div></div>");
+  H.push("<div class='lkpi'><div class='lab'>Add this cascade</div><div class='big' style='color:"+(plan.to_add?"var(--orange)":"var(--good)")+"'>"+plan.to_add+"</div></div>");
+  // best-value pick across models
+  let best=null; MODELS.forEach(m=>(board[m]||[]).forEach(p=>{ if(!best||p.netValue>best.netValue) best=p; }));
+  if(best) H.push("<div class='lkpi'><div class='lab'>Best used gross</div><div class='big' style='color:var(--teal)'>"+money(best.netValue)+"</div><div class='foot' style='margin:2px 0 0'>"+esc(best.trim)+" "+esc(best.ext)+"/"+esc(best.int)+"</div></div>");
+  H.push("</div>");
+
+  // current in-service fleet + cascading release
+  if(plan.rows.length){
+    H.push("<div class='dc-sub'>In-service fleet <span class='dc-note'>cascading release — 🔴 pull now, 🟢 eligible, 🅗 hold for ICV</span></div>");
+    H.push(tbl(["Stock","Model","Vehicle","Ext/Int","In svc","Miles","ICV earned","Release by","Status","Note"],
+      ["","","","","num","num","num","","",""],
+      plan.rows.map(r=>[esc(r.stock),r.model,{html:"<span class='dim'>"+esc(r.vehicle)+"</span>"},esc(r.ext_int),
+        r.months+"mo",r.miles.toLocaleString(),{html:"<span class='teal' style='color:var(--teal)'>"+money(r.icv_earned)+"</span>"},
+        {html:"<span class='dim'>"+esc(r.release_by)+"</span>"},
+        {html:"<b>"+esc(r.status)+"</b>"},{html:r.note?esc(r.note):"<span class='dim'>—</span>"}])));
+  } else {
+    H.push("<div class='empty'>No loaners in service yet. Add your current fleet in ✎ Data → Loaner / ICV program, then this shows each unit's age, miles, ICV earned and when to release it.</div>");
+  }
+
+  // candidate board — best combos to put INTO the program
+  let anyModeled=false; MODELS.forEach(m=>(board[m]||[]).forEach(p=>{ if(p.modeled) anyModeled=true; }));
+  H.push("<div class='dc-sub' style='margin-top:16px'>Best units to put into the program <span class='dc-note'>ranked by preowned profit after ICV + write-down + bonus, and whether they clear the used window</span></div>");
+  H.push("<div class='demogrid'>");
+  MODELS.forEach(model=>{ let picks=board[model]||[];
+    H.push("<div class='democol'><div class='demohd'>"+model+"</div>");
+    if(!picks.length){ H.push("<div class='empty'>No candidate — need cost/MSRP on units in the pipeline.</div>"); }
+    picks.forEach((p,i)=>{ let e=p.econ, medal=["①","②","③","④","⑤"][i]||("#"+(i+1));
+      H.push("<div class='loancard democard"+(i===0?" top":"")+"'>"+
+        "<div class='demorank'>"+medal+"</div>"+
+        "<div class='demotrim'>"+esc(p.trim)+" <span class='demoei'>"+esc(p.ext)+"/"+esc(p.int)+"</span></div>"+
+        "<div class='money'><span class='net' style='color:"+(p.netValue>=0?"var(--good)":"var(--bad)")+"'>"+money(p.netValue)+"</span><span class='netlab'>used gross</span>"+
+          " <span class='"+(p.modeled?"lmodeled":"lmeasured")+"' title='"+(p.modeled?"modeled from new-car demand":"measured from your preowned sales")+"'>"+(p.modeled?"modeled":"measured")+"</span></div>"+
+        "<div class='demowhy' style='margin:4px 0 6px'>"+dtsCell(p.usedDts)+" <span class='demometa'>used turn</span> "+
+          (e.bonusOk?"<span class='lbonus-ok'>✓ $"+Math.round(e.bonus).toLocaleString()+" bonus</span>":"<span class='lbonus-no'>✗ misses bonus</span>")+"</div>"+
+        "<div class='lchips'>"+
+          "<span class='lchip'>cost "+money(e.cost)+"</span>"+
+          "<span class='lchip'>ICV <b>-"+money(e.icvTotal).slice(1)+"</b></span>"+
+          "<span class='lchip'>write-down <b>-"+money(e.deprTotal).slice(1)+"</b></span>"+
+          (e.bonus?"<span class='lchip'>bonus <b>-"+money(e.bonus).slice(1)+"</b></span>":"")+
+          "<span class='lchip'>adj cost <b>"+money(e.adjustedCost)+"</b></span>"+
+          "<span class='lchip'>used @ "+money(e.usedPrice)+"</span>"+
+        "</div>");
+      if(p.units.length){ p.units.forEach(u=>{
+        H.push("<div class='demovin'><span class='vintag'>VIN …"+esc(u.vin_last6)+"</span>"+
+          "<span class='demound'>"+esc(u.year)+" "+esc(u.ext_int)+" · "+u.dis+"d"+(u.cost?" · cost "+money(u.cost):"")+"</span></div>"); });
+      } else H.push("<div class='demovin order'>none in stock — earmark one on the next order</div>");
+      H.push("</div>"); });
+    H.push("</div>"); });
+  H.push("</div>");
+  if(anyModeled) H.push("<div class='foot'>“modeled” picks estimate used speed &amp; price from your new-car demand (used turn ≈ new days-to-sell; price ≈ "+Math.round((res.settings.preowned_retention||0.9)*100)+"% of MSRP). Paste a preowned/CPO sales report in ✎ Data to replace those with your real used numbers.</div>");
+  return H.join("");
+}
 
 function tbl(head,cls,rows){
   let h="<div class='tblwrap'><table><thead><tr>"+head.map((x,i)=>"<th class='"+(cls[i]||"")+"'>"+x+"</th>").join("")+"</tr></thead><tbody>";
@@ -211,23 +273,27 @@ function render(res){
   H.push("<div class='democenter'><div class='dc-left'>"+board.join("")+"</div>"+
     "<div class='dc-right'>"+dash.join("")+"<div style='height:12px'></div>"+loaners.join("")+"</div></div>");
 
-  // 5. OVERSTOCK
-  H.push(sec(5,"Overstock / Wholesale","over-target metal — order slower; wholesale only what won't sell"));
+  // 5. LOANER / ICV PROGRAM
+  H.push(sec(5,"Loaner / ICV Program","which units to cycle through the courtesy fleet for the best preowned profit"));
+  H.push(loanerRender(res));
+
+  // 6. OVERSTOCK
+  H.push(sec(6,"Overstock / Wholesale","over-target metal — order slower; wholesale only what won't sell"));
   if(rep.over.length) H.push(tbl(["Model","Trim","Ext","Int","On hand","60-day tgt","Over","Wholesale now","Inbound","DTS","Aged"],
     ["","","","","num","num","num","num need","num","num","num"],
     rep.over.map(r=>[r.model,esc(r.trim),r.ext,r.int,r.onhand,r.target,{html:"<b>"+r.over+"</b>"},{html:r.wholeNow>0?r.wholeNow:"<span class='dim'>0</span>"},{html:"<span class='dim'>"+r.inbound+"</span>"},{html:dtsCell(r.dts)},r.aged])));
   else H.push("<div class='empty'>Nothing over target.</div>");
 
-  // 5. WHOLESALE VIN SHEET
-  H.push(sec(6,"Wholesale Now — VIN sheet","aged, over-target, non-demo · print & send to other dealers"));
+  // 7. WHOLESALE VIN SHEET
+  H.push(sec(7,"Wholesale Now — VIN sheet","aged, over-target, non-demo · print & send to other dealers"));
   if(rep.vins.length){ H.push("<div id='print-vin'><h2>WHOLESALE VIN SHEET — "+tb.today.toISOString().slice(0,10)+"</h2></div>");
     H.push(tbl(["#","Stock #","VIN (last 6)","Year","Model","Trim","Ext/Int","Days in stock"],["num","","","","","","","num"],
       rep.vins.map(r=>[r.num,esc(r.stock),esc(r.vin6),r.year,r.model,esc(r.trim),esc(r.ei),r.dis])));
     H.push("<div class='foot noprint'>Use 🖨 Print (top-right) to print this sheet on its own or with any other dashboards.</div>"); }
   else H.push("<div class='empty'>No units past their selling window.</div>");
 
-  // 7. PACE
-  H.push(sec(7,"Pace Check","actual vs predicted 60-day pace"));
+  // 8. PACE
+  H.push(sec(8,"Pace Check","actual vs predicted 60-day pace"));
   H.push(tbl(["Model","Actual 90d","Actual 60d pace","Predicted 60d pace","Variance","Read","Coverage"],
     ["","num","num","num","num","",""],
     rep.pace.map(r=>{ let rl={AHEAD:"AHEAD of forecast",ON:"ON TARGET",BEHIND:"BEHIND forecast"}[r.read], ic={AHEAD:"▲",ON:"●",BEHIND:"▼"}[r.read];
@@ -245,6 +311,7 @@ function render(res){
 function groupSections(root){
   const titleKey={"Order Priority":"order","6-Month Rolling Order Plan":"plan",
     "Fleet Stock Target & Seasonality":"fleet","Demo Center":"democenter",
+    "Loaner / ICV Program":"loaner",
     "Overstock / Wholesale":"overstock","Wholesale Now — VIN sheet":"vins",
     "Pace Check":"pace"};
   let kids=[].slice.call(root.childNodes), groups=[], cur={key:"summary",title:"Summary",nodes:[]};

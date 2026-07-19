@@ -157,6 +157,29 @@
   .suprow input,.addrow input,.addrow select{width:100%}
   .suprow .del,.addrow .del{padding:6px 10px}
   @media(max-width:640px){.suprow,.addrow{grid-template-columns:1fr 1fr}.suprow.thead,.addrow.thead{display:none}}
+  /* loaner / ICV program */
+  .loancfg{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px;margin:8px 0 4px}
+  .loancfg .fld input,.loancfg .fld select{width:100%}
+  .fleetrow{display:grid;grid-template-columns:130px 140px 110px 1fr auto;gap:8px;align-items:center;margin-bottom:6px}
+  .fleetrow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .fleetrow input{width:100%}
+  .fleetrow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:13px;justify-self:start;white-space:nowrap}
+  .fleetrow .del:hover{border-color:var(--warn);color:var(--warn)}
+  @media(max-width:640px){.fleetrow{grid-template-columns:1fr 1fr}.fleetrow.thead{display:none}}
+  /* loaner dashboard cards */
+  .loancard .money{display:flex;align-items:baseline;gap:8px;margin:6px 0 4px}
+  .loancard .money .net{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}
+  .loancard .money .netlab{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .lchips{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+  .lchip{background:#0c1420;border:1px solid var(--line);border-radius:7px;padding:2px 8px;font-size:11px;color:var(--ink2);font-variant-numeric:tabular-nums}
+  .lchip b{color:var(--teal);font-weight:700}
+  .lbonus-ok{color:var(--good);font-weight:700} .lbonus-no{color:var(--bad);font-weight:700}
+  .lmodeled{font-size:10px;color:var(--muted);border:1px dashed var(--line2);border-radius:6px;padding:1px 6px}
+  .lmeasured{font-size:10px;color:var(--teal);border:1px solid var(--teal-hd);border-radius:6px;padding:1px 6px}
+  .lkpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:6px 0 14px}
+  .lkpi{background:linear-gradient(180deg,var(--panel2),#111a28);border:1px solid var(--line);border-radius:12px;padding:11px 14px}
+  .lkpi .lab{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .lkpi .big{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums;margin-top:2px}
   /* print selector menu */
   .printmenu{position:absolute;right:0;top:38px;z-index:40;background:var(--panel2);border:1px solid var(--line2);
     border-radius:12px;padding:12px;box-shadow:var(--shadow);width:250px}
@@ -275,6 +298,35 @@
           <div id="addRows"></div>
           <button class="ghost" id="addAdd" style="margin-top:8px">＋ Add combo</button>
         </div>
+      </div>
+    </div>
+    <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
+      <label class="top">Loaner / ICV program <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— which units to cycle through the courtesy fleet for the best <b>preowned</b> profit. INFINITI's monthly ICV allowance and the 1.25%/mo write-down both lower the unit's cost basis; a unit must serve ≥ min months for ICV and retail within max months under the mile cap for the velocity bonus. All figures editable — the board recomputes live.</span></label>
+      <div class="loancfg">
+        <div class="fld"><label>ICV/mo QX80</label><input type="number" id="licv80" value="0"></div>
+        <div class="fld"><label>ICV/mo QX60</label><input type="number" id="licv60" value="0"></div>
+        <div class="fld"><label>ICV/mo QX65</label><input type="number" id="licv65" value="0"></div>
+        <div class="fld"><label>Write-down %/mo</label><input type="number" id="ldepr" value="1.25" step="0.05"></div>
+        <div class="fld"><label>% taken off</label><select id="lbase"><option value="cost">Invoice cost</option><option value="msrp">MSRP</option></select></div>
+        <div class="fld"><label>Min mo (ICV)</label><input type="number" id="lmin" value="3"></div>
+        <div class="fld"><label>Max mo (bonus)</label><input type="number" id="lmax" value="7"></div>
+        <div class="fld"><label>Service mo</label><input type="number" id="lsvc" value="3"></div>
+        <div class="fld"><label>Mile cap</label><input type="number" id="lcap" value="10000"></div>
+        <div class="fld"><label>Velocity bonus $</label><input type="number" id="lbonus" value="2500"></div>
+        <div class="fld"><label>Miles/mo</label><input type="number" id="lmpm" value="1200"></div>
+        <div class="fld"><label>Recon $</label><input type="number" id="lrecon" value="0"></div>
+        <div class="fld"><label>Used % of MSRP</label><input type="number" id="lret" value="0.90" step="0.01"></div>
+        <div class="fld"><label>Fleet target</label><input type="number" id="lfleet" value="20"></div>
+      </div>
+      <div style="margin-top:10px">
+        <label class="top" style="margin-bottom:5px">Preowned sales <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— optional. Paste a used/CPO sales report with <b>Model</b>, <b>Model Code</b>, <b>Days to sell</b> (or days in stock) and <b>Price</b> (or Gross) columns. Blank = the board models used speed &amp; price from your new-car demand.</span></label>
+        <textarea id="pre" placeholder="Paste a preowned/CPO sales export here (with its header row) — optional…" style="height:88px"></textarea>
+      </div>
+      <div style="margin-top:12px">
+        <div class="dc-sub" style="margin:2px 0 6px">🚗 In-service loaner fleet <span class="dc-note">pulled from sellable inventory · staggered (cascading) release</span></div>
+        <div id="fleetHead" class="fleetrow thead"><span>Stock #</span><span>In-service start</span><span>Miles (opt.)</span><span>Note</span><span></span></div>
+        <div id="fleetRows"></div>
+        <button class="ghost" id="addFleet" style="margin-top:8px">＋ Add loaner unit</button>
       </div>
     </div>
     <div style="margin-top:11px;display:flex;gap:9px;align-items:center;flex-wrap:wrap">

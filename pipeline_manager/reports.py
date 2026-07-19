@@ -241,6 +241,21 @@ def executive_demos(res: EngineResult) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Loaner / ICV program
+# --------------------------------------------------------------------------- #
+def loaner_board(res: EngineResult) -> dict:
+    """Per model, the best configs to cycle through the courtesy-loaner fleet."""
+    from . import loaner
+    return loaner.loaner_candidates(res)
+
+
+def loaner_fleet(res: EngineResult) -> dict:
+    """Current in-service fleet + cascading release schedule and add count."""
+    from . import loaner
+    return loaner.loaner_fleet(res)
+
+
+# --------------------------------------------------------------------------- #
 # 5. Pace Check
 # --------------------------------------------------------------------------- #
 def pace_check(res: EngineResult) -> list:
@@ -335,6 +350,8 @@ def build_all(res: EngineResult) -> dict:
         "demo_dashboard": demo_dashboard(res),
         "previous_loaners": previous_loaners(res),
         "executive_demos": executive_demos(res),
+        "loaner_board": loaner_board(res),
+        "loaner_fleet": loaner_fleet(res),
         "pace_check": pace_check(res),
         "fleet_targets": fleet_targets(res),
         "data_health": data_health(res),

@@ -49,6 +49,26 @@
     { "date": "2026-06-25", "model": "QX80", "code": "8361", "ext": "XLF", "int": "G", "days": 217 }
   ],
 
+  "_loaner_comment": "Courtesy-vehicle (ICV) program. ICV allowance + the monthly write-down both lower the unit's cost basis; a unit must serve >= min months for ICV and retail within max months under the mile cap for the velocity bonus. 'loaner_units' are pulled from sellable inventory like demos. 'preowned_sales' (optional) give real used velocity/price; without it the board models them from new-car demand and preowned_retention x MSRP.",
+  "loaner_fleet_target": 20,
+  "loaner_icv": { "QX80": 650, "QX60": 500, "QX65": 500 },
+  "loaner_depr_pct": 1.25,
+  "loaner_depr_base": "cost",
+  "loaner_min_months": 3,
+  "loaner_max_months": 7,
+  "loaner_service_months": 3,
+  "loaner_mile_cap": 10000,
+  "loaner_velocity_bonus": 2500,
+  "loaner_miles_per_month": 1200,
+  "loaner_recon": 0,
+  "preowned_retention": 0.90,
+  "loaner_units": [
+    { "stock": "N15174", "start": "2026-04-01", "miles": 6200, "note": "service loaner" }
+  ],
+  "preowned_sales": [
+    { "model": "QX60", "code": "8411", "days": 22, "price": 47800 }
+  ],
+
   "prove_bar": 2,
   "swap_threshold": 90,
   "rate_cap": 5.0,

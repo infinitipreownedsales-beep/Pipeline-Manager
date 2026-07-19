@@ -14,7 +14,69 @@ function getSettings(){
     demo_stocks:readDemos().demo_stocks, demo_starts:readDemos().demo_starts, demo_notes:readDemos().demo_notes, prev_loaners:readLoaners(), aged_memory:[],
     prove_bar:2, swap_threshold:90, rate_cap:5.0, paperweight_dts:90, wholesale_min_age:60, stall_days:120, aged_days:60,
     smooth_base:true, anticipate_demo_returns:true, trades:readTrades(),
-    demo_pick_max_dts:45, demo_pick_min_total:2, demo_pick_min_r180:2, demo_picks_per_model:3, demo_vins_per_combo:2 }; }
+    demo_pick_max_dts:45, demo_pick_min_total:2, demo_pick_min_r180:2, demo_picks_per_model:3, demo_vins_per_combo:2,
+    loaner_fleet_target:numVal("lfleet",20),
+    loaner_icv:{QX80:numVal("licv80",0),QX60:numVal("licv60",0),QX65:numVal("licv65",0)},
+    loaner_depr_pct:numVal("ldepr",1.25), loaner_depr_base:document.getElementById("lbase").value,
+    loaner_min_months:numVal("lmin",3), loaner_max_months:numVal("lmax",7), loaner_service_months:numVal("lsvc",3),
+    loaner_mile_cap:numVal("lcap",10000), loaner_velocity_bonus:numVal("lbonus",2500),
+    loaner_miles_per_month:numVal("lmpm",1200), loaner_recon:numVal("lrecon",0),
+    preowned_retention:numVal("lret",0.90), loaner_units:readFleet(), preowned_sales:readPreowned() }; }
+function numVal(id,def){ let el=document.getElementById(id); if(!el) return def; let v=parseFloat(el.value); return isNaN(v)?def:v; }
+const LOANCFG_IDS=["lfleet","licv80","licv60","licv65","ldepr","lbase","lmin","lmax","lsvc","lcap","lbonus","lmpm","lrecon","lret"];
+function persistLoanCfg(){ try{ let o={}; LOANCFG_IDS.forEach(id=>o[id]=document.getElementById(id).value); localStorage.setItem("pm_loancfg",JSON.stringify(o)); }catch(e){} }
+function restoreLoanCfg(){ try{ let o=JSON.parse(localStorage.getItem("pm_loancfg")||"null"); if(!o) return;
+  LOANCFG_IDS.forEach(id=>{ if(o[id]!==undefined&&document.getElementById(id)) document.getElementById(id).value=o[id]; }); }catch(e){} }
+
+/* ---- in-service loaner fleet (editable) ---- */
+function rawFleet(){ let out=[];
+  document.querySelectorAll("#fleetRows .fleetrow").forEach(row=>{
+    if(row.classList.contains("thead")) return;
+    out.push({stock:row.querySelector(".f-stock").value.trim(), start:row.querySelector(".f-start").value,
+              miles:row.querySelector(".f-miles").value.trim(), note:row.querySelector(".f-note").value.trim()}); });
+  return out; }
+function addFleetRow(d){ d=d||{};
+  let row=document.createElement("div"); row.className="fleetrow";
+  row.innerHTML =
+    "<input class='f-stock' placeholder='Stock#' value=\""+attrq(d.stock)+"\">"+
+    "<input type='date' class='f-start' title='date it went into service' value='"+(d.start||"")+"'>"+
+    "<input type='number' class='f-miles' min='0' placeholder='miles' value='"+(d.miles!=null?attrq(d.miles):"")+"'>"+
+    "<input class='f-note' placeholder='reason / assignment' value=\""+attrq(d.note)+"\">"+
+    "<button class='del' title='pull from the loaner fleet'>✕</button>";
+  row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistFleet(); });
+  row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistFleet(); }));
+  document.getElementById("fleetRows").appendChild(row); return row; }
+function readFleet(){ let out=[]; rawFleet().forEach(r=>{ if(r.stock) out.push({stock:r.stock,start:r.start,miles:r.miles,note:r.note}); }); return out; }
+function persistFleet(){ try{ localStorage.setItem("pm_fleet",JSON.stringify(rawFleet())); }catch(e){} }
+function restoreFleet(){ try{ JSON.parse(localStorage.getItem("pm_fleet")||"[]").forEach(addFleetRow); }catch(e){} }
+
+/* ---- preowned sales paste (optional) ---- */
+function readPreowned(){
+  let text=(document.getElementById("pre")||{}).value||""; if(!text.trim()) return [];
+  let rows; try{ rows=parseTable(text); }catch(e){ return []; }
+  if(!rows.length) return [];
+  // Forgiving: find a header row that has something model-ish and a code-ish column.
+  let hi=-1,cm=null;
+  for(let i=0;i<rows.length;i++){ let m={}; rows[i].forEach((c,j)=>{ let k=String(c==null?"":c).trim().toLowerCase(); if(k) m[k]=j; });
+    let hasCode=("model code" in m)||("modelcode" in m)||("code" in m), hasModel=("model" in m)||("model line" in m)||("series" in m);
+    if(hasCode||hasModel){ hi=i; cm=m; break; } }
+  if(hi<0) return [];
+  function pk(){ for(let i=0;i<arguments.length;i++){ let n=arguments[i].toLowerCase(); if(n in cm) return cm[n]; } return null; }
+  let ci={model:pk("model","model line","series"),code:pk("model code","modelcode","code"),
+    days:pk("days to sell","days to sell (used)","days","days in stock","dis","age"),
+    price:pk("price","sale price","retail","sold price","sales price"),gross:pk("gross","front gross","total gross")};
+  let out=[];
+  for(let r=hi+1;r<rows.length;r++){ let row=rows[r];
+    let codeRaw=ci.code!=null?row[ci.code]:null, modelRaw=ci.model!=null?row[ci.model]:null;
+    let code=digitsOnly(codeRaw), model=String(modelRaw||"").trim().toUpperCase();
+    if(!model && code) model=modelFromCode(code);
+    if(!code && model){ /* no code: skip, trim-level modeling can't hang on this */ }
+    if(!model||!code) continue;
+    out.push({model:model,code:code.slice(0,4),
+      days:ci.days!=null?row[ci.days]:"", price:ci.price!=null?row[ci.price]:"", gross:ci.gross!=null?row[ci.gross]:""}); }
+  return out; }
+function persistPreowned(){ try{ localStorage.setItem("pm_pre",(document.getElementById("pre")||{}).value||""); }catch(e){} }
+function restorePreowned(){ try{ let v=localStorage.getItem("pm_pre"); if(v!=null) document.getElementById("pre").value=v; }catch(e){} }
 /* ---- outbound dealer trade log ---- */
 const COMBO_MAP = {};
 function comboLabel(c){ return c.model+" "+(c.trim||"")+" "+c.ext+"/"+c.int+" ("+c.code+")"; }
@@ -258,6 +320,11 @@ window.addEventListener("DOMContentLoaded",function(){
   restoreSuppress();
   document.getElementById("addAdd").addEventListener("click",function(){ addAddRow(); persistAdds(); });
   restoreAdds();
+  document.getElementById("addFleet").addEventListener("click",function(){ addFleetRow(); persistFleet(); });
+  restoreFleet();
+  restorePreowned(); restoreLoanCfg();
+  document.getElementById("pre").addEventListener("change",function(){ liveRecompute(); persistPreowned(); });
+  LOANCFG_IDS.forEach(id=>document.getElementById(id).addEventListener("change",function(){ liveRecompute(); persistLoanCfg(); }));
   // print selector
   document.getElementById("printbtn").addEventListener("click",function(e){ e.stopPropagation();
     let m=document.getElementById("printmenu"); if(m.style.display==="block") m.style.display="none"; else openPrintMenu(); });

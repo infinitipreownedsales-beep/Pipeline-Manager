@@ -92,6 +92,35 @@ class Settings:
     # reads fast; a 115-day trade reads slow). Empty by default; add via the app.
     trades: list = field(default_factory=list)
 
+    # --- loaner / ICV courtesy-vehicle program ----------------------------- #
+    # INFINITI pays a monthly ICV allowance the store books as a write-down
+    # against the unit's cost; the store also depreciates the unit a fixed % per
+    # month it is in service. A unit must serve >= min months to be ICV-eligible
+    # and be retailed within max months with < mile_cap miles to earn the
+    # velocity bonus. All of it lowers the cost basis, so the "best" loaner is one
+    # whose reduced basis becomes real used-car gross AND clears the used market
+    # fast enough to stay inside the window. Loaners replace retailable units
+    # (no extra allocation) — their Stock#s are pulled from sellable inventory
+    # exactly like demos, and the store keeps ~fleet_target in service.
+    loaner_fleet_target: int = 20        # units to keep in service
+    loaner_icv: dict = field(default_factory=lambda: {"QX80": 0, "QX60": 0, "QX65": 0})
+    loaner_depr_pct: float = 1.25        # monthly write-down %
+    loaner_depr_base: str = "cost"       # "cost" (invoice) or "msrp"
+    loaner_min_months: int = 3           # ICV-eligibility floor
+    loaner_max_months: int = 7           # velocity-bonus ceiling (from program start)
+    loaner_service_months: int = 3       # planned months in service before release
+    loaner_mile_cap: int = 10000         # bonus mileage cap
+    loaner_velocity_bonus: float = 2500  # bonus $ when retailed in window & under cap
+    loaner_miles_per_month: int = 1200   # miles a loaner accrues per month in service
+    loaner_recon: float = 0.0            # per-unit recon/pack cost when retailed used
+    preowned_retention: float = 0.90     # used retail as a share of MSRP (modeled only)
+    # Current in-service fleet: each {stock, start (YYYY-MM-DD)[, miles, note]}.
+    # Stock#s are prefix-matched and pulled out of sellable inventory.
+    loaner_units: list = field(default_factory=list)
+    # Optional preowned sales history (used/CPO) for real used velocity & price.
+    # Each {model, code, days, price[, gross]}; empty -> the board models it.
+    preowned_sales: list = field(default_factory=list)
+
     # --- tunable thresholds (brief §7/§14/§15/§17) ------------------------- #
     prove_bar: int = 2                   # R90 needed for a demoted combo to surface
     swap_threshold: int = 90             # demo age (days) before flagging a swap

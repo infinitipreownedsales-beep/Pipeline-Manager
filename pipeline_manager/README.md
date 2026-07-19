@@ -95,6 +95,19 @@ combos to put executives into (short days-to-sell so a demo still resells
 quickly once it has miles; repeat demand only, never a one-off), VIN-led where
 in stock and flagged to order when not.
 
+And a **Loaner / ICV Program** dashboard — which units to cycle through the
+courtesy fleet for the best *preowned* profit. INFINITI's monthly ICV allowance
+and the 1.25%/month write-down both lower a unit's cost basis; a unit must serve
+≥ 3 months to earn ICV and be retailed within 7 months under 10k miles for the
+$2,500 velocity bonus. The board computes each candidate's used gross after those
+write-downs and flags whether it clears the used window, ranks the best combos to
+designate (VIN-led, opportunity cost weighed since loaners replace retailable
+units), and shows the in-service fleet with each unit's age, miles, ICV earned
+and a cascading release schedule to hold ~20 in service. Preowned velocity and
+price come from a pasted used/CPO sales report when you have one, or are modeled
+from the new-car demand signal until you do. All ICV / write-down / bonus figures
+are editable.
+
 ## How the engine thinks (the short version)
 
 Every unit and every sale is reduced to one **config key**: `Model | 4-digit Code
@@ -157,7 +170,8 @@ pipeline_manager/
   keys.py       key construction, model mapping, text→number coercion, Excel round
   ingest.py     read inventory + sales (.csv/.xlsx), coerce, build keys
   engine.py     the recompute: metrics → seasonality → position → base/target/NEED
-  reports.py    the five output tables
+  loaner.py     ICV/courtesy-fleet economics: preowned velocity + write-down P&L
+  reports.py    the output tables
   cli.py        argparse entry point + text/JSON rendering
   config.py     Settings + control-state defaults + roster loader
   roster_default.json   the orderable combo roster (74 configs)
