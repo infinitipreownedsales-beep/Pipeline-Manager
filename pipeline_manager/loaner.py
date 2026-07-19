@@ -81,8 +81,9 @@ def rep_cost_msrp(key, model, code, cost_key, msrp_key, cost_trim, msrp_trim) ->
 def compute_preowned(s, metrics, inventory) -> dict:
     """Preowned stat per trim (model|code). Measured from preowned_sales when
     present, otherwise modeled: used velocity tracks the new-car days-to-sell and
-    used price = a retention share of MSRP (nearly-new, sub-10k-mile loaners)."""
-    _, msrp_key, _, msrp_trim = _rep_maps(inventory)
+    used price = a share of INVOICE (the store's own new selling price), since a
+    nearly-new, sub-10k-mile loaner retails at ~that same point."""
+    cost_key, msrp_key, cost_trim, msrp_trim = _rep_maps(inventory)
 
     # Measured: aggregate pasted preowned sales by trim.
     measured: dict[str, dict] = {}
@@ -106,7 +107,7 @@ def compute_preowned(s, metrics, inventory) -> dict:
     out: dict[str, PreownedStat] = {}
     for tkey, a in measured.items():
         dts = a["d"] / a["dc"] if a["dc"] else _model_avg_dts(metrics, tkey.split("|")[0])
-        price = a["p"] / a["pc"] if a["pc"] else (msrp_trim.get(tkey, 0.0) * s.preowned_retention)
+        price = a["p"] / a["pc"] if a["pc"] else (cost_trim.get(tkey, 0.0) * s.preowned_price_pct)
         out[tkey] = PreownedStat(round(dts, 1), round(price, 0), a["n"], modeled=False)
 
     # Modeled fallback for every trim in the pipeline not already measured.
@@ -116,7 +117,7 @@ def compute_preowned(s, metrics, inventory) -> dict:
             continue
         model = tkey.split("|")[0]
         used_dts = _trim_new_dts(metrics, tkey) or _model_avg_dts(metrics, model) or 45.0
-        used_price = msrp_trim.get(tkey, 0.0) * s.preowned_retention
+        used_price = cost_trim.get(tkey, 0.0) * s.preowned_price_pct
         out[tkey] = PreownedStat(round(used_dts, 1), round(used_price, 0), 0, modeled=True)
     return out
 
@@ -224,8 +225,11 @@ def loaner_candidates(res) -> dict:
             if cost <= 0 and msrp <= 0:
                 continue
             metric = res.metrics.get(l.key)
-            econ = loaner_economics(cost, msrp, model, pstat.used_dts,
-                                    pstat.used_price, s)
+            # Measured used price is trim-level (its data granularity); a modeled
+            # price is anchored to THIS config's own invoice, so at 100% the used
+            # gross is exactly the write-downs (never "sell used above invoice").
+            used_price = cost * s.preowned_price_pct if pstat.modeled else pstat.used_price
+            econ = loaner_economics(cost, msrp, model, pstat.used_dts, used_price, s)
             pos = res.positions.get(l.key)
             # Fresh, low-days, non-demo units are the natural loaner picks.
             fresh = sorted(pos.onlot_units, key=lambda u: u.dis) if pos else []
@@ -238,7 +242,7 @@ def loaner_candidates(res) -> dict:
             score = _loaner_score(econ, pstat, metric) + (4 if units else 0)
             picks.append({
                 "trim": l.trim, "ext": l.ext, "int": l.interior, "key": l.key,
-                "used_dts": pstat.used_dts, "used_price": pstat.used_price,
+                "used_dts": pstat.used_dts, "used_price": econ["used_price"],
                 "modeled": pstat.modeled, "score": round(score, 1),
                 "net_value": econ["used_gross"], "econ": econ,
                 "new_dts": l.dts, "onlot": l.onlot, "in_stock": bool(units),

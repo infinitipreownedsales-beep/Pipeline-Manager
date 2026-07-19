@@ -132,7 +132,7 @@ function loanerRender(res){
       H.push("</div>"); });
     H.push("</div>"); });
   H.push("</div>");
-  if(anyModeled) H.push("<div class='foot'>“modeled” picks estimate used speed &amp; price from your new-car demand (used turn ≈ new days-to-sell; price ≈ "+Math.round((res.settings.preowned_retention||0.9)*100)+"% of MSRP). Paste a preowned/CPO sales report in ✎ Data to replace those with your real used numbers.</div>");
+  if(anyModeled) H.push("<div class='foot'>“modeled” picks estimate used speed &amp; price from your new-car demand (used turn ≈ new days-to-sell; price ≈ "+Math.round((res.settings.preowned_price_pct||1)*100)+"% of invoice — your new selling price). At invoice, the used front gross ≈ the write-downs you banked (ICV + write-down + bonus), and you still make backend on the used deal. Paste a preowned/CPO sales report in ✎ Data to replace the estimate with your real used numbers.</div>");
   return H.join("");
 }
 

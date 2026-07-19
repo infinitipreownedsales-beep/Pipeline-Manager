@@ -21,7 +21,7 @@ function getSettings(){
     loaner_min_months:numVal("lmin",3), loaner_max_months:numVal("lmax",7), loaner_service_months:numVal("lsvc",3),
     loaner_mile_cap:numVal("lcap",10000), loaner_velocity_bonus:numVal("lbonus",2500),
     loaner_miles_per_month:numVal("lmpm",1200), loaner_recon:numVal("lrecon",0),
-    preowned_retention:numVal("lret",0.90), loaner_units:readFleet(), preowned_sales:readPreowned() }; }
+    preowned_price_pct:numVal("lret",1.0), loaner_units:readFleet(), preowned_sales:readPreowned() }; }
 function numVal(id,def){ let el=document.getElementById(id); if(!el) return def; let v=parseFloat(el.value); return isNaN(v)?def:v; }
 const LOANCFG_IDS=["lfleet","licv80","licv60","licv65","ldepr","lbase","lmin","lmax","lsvc","lcap","lbonus","lmpm","lrecon","lret"];
 function persistLoanCfg(){ try{ let o={}; LOANCFG_IDS.forEach(id=>o[id]=document.getElementById(id).value); localStorage.setItem("pm_loancfg",JSON.stringify(o)); }catch(e){} }

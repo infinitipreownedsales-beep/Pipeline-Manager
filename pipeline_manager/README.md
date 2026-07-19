@@ -106,8 +106,10 @@ designate (VIN-led, opportunity cost weighed since loaners replace retailable
 units), and shows the in-service fleet with each unit's age, miles, ICV earned
 and a cascading release schedule to hold ~20 in service. Preowned velocity and
 price come from a pasted used/CPO sales report when you have one, or are modeled
-from the new-car demand signal until you do. All ICV / write-down / bonus figures
-are editable.
+from the new-car demand signal until you do (used price defaults to a share of
+*invoice*, since this store prices new at invoice — so a nearly-new loaner's used
+front gross is essentially the write-downs it banked, with backend on top). All
+ICV / write-down / bonus / price figures are editable.
 
 ## How the engine thinks (the short version)
 
