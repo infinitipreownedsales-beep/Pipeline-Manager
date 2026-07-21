@@ -53,6 +53,13 @@ ok("short lay-up still frames as advance", /advance/i.test(joined(midLay)) && /4
 const reachable = whisper({ fam: "8i", chip: "8i", reach: true, conf: 80 });
 ok("reachable shot -> greens language, not advance", /middle of the green/i.test(joined(reachable)) && !/advance/i.test(joined(reachable)));
 
+// --- shaky (unreliable) club is called out, not hidden ---
+const shakyReach = whisper({ fam: "3W", chip: "3W", reach: true, shaky: true, conf: 40 });
+ok("shaky reachable -> warns it's been wild", /all over|wild|fat side/i.test(joined(shakyReach)));
+const shakyAdvance = whisper({ fam: "3W", chip: "3W", reach: false, leaves: 240, shaky: true });
+ok("shaky advance -> 'no hero swing' + widest part", /wild|no hero/i.test(joined(shakyAdvance)) && /widest part|just advance/i.test(joined(shakyAdvance)));
+ok("shaky advance still gives leaves number", /240/.test(joined(shakyAdvance)));
+
 // --- inside 35 switches to conversion voice ---
 const near = whisper({ fam: "chip", chip: "CHIP", i35: true });
 ok("inside 35 -> conversion language, no full-swing club", /commit/.test(joined(near)) && /two putts/.test(joined(near)));

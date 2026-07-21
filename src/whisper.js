@@ -41,8 +41,8 @@ function whyLine(s) {
   const ref = shortRef(s.fam);
   if (s.adj) // live recalibration: club has been carrying short today
     return `you've been coming up short with it, so we're playing it at ${s.eff} today`;
-  if (s.stat && s.stat.sd >= 12)
-    return `your ${ref} is spraying a touch today — give it room`;
+  if (s.shaky || (s.stat && s.stat.sd >= 12))
+    return `your ${ref} is spraying a bit lately — smooth pass, favor the fat side`;
   if (s.cold)
     return `it hasn't quite shown up today, so stay smooth and commit`;
   if (s.hot || (s.conf != null && s.conf >= 85))
@@ -61,6 +61,7 @@ function aimPhrase(s) {
   if (h.dzR === "water") return "anything right is wet — favor center-left and we're happy";
   if (s.side && s.side.dir === "R" && s.side.pct >= 60) return "favor the left edge — your miss lives right";
   if (s.side && s.side.dir === "L" && s.side.pct >= 60) return "favor the right edge — your miss lives left";
+  if (s.shaky) return "aim at the fat side and give yourself room";
   if (h.dzL) return `keep it away from the ${h.dzL} left — middle is plenty`;
   if (h.dzR) return `keep it away from the ${h.dzR} right — middle is plenty`;
   return "middle of the green, nothing cute";
@@ -92,11 +93,14 @@ export function whisper(s) {
   // Can't reach the target with the longest club: this is a lay-up, not a green shot.
   // Say so plainly and give the number we'll leave — never pretend it reaches the green.
   if (s.reach === false) {
-    const why = s.leaves >= 190 ? "that's well past what you carry — no sense forcing it"
+    const why = s.shaky ? "that's more than you carry — and this one's been wild, so no hero swing"
+              : s.leaves >= 190 ? "that's well past what you carry — no sense forcing it"
               : "you can't quite get home from here, and that's fine";
-    let target = `Advance it smooth and center — leaves about ${s.leaves}. ${cap(feelPhrase(s))}.`;
+    let target = s.shaky
+      ? `Aim at the widest part and just advance it — about ${s.leaves} left.`
+      : `Advance it smooth and center — leaves about ${s.leaves}. ${cap(feelPhrase(s))}.`;
     let lines = [cap(why) + ".", target];
-    if (wordCount(lines) > 35) { target = `Advance it smooth — leaves about ${s.leaves}.`; lines = [cap(why) + ".", target]; }
+    if (wordCount(lines) > 35) { target = `Advance it — about ${s.leaves} left.`; lines = [cap(why) + ".", target]; }
     return { club, lines, words: wordCount(lines) };
   }
 
