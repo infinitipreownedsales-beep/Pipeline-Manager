@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loaner Intelligence — Infiniti Depreciation Engine</title>
+<style>
+  :root{
+    --bg:#0a0e16; --panel:#111823; --panel2:#161f2e; --panel3:#1c2738;
+    --ink:#eef2f8; --ink2:#d3dbe7; --muted:#9dabbf; --muted2:#8492a6;
+    --line:#273448; --line2:#33425b;
+    --accent:#4c8dff; --focus:rgba(76,141,255,.5);
+    --teal:#5eead4; --orange:#fb923c; --good:#34d399; --warn:#fbbf24; --bad:#f87171;
+    --shadow:0 1px 3px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.25);
+  }
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background:radial-gradient(1200px 600px at 70% -10%,#132036 0,var(--bg) 60%);color:var(--ink);min-height:100vh;
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;}
+  header{position:sticky;top:0;z-index:20;backdrop-filter:blur(10px);
+    background:linear-gradient(180deg,rgba(11,17,28,.96),rgba(11,17,28,.82));
+    border-bottom:1px solid var(--line);padding:14px 22px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  header h1{margin:0;font-size:16px;letter-spacing:2px;font-weight:800}
+  header h1 .thin{color:var(--muted);font-weight:500}
+  header .sub{color:var(--muted);font-size:11.5px;letter-spacing:.3px}
+  header .ctrls{margin-left:auto;display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap}
+  .wrap{max-width:1180px;margin:0 auto;padding:20px 22px 70px}
+  label{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;font-weight:600}
+  select,input[type=file]{background:var(--panel2);color:var(--ink);border:1px solid var(--line2);border-radius:8px;
+    padding:8px 10px;font-size:13.5px;outline:none;transition:border-color .12s,box-shadow .12s}
+  select:focus,input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--focus)}
+  .card{background:linear-gradient(180deg,var(--panel),#0f1622);border:1px solid var(--line);border-radius:14px;
+    padding:18px 20px;margin-bottom:16px;box-shadow:var(--shadow)}
+  .ch{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+  .ch .cn{width:30px;height:30px;flex:none;border-radius:8px;background:var(--panel3);border:1px solid var(--line2);
+    display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--accent);font-size:14px}
+  .ch h2{margin:0;font-size:18px;letter-spacing:.2px}
+  .ch .csub{color:var(--muted);font-size:12.5px}
+  .hint{color:var(--muted);font-size:13.5px;margin-bottom:14px;line-height:1.55}
+  .limits{background:rgba(251,146,60,.09);border:1px solid rgba(251,146,60,.35);border-radius:10px;
+    padding:11px 14px;font-size:13px;color:var(--ink2);margin:8px 0 18px;line-height:1.55}
+  .databar-note{color:var(--muted);font-size:12.5px;margin:2px 2px 14px}
+  /* KPIs */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:6px}
+  .kpi{position:relative;background:linear-gradient(180deg,var(--panel2),#0f1622);border:1px solid var(--line);
+    border-radius:12px;padding:14px 16px 13px;overflow:hidden}
+  .kpi .edge{position:absolute;left:0;top:0;bottom:0;width:4px}
+  .kpi .lab{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;font-weight:600}
+  .kpi .big{font-size:30px;font-weight:800;line-height:1.15;margin:5px 0 2px}
+  .kpi .sub{font-size:12px;color:var(--muted2)}
+  /* tables */
+  table.tbl{width:100%;border-collapse:collapse;font-size:13.5px;margin:8px 0 4px;display:block;overflow-x:auto}
+  table.tbl th{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:700;
+    text-align:left;padding:8px 11px;border-bottom:1px solid var(--line2);white-space:nowrap}
+  table.tbl td{padding:9px 11px;border-bottom:1px solid var(--line);white-space:nowrap}
+  table.tbl td.c,table.tbl th.c{text-align:center}
+  table.tbl tr:hover td{background:rgba(76,141,255,.05)}
+  table.tbl tr.hl td{background:rgba(94,234,212,.07)}
+  .dim{color:var(--muted2)} .pos{color:var(--teal)} .neg{color:var(--bad)}
+  .subttl{font-size:12.5px;font-weight:700;color:var(--ink2);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 4px}
+  .foot{font-size:12.5px;color:var(--muted);margin-top:10px;line-height:1.5}
+  /* loaner-vs-retail */
+  .lvwrap{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:6px}
+  @media(max-width:720px){.lvwrap{grid-template-columns:1fr}}
+  .lvcol{border:1px solid var(--line2);border-radius:12px;padding:14px 16px;background:var(--panel2)}
+  .lvcol.acc{border-color:var(--teal);box-shadow:0 0 0 1px rgba(94,234,212,.25) inset}
+  .lvh{font-size:13px;font-weight:700;margin-bottom:8px;color:var(--ink)}
+  .lvcol.acc .lvh{color:var(--teal)}
+  .lvrow{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px dashed var(--line);font-size:13.5px}
+  .lvrow span{color:var(--muted)} .lvrow b{font-weight:700}
+  /* charts */
+  .chartbox{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px;overflow-x:auto}
+  .lg{display:flex;gap:16px;flex-wrap:wrap;margin:2px 0 10px}
+  .lgi{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink2)}
+  .lgi i{width:14px;height:4px;border-radius:2px;display:inline-block}
+  /* bars */
+  .bars{margin:6px 0 4px}
+  .br{display:grid;grid-template-columns:150px 1fr 78px;align-items:center;gap:10px;padding:3px 0}
+  .brl{font-size:12.5px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .brt{background:var(--panel3);border-radius:5px;height:16px;display:flex;overflow:hidden}
+  .brf{height:100%;border-radius:5px}
+  .brv{font-size:12.5px;text-align:right;font-weight:700}
+  /* predictor calc */
+  .calc{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px}
+  .cfld{display:flex;flex-direction:column;gap:5px}
+  .cfld.inline{flex-direction:row;align-items:center;gap:8px;margin-bottom:8px}
+  .cfld select,.cfld input[type=range]{min-width:150px}
+  .agev{font-size:13px;color:var(--teal);font-weight:700}
+  .predout{margin-top:6px}
+  .predgrid{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:12px}
+  @media(max-width:720px){.predgrid{grid-template-columns:1fr 1fr}}
+  .pcard{background:var(--panel2);border:1px solid var(--line2);border-radius:12px;padding:14px 16px}
+  .pcard.big{border-color:var(--teal);background:linear-gradient(180deg,#0e2a2a,var(--panel2))}
+  .pcard .pl{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600}
+  .pcard .pv{font-size:26px;font-weight:800;margin-top:3px}
+  .pcard.big .pv{font-size:34px;color:var(--teal)}
+  .pcard .pr{font-size:12px;color:var(--muted2);margin-top:2px}
+  /* heatmap */
+  .heat{display:grid;grid-template-columns:repeat(12,1fr);gap:5px;margin:4px 0}
+  @media(max-width:720px){.heat{grid-template-columns:repeat(6,1fr)}}
+  .hcell{border-radius:9px;padding:9px 4px;text-align:center;border:1px solid var(--line)}
+  .hcell .hm{font-size:11px;font-weight:700;opacity:.85}
+  .hcell .hi{font-size:16px;font-weight:800;margin:2px 0}
+  .hcell .hg{font-size:11px;opacity:.8}
+  .hcell .hn{font-size:10px;opacity:.6}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>LOANER <span class="thin">INTELLIGENCE</span></h1>
+    <div class="sub">Infiniti depreciation &amp; resale engine · learns from your own history · offline</div>
+  </div>
+  <div class="ctrls">
+    <div style="display:flex;flex-direction:column;gap:5px">
+      <label for="halflife">Recency weighting</label>
+      <select id="halflife">
+        <option value="6">Aggressive — 6-mo half-life</option>
+        <option value="12">Recent-leaning — 12-mo</option>
+        <option value="24" selected>Balanced — 24-mo half-life</option>
+        <option value="48">Long memory — 48-mo</option>
+        <option value="100000">Equal weight — all history</option>
+      </select>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:5px">
+      <label for="csvfile">Import newer sales (CSV)</label>
+      <input type="file" id="csvfile" accept=".csv">
+    </div>
+  </div>
+</header>
+<div class="wrap"><div id="results"></div></div>
+
+<script>__ENGINE__</script>
+<script>window.__DATA__=__DATA_JSON__;</script>
+<script>__RENDER__</script>
+</body>
+</html>
