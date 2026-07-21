@@ -42,6 +42,17 @@ ok("word budget <= 35", whisper({ fam: "7i", chip: "7i", side: { dir: "R", pct: 
 const feely = whisper({ fam: "9i", chip: "9i", conf: 88, feel: "Trust the number" });
 ok("player's feel appears verbatim", /Trust the number/.test(joined(feely)));
 
+// --- can't-reach / advance voice (the 450-yard bug) ---
+const far = whisper({ fam: "3W", chip: "3W", reach: false, leaves: 296, feel: "Smooth and left edge" });
+ok("unreachable -> names the long club, not an iron to the green", far.club === "3-wood");
+ok("unreachable -> says advance + leaves a number", /advance/i.test(joined(far)) && /296/.test(joined(far)));
+ok("unreachable -> never says 'middle of the green'", !/middle of the green/i.test(joined(far)));
+const midLay = whisper({ fam: "8i", chip: "8i", reach: false, leaves: 40 });
+ok("short lay-up still frames as advance", /advance/i.test(joined(midLay)) && /40/.test(joined(midLay)));
+// a reachable shot should still talk about the green
+const reachable = whisper({ fam: "8i", chip: "8i", reach: true, conf: 80 });
+ok("reachable shot -> greens language, not advance", /middle of the green/i.test(joined(reachable)) && !/advance/i.test(joined(reachable)));
+
 // --- inside 35 switches to conversion voice ---
 const near = whisper({ fam: "chip", chip: "CHIP", i35: true });
 ok("inside 35 -> conversion language, no full-swing club", /commit/.test(joined(near)) && /two putts/.test(joined(near)));

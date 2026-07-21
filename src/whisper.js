@@ -89,6 +89,17 @@ export function whisper(s) {
     };
   }
 
+  // Can't reach the target with the longest club: this is a lay-up, not a green shot.
+  // Say so plainly and give the number we'll leave — never pretend it reaches the green.
+  if (s.reach === false) {
+    const why = s.leaves >= 190 ? "that's well past what you carry — no sense forcing it"
+              : "you can't quite get home from here, and that's fine";
+    let target = `Advance it smooth and center — leaves about ${s.leaves}. ${cap(feelPhrase(s))}.`;
+    let lines = [cap(why) + ".", target];
+    if (wordCount(lines) > 35) { target = `Advance it smooth — leaves about ${s.leaves}.`; lines = [cap(why) + ".", target]; }
+    return { club, lines, words: wordCount(lines) };
+  }
+
   const why = whyLine(s);
   let target = `${cap(aimPhrase(s))}. ${cap(feelPhrase(s))}.`;
   let lines = [cap(why) + ".", target];

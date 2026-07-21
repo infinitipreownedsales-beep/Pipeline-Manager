@@ -137,7 +137,22 @@ const engine = (P, bench=[], adj={}) => {
     const r=rec(rem); if(!r) return null;
     return {k,carry:eff(k),rem,r,s:r.zone==="ok"?0:r.zone==="i35"?1:r.zone==="warn"?2:3};
   }).filter(Boolean).sort((a,b)=>a.s-b.s||a.rem-b.rem).slice(0,2);
-  return {rec,layup,chipCarry,eff};
+  // pick(y): the club decision for the WHOLE bag (driver/woods included), used by
+  // the whisper flow. Short scoring distances use the wedge windows; everything
+  // else takes enough club to reach, and flags reach=false when nothing gets home.
+  const pick=(y)=>{
+    const bag=Object.keys(P.carries).filter(k=>!out(k)).sort((a,b)=>eff(a)-eff(b));
+    if(!y||y<=0) return {chip:bag[0]||"7i",fam:bag[0]||"7i",reach:false,leaves:0,carry:0};
+    if(y<=34){ const r=rec(y); return {chip:r.chip,fam:"chip",reach:true,leaves:0,carry:chipCarry(r.chip)}; }
+    if(y<=W.fs[1]&&!out("52")){ const r=rec(y); return {chip:r.chip,fam:"52",reach:true,leaves:0,carry:chipCarry(r.chip)}; }
+    if(!bag.length) return {chip:"7i",fam:"7i",reach:false,leaves:y,carry:0};
+    const reachK=bag.filter(k=>eff(k)>=y-6);         // clubs that carry the number (small tolerance)
+    if(reachK.length){ const k=reachK[0];            // take just enough club, no more
+      return {chip:k,fam:k,reach:true,leaves:Math.max(0,y-eff(k)),carry:eff(k)}; }
+    const k=bag[bag.length-1];                        // can't get home -> longest club, advance
+    return {chip:k,fam:k,reach:false,leaves:y-eff(k),carry:eff(k)};
+  };
+  return {rec,layup,chipCarry,eff,pick};
 };
 
 const store = {
@@ -600,13 +615,16 @@ export default function CaddieOS(){
                 {[["NONE","calm"],["INTO","into"],["DOWN","down"],["CROSS","cross"]].map(([k,l])=>(
                   <button key={k} onClick={()=>setWind(k)} style={{border:"none",borderRadius:14,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer",background:wind===k?INK:"transparent",color:wind===k?PAPER:MUTE}}>{l}</button>))}
               </div>
-              <button onClick={()=>{buzz();const v=parseInt(qYards)||live.rem;saveLive({...live,rem:v});setAsked(true);setShowAlt(false);}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:17,fontWeight:700,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4}}>Read it</button>
+              <button onClick={()=>{buzz();const v=parseInt(qYards)||live.rem;const ev=wind==="INTO"?Math.round(v*1.08):wind==="DOWN"?Math.round(v*0.94):v;const pk=E.pick(ev);saveLive({...live,rem:v});setSel(pk.chip);setAsked(true);setShowAlt(false);}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:17,fontWeight:700,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4}}>Read it</button>
             </div>}
 
             {phase==="whisper"&&(()=>{
               const fam=famOf(sel||"7i");
               const sideC=(()=>{const c=cstat(fam);if(c&&c.side)return{dir:c.side.dir,pct:c.side.pct};const b=dirBias(fam);if(b)return{dir:b[0],pct:parseInt(b.slice(1))};return null;})();
-              const W=whisper({fam,chip:sel,eff:E.eff(fam),stat:disp(fam),conf:conf(fam),hot:flags.hot.includes(fam),cold:flags.cold.includes(fam),adj:flags.adj[fam]||null,side:sideC,feel:(P.feels&&P.feels[fam])||null,hole:{dzL:H.dzL,dzR:H.dzR},i35:live.rem<=34,wind});
+              const carrySel=E.chipCarry(sel||"CHIP");
+              const reach=carrySel>=effRem-6;              // wind-aware: can this club get home?
+              const leaves=Math.max(0,live.rem-carrySel);  // yards left uses the real distance
+              const W=whisper({fam,chip:sel,eff:E.eff(fam),stat:disp(fam),conf:conf(fam),hot:flags.hot.includes(fam),cold:flags.cold.includes(fam),adj:flags.adj[fam]||null,side:sideC,feel:(P.feels&&P.feels[fam])||null,hole:{dzL:H.dzL,dzR:H.dzR},i35:live.rem<=34,reach,leaves,wind});
               return <div style={arrive}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
                   <div style={{color:MUTE,fontSize:14}}>{live.rem} yards · {lieLabel.toLowerCase()}{wind!=="NONE"?" · "+wind.toLowerCase()+" wind":""}</div>
