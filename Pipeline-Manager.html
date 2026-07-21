@@ -459,8 +459,10 @@ function loadInventory(text){
   return units; }
 function loadSales(text){
   let rows=parseTable(text), h=findHeader(rows,["Sales Month","VIN","MODEL CODE"]), cm=colmap(rows[h]);
-  let ci={ smonth:pick(cm,"Sales Month"),stock:pick(cm,"Stock#","Stock"),model:pick(cm,"Model"),vin:pick(cm,"VIN"),
-    dts:pick(cm,"DAYS TO SELL","Days to Sell"),code:pick(cm,"MODEL CODE","Model Code"),ext:pick(cm,"EXT CODE","Ext Code"),int:pick(cm,"INT CODE","Int Code") };
+  let ci={ smonth:pick(cm,"Sales Month","Sales Mo"),stock:pick(cm,"Stock#","Stock","Stock Number","Stock #","Stock No"),model:pick(cm,"Model"),vin:pick(cm,"VIN"),
+    dts:pick(cm,"DAYS TO SELL","Days to Sell","DTS"),code:pick(cm,"MODEL CODE","Model Code"),
+    // real exports label these EXTERIOR/INTERIOR CODE, not EXT/INT CODE
+    ext:pick(cm,"EXT CODE","Ext Code","EXTERIOR CODE","Exterior Code"),int:pick(cm,"INT CODE","Int Code","INTERIOR CODE","Interior Code") };
   let seen={}, sales=[];
   for(let r=h+1;r<rows.length;r++){ let row=rows[r], raw=cell(row,ci.smonth);
     if(raw==null||raw==="") continue;

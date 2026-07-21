@@ -101,7 +101,10 @@ def _read_rows(path: str) -> list[list]:
     ext = os.path.splitext(path)[1].lower()
     if ext in (".xlsx", ".xlsm"):
         import openpyxl  # imported lazily so csv-only users need no dependency
-        wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+        # NOT read_only: some real exports ship a wrong/absent <dimension> tag,
+        # and read-only mode then yields only the first cell. Normal mode reads
+        # the true used range. These files are small, so memory is a non-issue.
+        wb = openpyxl.load_workbook(path, data_only=True)
         ws = wb.active
         return [list(r) for r in ws.iter_rows(values_only=True)]
     with open(path, newline="", encoding="utf-8-sig") as fh:
@@ -242,14 +245,15 @@ def load_sales(path: str) -> list[Sale]:
         return None
 
     ci = {
-        "smonth": col("Sales Month"),
-        "stock": col("Stock#", "Stock"),
+        "smonth": col("Sales Month", "Sales Mo"),
+        "stock": col("Stock#", "Stock", "Stock Number", "Stock #", "Stock No"),
         "model": col("Model"),
         "vin": col("VIN"),
-        "dts": col("DAYS TO SELL", "Days to Sell"),
+        "dts": col("DAYS TO SELL", "Days to Sell", "DTS"),
         "code": col("MODEL CODE", "Model Code"),
-        "ext": col("EXT CODE", "Ext Code"),
-        "int": col("INT CODE", "Int Code"),
+        # Real exports label these EXTERIOR/INTERIOR CODE, not EXT/INT CODE.
+        "ext": col("EXT CODE", "Ext Code", "EXTERIOR CODE", "Exterior Code"),
+        "int": col("INT CODE", "Int Code", "INTERIOR CODE", "Interior Code"),
     }
 
     seen_vins: set[str] = set()

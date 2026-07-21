@@ -474,6 +474,27 @@ def test_build_sequence_is_retail_only_and_nets_fleet_out_of_allocation():
     assert len(keys) == len(set(keys))            # no combo appears in two separate runs
 
 
+def test_sales_loader_accepts_real_export_column_names():
+    # Real Speed-to-Sell exports label these EXTERIOR/INTERIOR CODE and Stock
+    # Number (not EXT/INT CODE / Stock#). If unrecognized, ext/int parse blank,
+    # no sale matches a config, and every config looks dormant -> NEED 0 forever
+    # (the QX65 bug). The loader must accept both namings.
+    import tempfile
+    from pipeline_manager.ingest import load_sales
+    csv = ("Sales Month,Stock Number,Model,VIN,DAYS TO SELL,MODEL CODE,EXTERIOR CODE,INTERIOR CODE\n"
+           "202607,N15550,QX65 SPORT AWD,VIN0001,7,85117,XEX,G\n"
+           "202607,N15551,QX65 AUTOG AWD,VIN0002,12,85217,XKJ,K\n")
+    p = os.path.join(tempfile.mkdtemp(), "s.csv")
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write(csv)
+    sales = load_sales(p)
+    assert len(sales) == 2
+    s0 = sales[0]
+    assert s0.ext == "XEX" and s0.interior == "G" and s0.stock == "N15550"
+    assert s0.key == "QX65|8511|XEX|G"    # 5-digit code -> 4-digit, keyed with ext/int
+    assert sales[1].key == "QX65|8521|XKJ|K"
+
+
 def test_recompute_is_deterministic():
     a = reports.build_all(_run())
     b = reports.build_all(_run())
