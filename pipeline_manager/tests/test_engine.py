@@ -147,12 +147,13 @@ def test_six_month_plan_targets_match_grid_and_orders_carry_forward():
     res = _run()
     plan = _load("plan_ref.json")
     lines = {l.key: l for l in res.lines}
-    # Monthly TARGET and ARRIVALS are unchanged from the workbook grid.
+    # ARRIVALS are unchanged from the workbook grid. (The monthly TARGET now uses
+    # a smoothed seasonal curve, so it intentionally differs from the raw grid; it
+    # is validated for internal consistency in the rolling-sim reconstruction.)
     for key, months in plan.items():
         got = lines[key].monthly_plan
         for i, exp in enumerate(months):
-            for f in ("tgt", "arr"):
-                assert (got[i][f] or 0) == (exp[f] or 0), f"{key} month {i} {f}"
+            assert (got[i]["arr"] or 0) == (exp["arr"] or 0), f"{key} month {i} arr"
     # ORDERS now carry the plan's own prior orders forward and sell down at the
     # config's demand pace (prate/2), so a later month tops up to target instead
     # of re-ordering it whole. Reconstruct that rolling sim and require an exact
@@ -168,18 +169,21 @@ def test_six_month_plan_targets_match_grid_and_orders_carry_forward():
         blocked = l.suppressed or l.eff_demote
         nf = 0 if l.base == 0 else 1
         rate = min(s.rate_cap, m.prate / 2) if m else 0.0
+        sm = res.seasonality[l.model]
+        pseas = [(sm[(c - 1) % 12] + 2 * sm[c] + sm[(c + 1) % 12]) / 4.0 for c in range(12)]
         onhand = float(l.onlot)
         for k in range(6):
             cal = (s.order_month - 1 + k) % 12
-            sk = res.seasonality[l.model][cal]
+            sk = pseas[cal]
             arr = pos.arrivals.get(cal + 1, 0) if pos else 0
             onhand = max(stalled, onhand - rate * sk) + arr
             tgt = max(nf, xround(l.base * sk))
+            assert l.monthly_plan[k]["tgt"] == tgt, f"{l.key} m{k} tgt"
             expected = 0 if blocked else max(0, xround(tgt - onhand))
             if k == 0 and not blocked:
                 expected += ov.get(l.key, 0)
             onhand += expected
-            assert l.monthly_plan[k]["ord"] == expected, f"{l.key} m{k}"
+            assert l.monthly_plan[k]["ord"] == expected, f"{l.key} m{k} ord"
     # The QX65 six-month total must be sane (the double-count bug summed to ~65).
     q65 = sum(p["ord"] for l in res.lines if l.model == "QX65" for p in l.monthly_plan)
     assert q65 < 40, f"QX65 six-month plan still inflated: {q65}"

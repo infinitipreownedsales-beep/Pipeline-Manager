@@ -655,8 +655,11 @@ function buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demo
     // config's DEMAND pace (prate/2 per month), not _proj_rate's 30.4/DTS retail
     // velocity — so it tops up to the seasonal target instead of re-ordering the
     // whole target every month. (Mirror of engine.py build_lines.)
+    // center-weighted 3-month smoothing of the seasonal curve so the ORDER cadence
+    // isn't spike-and-coast (mirror of engine.py). NEED still uses the sharp curve.
+    let smi=seas[model].index, planSeas=[]; for(let c=0;c<12;c++) planSeas.push((smi[(c+11)%12]+2*smi[c]+smi[(c+1)%12])/4);
     let planRate=metric?Math.min(s.rate_cap,metric.prate/2):0, onhand=pos.onlot, held=pos.stalled||0;
-    let plan=[]; for(let k=0;k<6;k++){ let cal=(s.order_month-1+k)%12, seasK=seas[model].index[cal];
+    let plan=[]; for(let k=0;k<6;k++){ let cal=(s.order_month-1+k)%12, seasK=planSeas[cal];
       let arr=pos.arrivals[cal+1]||0;
       onhand=Math.max(held,onhand-planRate*seasK)+arr;
       let tgt=Math.max(needFloor,xround(base*seasK,0));

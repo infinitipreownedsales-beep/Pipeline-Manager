@@ -799,6 +799,13 @@ def build_lines(s, metrics, seas, positions, aged_brakes, override_map, windows,
         # For a fast-but-thin combo (DTS 7, two lifetime sales) that reads ~4/mo
         # of phantom demand, evaporating inventory every month and making the plan
         # re-order the full target repeatedly. Pace keeps carried units on hand.
+        # The plan uses a center-weighted 3-month smoothing of the seasonal curve
+        # (prev + 2*this + next)/4, so the ORDER cadence isn't a spike-and-coast:
+        # you build ahead of a peak instead of dumping it all in the peak month and
+        # ordering zero around it. (NEED / order-priority still uses the sharp
+        # arrival-month curve; only this 6-month schedule is smoothed.)
+        sm = seas[model]
+        plan_seas = [(sm[(c - 1) % 12] + 2 * sm[c] + sm[(c + 1) % 12]) / 4.0 for c in range(12)]
         blocked = suppressed or eff_demote
         plan_rate = min(s.rate_cap, metric.prate / 2) if metric else 0.0
         onhand = float(pos.onlot)
@@ -806,7 +813,7 @@ def build_lines(s, metrics, seas, positions, aged_brakes, override_map, windows,
         monthly_plan = []
         for k in range(6):
             cal = (s.order_month - 1 + k) % 12
-            seas_k = seas[model][cal]
+            seas_k = plan_seas[cal]
             arr = pos.arrivals.get(cal + 1, 0)
             onhand = max(held, onhand - plan_rate * seas_k) + arr
             tgt = max(need_floor, xround(base * seas_k))
