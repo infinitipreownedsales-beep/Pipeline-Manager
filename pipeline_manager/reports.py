@@ -330,6 +330,15 @@ def retail_forecast(res: EngineResult) -> dict:
     s = res.settings
     days_left = _cal.monthrange(today.year, today.month)[1] - today.day + 1
     horizons = [("This month", days_left), ("Next 30 days", 30), ("Next 60 days", 60)]
+    # Month-to-date retail already booked this calendar month. "This month" is a
+    # full-month number the desk can reconcile against reality, so it must be
+    # what's ALREADY out plus the inventory-constrained projection for the days
+    # still left in the month — not just the remaining-days forecast.
+    cur_midx = today.year * 12 + today.month
+    sold_mtd = {m: 0 for m in MODELS}
+    for sale in res.sales:
+        if sale.first_vin and sale.midx == cur_midx and sale.model in sold_mtd:
+            sold_mtd[sale.model] += 1
 
     def seas_factor(days, seas):
         return sum(seas[(today + _dt.timedelta(days=d)).month - 1] for d in range(days)) / days if days else 1.0
@@ -365,6 +374,11 @@ def retail_forecast(res: EngineResult) -> dict:
                 pos = res.positions.get(l.key)
                 avail = max(0, l.onlot - l.wholesale_now) + inbound_in(pos, days)
                 proj += min(pace(l) * sf * months, avail)
+            # "This month" (hi 0) = already retailed this calendar month + the
+            # constrained projection for the days left; the future windows stay
+            # purely forward-looking.
+            if hi == 0:
+                proj += sold_mtd[model]
             forecasts.append(round(proj))
             demands.append(round(monthly_demand * sf * months))
             out["total"]["forecast"][hi] += proj
@@ -385,10 +399,12 @@ def retail_forecast(res: EngineResult) -> dict:
             "forecast": forecasts, "demand": demands, "onlot": onlot, "inbound": inbound,
             "monthly_demand": round(monthly_demand, 1), "days_supply": dos,
             "demand60": round(demand60), "avail60": avail60, "health": health,
+            "sold_mtd": sold_mtd[model],
         }
     out["total"]["forecast"] = [round(x) for x in out["total"]["forecast"]]
     out["total"]["onlot"] = sum(d["onlot"] for d in out["per_model"].values())
     out["total"]["inbound"] = sum(d["inbound"] for d in out["per_model"].values())
+    out["total"]["sold_mtd"] = sum(sold_mtd.values())
     return out
 
 

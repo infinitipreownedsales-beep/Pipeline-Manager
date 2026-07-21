@@ -507,15 +507,20 @@ def test_retail_forecast_is_inventory_constrained():
     f = reports.retail_forecast(res)
     assert [h["days"] for h in f["horizons"]][1:] == [30, 60]
     for model, d in f["per_model"].items():
-        # three horizons, non-decreasing (longer window -> more retail)
         assert len(d["forecast"]) == 3
-        assert d["forecast"][0] <= d["forecast"][1] <= d["forecast"][2]
+        # forward windows are non-decreasing (longer window -> more retail)
+        assert d["forecast"][1] <= d["forecast"][2]
+        # "This month" is a full-month total: at least what's already retailed
+        # this calendar month (it may exceed the forward-only 30-day window)
+        assert d["forecast"][0] >= d["sold_mtd"]
         # inventory-constrained: 60-day retail never exceeds what you can hold
         assert d["forecast"][2] <= d["avail60"] + 1
         # never forecasts more than the market demands
         assert d["forecast"][2] <= d["demand"][2] + 1
         assert d["health"] in ("balanced", "tight — demand outruns stock",
                                "heavy — stock outruns demand", "cold — little live demand")
+    # month-to-date total is the sum across models
+    assert f["total"]["sold_mtd"] == sum(d["sold_mtd"] for d in f["per_model"].values())
     # total is the sum across models
     assert f["total"]["forecast"][2] == sum(d["forecast"][2] for d in f["per_model"].values()) \
         or abs(f["total"]["forecast"][2] - sum(d["forecast"][2] for d in f["per_model"].values())) <= 2

@@ -82,6 +82,10 @@ function retailForecast(res){
   let today=res.tb.today, s=res.settings;
   let daysLeft=new Date(today.getFullYear(),today.getMonth()+1,0).getDate()-today.getDate()+1;
   let horizons=[["This month",daysLeft],["Next 30 days",30],["Next 60 days",60]];
+  // month-to-date retail already booked this calendar month, per model
+  let curMidx=today.getFullYear()*12+(today.getMonth()+1), soldMtd={};
+  MODELS.forEach(m=>soldMtd[m]=0);
+  (res.sales||[]).forEach(sale=>{ if(sale.firstVin&&sale.midx===curMidx&&soldMtd[sale.model]!=null) soldMtd[sale.model]++; });
   function seasFactor(days,seas){ let t=0; for(let d=0;d<days;d++){ t+=seas[new Date(today.getTime()+d*86400000).getMonth()]; } return days?t/days:1; }
   function inboundIn(pos,days){ if(!pos) return 0; let end=new Date(today.getTime()+days*86400000), n=0;
     for(let cm in pos.arrivals){ let month=parseInt(cm,10), year=month>=today.getMonth()+1?today.getFullYear():today.getFullYear()+1;
@@ -94,6 +98,7 @@ function retailForecast(res){
     let monthlyDemand=lines.reduce((a,l)=>a+pace(l),0), forecasts=[], demands=[];
     horizons.forEach((h,hi)=>{ let days=h[1], months=days/DPM, sf=seasFactor(days,res.seas[model].index), proj=0;
       lines.forEach(l=>{ let pos=res.positions[l.key], avail=Math.max(0,l.onlot-l.wholeNow)+inboundIn(pos,days); proj+=Math.min(pace(l)*sf*months, avail); });
+      if(hi===0) proj+=soldMtd[model];   // this month = already retailed + constrained remainder
       forecasts.push(Math.round(proj)); demands.push(Math.round(monthlyDemand*sf*months)); out.total.forecast[hi]+=proj; });
     let sf60=seasFactor(60,res.seas[model].index), demand60=monthlyDemand*sf60*(60/DPM);
     let avail60=lines.reduce((a,l)=>a+Math.max(0,l.onlot-l.wholeNow)+inboundIn(res.positions[l.key],60),0);
@@ -101,11 +106,12 @@ function retailForecast(res){
       else if(avail60<demand60*0.85) health="tight — demand outruns stock";
       else if(avail60>demand60*1.6) health="heavy — stock outruns demand"; else health="balanced";
     let dos=monthlyDemand>0?Math.round(onlot/monthlyDemand*DPM):null;
-    out.per_model[model]={forecast:forecasts,demand:demands,onlot:onlot,inbound:inbound,monthly_demand:Math.round(monthlyDemand*10)/10,days_supply:dos,demand60:Math.round(demand60),avail60:avail60,health:health};
+    out.per_model[model]={forecast:forecasts,demand:demands,onlot:onlot,inbound:inbound,monthly_demand:Math.round(monthlyDemand*10)/10,days_supply:dos,demand60:Math.round(demand60),avail60:avail60,health:health,sold_mtd:soldMtd[model]};
   });
   out.total.forecast=out.total.forecast.map(x=>Math.round(x));
   out.total.onlot=Object.values(out.per_model).reduce((a,d)=>a+d.onlot,0);
   out.total.inbound=Object.values(out.per_model).reduce((a,d)=>a+d.inbound,0);
+  out.total.sold_mtd=Object.values(out.per_model).reduce((a,d)=>a+d.sold_mtd,0);
   return out;
 }
 function healthBadge(h){ let c=h.indexOf("tight")>=0?"var(--bad)":(h.indexOf("heavy")>=0?"var(--warn)":(h.indexOf("cold")>=0?"var(--muted)":"var(--good)"));
@@ -395,10 +401,13 @@ function render(res){
   H.push(sec(8,"Retail Forecast","what the inventory you own is projected to retail — not a pace extrapolation"));
   H.push("<div class='kpis' style='margin-bottom:14px'>");
   ["var(--teal)","var(--accent)","var(--orange)"].forEach(function(col,i){
+    let sub="projected units retailed · all models";
+    if(i===0){ let mtd=fc.total.sold_mtd, togo=Math.max(0,fc.total.forecast[0]-mtd);
+      sub="<b style='color:var(--teal)'>"+mtd+" already retailed</b> + "+togo+" projected to month-end"; }
     H.push("<div class='kpi'><span class='edge' style='background:"+col+"'></span>"+
-      "<div class='lab'>"+esc(fh[i].label)+"</div>"+
+      "<div class='lab'>"+esc(fh[i].label)+(i===0?" <span class='dim' style='font-weight:400'>(full month)</span>":"")+"</div>"+
       "<div class='big' style='color:"+col+"'>"+fc.total.forecast[i]+"</div>"+
-      "<div class='sub'>projected units retailed · all models</div></div>");
+      "<div class='sub'>"+sub+"</div></div>");
   });
   H.push("<div class='kpi'><span class='edge' style='background:var(--muted)'></span><div class='lab'>In stock now</div>"+
     "<div class='big'>"+fc.total.onlot+"</div><div class='sub'>+ "+fc.total.inbound+" inbound in the pipeline</div></div>");
@@ -407,12 +416,13 @@ function render(res){
   H.push(tbl(["Model",fh[0].label,fh[1].label,fh[2].label,"60-day demand","In stock","Inbound","Days supply","Inventory health"],
     ["","num teal","num","num","num","num","num","num",""],
     MODELS.map(function(m){ let d=fc.per_model[m];
-      return [ {html:"<b>"+m+"</b>"}, {html:"<b>"+d.forecast[0]+"</b>"}, d.forecast[1],
+      let tmHint=d.sold_mtd>0?"<span class='dim' style='font-weight:400'> ("+d.sold_mtd+" out)</span>":"";
+      return [ {html:"<b>"+m+"</b>"}, {html:"<b>"+d.forecast[0]+"</b>"+tmHint}, d.forecast[1],
         {html:"<b style='color:var(--orange)'>"+d.forecast[2]+"</b>"},
         {html:"<span class='dim'>"+d.demand[2]+"</span>"}, d.onlot, {html:"<span class='dim'>"+d.inbound+"</span>"},
         {html:d.days_supply==null?"<span class='dim'>—</span>":d.days_supply+"d"},
         {html:healthBadge(d.health)} ]; })));
-  H.push("<div class='foot'>Reads inventory intelligence — current stock, model/trim/color mix, per-config speed-to-sale, inbound pipeline, aging (wholesale-flagged units excluded), and seasonality. A model can hold heavy stock yet forecast below demand when the stock is in the wrong configs; that gap is the signal to re-mix or dealer-trade.</div>");
+  H.push("<div class='foot'><b>This month</b> is a full-month total: units already retailed this calendar month plus the inventory-constrained projection for the days still left. <b>Next 30 / 60 days</b> are purely forward-looking. Reads inventory intelligence — current stock, model/trim/color mix, per-config speed-to-sale, inbound pipeline, aging (wholesale-flagged units excluded), and seasonality. A model can hold heavy stock yet forecast below demand when the stock is in the wrong configs; that gap is the signal to re-mix or dealer-trade.</div>");
 
   if(res.orphans.length){ let top=res.orphans.slice(0,16).map(o=>o.key+" ("+o.sales+")").join(",  ");
     H.push("<details class='exp' style='margin-top:14px'><summary>Data health — "+res.orphans.length+" configs sold but not on the order roster (ordering can't see them; many are discontinued/legacy — expected)</summary><div class='foot'>"+esc(top)+(res.orphans.length>16?" …":"")+"</div></details>"); }
