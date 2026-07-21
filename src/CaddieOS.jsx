@@ -326,6 +326,57 @@ const MiniMap=({h,P,plan})=>{const uw=268;const tx=d=>16+Math.min(d/h.y,1)*uw;
     {pts.map((p,i)=>(<g key={i}><circle cx={p.x} cy={32} r={6.5} fill="#fcd34d" stroke="#0f2b20" strokeWidth={1}/><text x={p.x} y={35} textAnchor="middle" fontSize={6.5} fontWeight={800} fill="#0f2b20">{i+1}</text><text x={p.x} y={60} textAnchor="middle" fontSize={7} fill="#9fd6b4" fontWeight={700}>{p.c}</text></g>))}
   </svg>);};
 
+// HoleView — the automatic strategic overview shown before the opening shot.
+// A clean, calm schematic (not a satellite image): tee at the bottom, green at the
+// top, the fairway bending for doglegs, hazards drawn on the side the text names,
+// a forced-carry line, and the player's own landing zone. Derived from hole data.
+const HoleView=({h,P})=>{
+  const HZ=(h.hz||"").toUpperCase();
+  const dog=/DOGLEG LEFT/.test(HZ)?-1:/DOGLEG RIGHT/.test(HZ)?1:0;
+  const W=220,Ht=280,cx=110,teeY=250,greenY=40,span=teeY-greenY;
+  const yAt=d=>teeY-Math.min(d/h.y,1)*span;                 // distance-from-tee -> y
+  const greenX=cx+dog*42, ctrlX=cx+dog*34, ctrlY=greenY+span*0.42;
+  const xAt=y=>{const t=(teeY-y)/span; return cx+2*(1-t)*t*(ctrlX-cx)+t*t*(greenX-cx);}; // point on the bezier
+  const narrow=/TIGHT|NARROW|CHUTE|CORRIDOR|THREAD|SLALOM/.test(HZ);
+  const fwW=narrow?24:38;
+  const water=/WATER|CREEK|POND|LAKE|DITCH|GULLY/.test(HZ);
+  const trees=/TREES|WOODS|PINES|FOREST|RAILROAD/.test(HZ);
+  const ob=/\bOB\b|OUT OF BOUNDS/.test(HZ);
+  const sand=/BUNKER|SAND|WASTE/.test(HZ);
+  const houses=/HOUSE|ROAD|HIGHWAY/.test(HZ);
+  const sideType=()=> water?["water","#7ba7c9"]:ob?["OB","#c26b5c"]:trees?["trees","#3c5f49"]:houses?["houses","#b9b2a4"]:sand?["sand","#d8c48f"]:["rough","#7d9a6f"];
+  const [tName,tCol]=sideType();
+  const sides=[];
+  if(/LEFT/.test(HZ)) sides.push(-1);
+  if(/RIGHT/.test(HZ)) sides.push(1);
+  if(!sides.length&&(water||sand)) sides.push(1),sides.push(-1); // "surrounds" style
+  const maxTee=Math.max(0,...Object.values(P.carries||{}));      // player's longest club
+  const lzY=maxTee&&maxTee<h.y? yAt(maxTee): null;
+  const near=/BUNKER|SAND/.test(HZ);
+  return (<svg viewBox={`0 0 ${W} ${Ht}`} style={{width:"100%",maxWidth:300,display:"block",margin:"0 auto"}}>
+    <rect x={0} y={0} width={W} height={Ht} rx={18} fill="#eef1ea"/>
+    {/* fairway corridor */}
+    <path d={`M ${cx} ${teeY} Q ${ctrlX} ${ctrlY} ${greenX} ${greenY}`} fill="none" stroke="#cddbc9" strokeWidth={fwW+10} strokeLinecap="round"/>
+    <path d={`M ${cx} ${teeY} Q ${ctrlX} ${ctrlY} ${greenX} ${greenY}`} fill="none" stroke="#9dc0a1" strokeWidth={fwW} strokeLinecap="round"/>
+    {/* hazards on the named side(s) */}
+    {sides.map((s,i)=>{const yTop=greenY+span*0.30,yBot=teeY-span*0.12;const bx=xAt((yTop+yBot)/2)+s*(fwW/2+13);
+      return <rect key={i} x={bx-11} y={yTop} width={22} height={yBot-yTop} rx={9} fill={tCol} opacity={0.85}/>;})}
+    {/* forced carry line */}
+    {h.carry&&<g><line x1={xAt(yAt(h.carry))-fwW/2-6} y1={yAt(h.carry)} x2={xAt(yAt(h.carry))+fwW/2+6} y2={yAt(h.carry)} stroke="#7ba7c9" strokeWidth={7} strokeLinecap="round"/><text x={cx} y={yAt(h.carry)-6} textAnchor="middle" fontSize={9} fill="#4a6d86" fontWeight={700}>carry {h.carry}</text></g>}
+    {/* player's landing zone */}
+    {lzY!=null&&<g><ellipse cx={xAt(lzY)} cy={lzY} rx={fwW/2-2} ry={11} fill="none" stroke="#c8a24a" strokeWidth={2} strokeDasharray="3 3"/><text x={xAt(lzY)} y={lzY+3} textAnchor="middle" fontSize={8} fill="#8a7327" fontWeight={800}>you</text></g>}
+    {/* tee */}
+    <rect x={cx-10} y={teeY} width={20} height={9} rx={2} fill="#233b30"/>
+    <text x={cx} y={teeY+22} textAnchor="middle" fontSize={9} fill="#6b7d72" fontWeight={700}>TEE</text>
+    {/* greenside bunkers */}
+    {near&&<><ellipse cx={greenX-24} cy={greenY+6} rx={9} ry={6} fill="#d8c48f"/><ellipse cx={greenX+24} cy={greenY+10} rx={8} ry={5} fill="#d8c48f"/></>}
+    {/* green */}
+    <circle cx={greenX} cy={greenY} r={17} fill="#6fae7c" stroke="#3c6a49" strokeWidth={2}/>
+    <circle cx={greenX} cy={greenY} r={2.5} fill="#233b30"/>
+    <text x={greenX} y={greenY-22} textAnchor="middle" fontSize={9} fill="#3c6a49" fontWeight={800}>GREEN</text>
+  </svg>);
+};
+
 const S = {
   card:{background:"white",borderRadius:16,padding:14,marginBottom:10,boxShadow:"0 1px 4px rgba(0,0,0,0.07)",boxSizing:"border-box",width:"100%"},
   h:{fontSize:10,letterSpacing:1.4,fontWeight:700,color:"#8a8a8e",textTransform:"uppercase",marginBottom:6},
@@ -352,6 +403,9 @@ export default function CaddieOS(){
   const [lieLabel,setLieLabel]=useState("Fairway"); // which lie chip is lit (Tee vs Fairway both map to FW)
   const [showAlt,setShowAlt]=useState(false);     // "something else?" expander
   const [prepOpen,setPrepOpen]=useState(false);   // pre-round PREP card
+  const [pendingLie,setPendingLie]=useState(null); // [lieVal,label] carried from last shot's result
+  const [resDir,setResDir]=useState("line");       // richer result: direction selection
+  const [editShot,setEditShot]=useState(null);     // index into live.shots being reviewed/edited
   const [P,setP]=useState(DEF_PROFILE);
   const [rounds,setRounds]=useState([]);
   const [loaded,setLoaded]=useState(false);
@@ -497,24 +551,40 @@ export default function CaddieOS(){
   const R=live&&!live.onGreen?E.rec(effRem):null;
   const L=live&&!live.onGreen&&(!R||R.zone==="adv")?E.layup(live.rem).filter(o=>o.r.zone!=="adv"):null;
 
-  useEffect(()=>{ setAsked(false);setAwaitResult(false);setShowAlt(false);setQYards("");
+  useEffect(()=>{ setAsked(false);setAwaitResult(false);setShowAlt(false);setQYards("");setResDir("line");
     if(!live||live.onGreen){setSel(null);return;}
     const hp=getPlan(CH[live.hole]);
     const bk=(!learned&&live.strokes<hp.length)?bookChipOf(hp[live.strokes].c,P):null;
     const bkOk=bk&&!(live.bench||[]).includes(famOf(bk));
-    setSel(bkOk?bk:(R?R.chip:(L&&L[0]?L[0].k:Object.keys(P.carries)[0])));setTeeIn("");setLie("FW");setObIn("");setDir(null);setWind("NONE");
+    setSel(bkOk?bk:(R?R.chip:(L&&L[0]?L[0].k:Object.keys(P.carries)[0])));setTeeIn("");setObIn("");setDir(null);setWind("NONE");
+    // P2/P3: opening shot is auto-classified as a tee shot; later shots start from
+    // wherever the last one finished (P6 result carries the lie forward).
+    if(live.strokes===0){setLie("FW");setLieLabel("Tee");}
+    else if(pendingLie){setLie(pendingLie[0]);setLieLabel(pendingLie[1]);}
+    else {setLie("FW");setLieLabel("Fairway");}
   },[live?live.hole:-1,live?live.strokes:-1,live?live.onGreen:false,live&&live.bench?live.bench.join(","):""]);
 
   const startRound=()=>saveLive({course:courseSel,hole:0,strokes:0,rem:CH[0].y,onGreen:false,putts:0,pen:0,i35At:null,teeAck:false,bench:[],shots:[],scores:Array(18).fill(null),puttsArr:Array(18).fill(null),convs:Array(18).fill(null)});
   const addPenalty=()=>saveLive({...live,pen:(live.pen||0)+1,shots:[...(live.shots||[]),{pen:1,from:live.rem,c:"Penalty",h:live.hole+1}]});
-  const logShot=(gain,g,syn,dirOv)=>{
-    const shot={c:sel||"?",from:live.rem,gain,exp:E.chipCarry(sel||"CHIP"),g:g?1:0,p:syn?1:0,h:live.hole+1,lie,dir:dirOv!==undefined?dirOv:dir};
+  // P3: classify the shot from context so the golfer never labels it by hand.
+  const shotType=(from,reach,g)=>live.strokes===0?"tee":g?"approach":from<=34?"pitch":reach?"approach":"positioning";
+  const logShot=(gain,g,syn,dirOv,endLie,typeOv)=>{
+    const shot={c:sel||"?",from:live.rem,gain,exp:E.chipCarry(sel||"CHIP"),g:g?1:0,p:syn?1:0,h:live.hole+1,lie,dir:dirOv!==undefined?dirOv:dir,
+      end:endLie||null,type:typeOv||shotType(live.rem,E.chipCarry(sel||"CHIP")>=live.rem-6,g)};
     let l={...live,strokes:live.strokes+1,shots:[...(live.shots||[]),shot]};
     const nr=live.rem-gain;
-    if(g||nr<=0){l.onGreen=true;}
-    else {l.rem=nr; if(nr<=35&&l.i35At===null)l.i35At=l.strokes;}
+    // With richer results the finishing LIE decides "on the green" — a long miss
+    // into the rough must not be treated as holed just because carry exceeded distance.
+    const onGreen = endLie ? endLie==="green" : (g||nr<=0);
+    if(onGreen){l.onGreen=true;}
+    else {l.rem=nr>0?nr:15; if(nr>0&&nr<=35&&l.i35At===null)l.i35At=l.strokes;}
     saveLive(l);setAtInput("");
   };
+  // P2: review/edit any shot on the current hole. Shots are independent records
+  // (distance is re-entered each shot), so editing a middle shot is safe.
+  const dirWord=x=>x.dir==="L"?"left":x.dir==="R"?"right":x.gain<x.exp?"short":x.gain>x.exp?"long":"on line";
+  const updateShot=(gi,patch)=>saveLive({...live,shots:live.shots.map((s,i)=>i===gi?{...s,...patch}:s)});
+  const deleteShot=gi=>{const s=live.shots[gi];saveLive({...live,shots:live.shots.filter((_,i)=>i!==gi),strokes:s.pen?live.strokes:Math.max(0,live.strokes-1),pen:s.pen?Math.max(0,(live.pen||0)-1):live.pen});setEditShot(null);};
   const holeOut=()=>{
     const pen=live.pen||0;
     const total=live.strokes+live.putts+pen+1,h=live.hole;
@@ -627,7 +697,8 @@ export default function CaddieOS(){
                     <button onClick={()=>saveLive({...live,dismiss:[...(live.dismiss||[]),c]})} style={{flex:1,border:"none",borderRadius:12,padding:"12px",background:"#f1efe9",color:INK,fontWeight:700,cursor:"pointer"}}>No, it's fine</button>
                   </div>
                 </div>;})()}
-              {live.strokes===0&&<div style={{fontFamily:SERIF,fontSize:16,color:MUTE,lineHeight:1.5,marginBottom:18}}>{teeWhisper(H,H.y)}</div>}
+              <div style={{textAlign:"center",color:MUTE,fontSize:11,letterSpacing:2,textTransform:"uppercase",marginBottom:live.strokes===0?8:12}}>Shot {live.strokes+1}{live.strokes===0?" · tee shot":""}</div>
+              {live.strokes===0&&<><HoleView h={H} P={P}/><div style={{fontFamily:SERIF,fontSize:16,color:MUTE,lineHeight:1.5,margin:"10px 0 16px"}}>{teeWhisper(H,H.y)}</div></>}
               <div style={{textAlign:"center",marginBottom:6,color:MUTE,fontSize:12,letterSpacing:2,textTransform:"uppercase"}}>How far?</div>
               <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:14,marginBottom:18}}>
                 <button onClick={()=>setQYards(String(Math.max(1,y-1)))} style={{border:"none",background:"#fff",width:52,height:52,borderRadius:26,fontSize:24,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>–</button>
@@ -644,6 +715,26 @@ export default function CaddieOS(){
                   <button key={k} onClick={()=>setWind(k)} style={{border:"none",borderRadius:14,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer",background:wind===k?INK:"transparent",color:wind===k?PAPER:MUTE}}>{l}</button>))}
               </div>
               <button onClick={()=>{buzz();const v=parseInt(qYards)||live.rem;const ev=wind==="INTO"?Math.round(v*1.08):wind==="DOWN"?Math.round(v*0.94):v;const pk=E.pick(ev,reliability);saveLive({...live,rem:v});setSel(pk.chip);setAsked(true);setShowAlt(false);}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:17,fontWeight:700,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4}}>Read it</button>
+              {(()=>{const hs=(live.shots||[]).map((x,gi)=>({x,gi})).filter(o=>o.x.h===live.hole+1);if(!hs.length)return null;
+                return <div style={{marginTop:20,background:"#fff",borderRadius:16,padding:12,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+                  <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8}}>Shots this hole — tap to review or fix</div>
+                  {hs.map(({x,gi},n)=>{const open=editShot===gi;
+                    return <div key={gi} style={{borderTop:n?"1px solid #f0eee8":"none",paddingTop:n?8:0,marginTop:n?8:0}}>
+                      <button onClick={()=>setEditShot(open?null:gi)} style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",background:"none",border:"none",cursor:"pointer",padding:"2px 0"}}>
+                        <span style={{color:INK,fontSize:14,fontWeight:700}}>{n+1}. {x.pen?"Penalty":x.c}</span>
+                        <span style={{color:MUTE,fontSize:12}}>{x.pen?"stroke & distance":`${x.type||""}${x.exp!=null?" · "+dirWord(x):""}${x.g?" · green":x.end?" · "+x.end:""}`} {open?"▾":"›"}</span>
+                      </button>
+                      {open&&!x.pen&&<div style={{marginTop:8}}>
+                        <div style={{color:MUTE,fontSize:10,letterSpacing:1,textTransform:"uppercase",margin:"4px 0"}}>club</div>
+                        <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:4}}>{chips.map(c=>(<button key={c} onClick={()=>updateShot(gi,{c,exp:E.chipCarry(c)})} style={{flexShrink:0,border:"none",borderRadius:10,padding:"7px 10px",fontSize:12,fontWeight:700,cursor:"pointer",background:x.c===c?PINE:"#f1efe9",color:x.c===c?PAPER:INK}}>{c}</button>))}</div>
+                        <div style={{color:MUTE,fontSize:10,letterSpacing:1,textTransform:"uppercase",margin:"8px 0 4px"}}>direction</div>
+                        <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>{[["line","On line"],["short","Short"],["long","Long"],["left","Left"],["right","Right"]].map(([k,l])=>{const cur=dirWord(x)===(k==="line"?"on line":k);return <button key={k} onClick={()=>updateShot(gi,{dir:k==="left"?"L":k==="right"?"R":null,gain:k==="short"?Math.max(1,x.exp-10):k==="long"?x.exp+10:x.exp})} style={{border:"none",borderRadius:10,padding:"7px 10px",fontSize:12,fontWeight:600,cursor:"pointer",background:cur?PINE:"#f1efe9",color:cur?PAPER:INK}}>{l}</button>;})}</div>
+                        <div style={{color:MUTE,fontSize:10,letterSpacing:1,textTransform:"uppercase",margin:"8px 0 4px"}}>ended</div>
+                        <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>{[["fairway","Fairway"],["rough","Rough"],["bunker","Bunker"],["trees","Trees"],["water","Water"],["green","Green"]].map(([k,l])=>(<button key={k} onClick={()=>updateShot(gi,{end:k,g:k==="green"?1:0})} style={{border:"none",borderRadius:10,padding:"7px 10px",fontSize:12,fontWeight:600,cursor:"pointer",background:x.end===k?PINE:"#f1efe9",color:x.end===k?PAPER:INK}}>{l}</button>))}</div>
+                        <button onClick={()=>deleteShot(gi)} style={{marginTop:10,border:"none",borderRadius:10,padding:"8px 12px",background:"#f6ece9",color:"#a3402f",fontSize:12,fontWeight:700,cursor:"pointer"}}>Delete this shot</button>
+                      </div>}
+                    </div>;})}
+                </div>;})()}
             </div>}
 
             {phase==="whisper"&&(()=>{
@@ -655,10 +746,11 @@ export default function CaddieOS(){
               const shaky=fam!=="chip"&&reliability(fam)<55; // this club is unreliable for the player
               const W=whisper({fam,chip:sel,eff:E.eff(fam),stat:disp(fam),conf:conf(fam),hot:flags.hot.includes(fam),cold:flags.cold.includes(fam),adj:flags.adj[fam]||null,side:sideC,feel:(P.feels&&P.feels[fam])||null,hole:{dzL:H.dzL,dzR:H.dzR},i35:live.rem<=34,reach,leaves,shaky,wind});
               return <div style={arrive}>
+                {(()=>{const stype=live.strokes===0?"tee shot":live.rem<=34?"pitch":reach?"approach":"positioning shot";return (
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
-                  <div style={{color:MUTE,fontSize:14}}>{live.rem} yards · {lieLabel.toLowerCase()}{wind!=="NONE"?" · "+wind.toLowerCase()+" wind":""}</div>
+                  <div style={{color:MUTE,fontSize:14}}><span style={{color:INK,fontWeight:700}}>{stype}</span> · {live.rem}y · {lieLabel.toLowerCase()}{wind!=="NONE"?" · "+wind.toLowerCase()+" wind":""}</div>
                   <button onClick={()=>{setAsked(false);setShowAlt(false);}} style={{border:"none",background:"transparent",color:MUTE,fontSize:13,cursor:"pointer"}}>↩ back</button>
-                </div>
+                </div>);})()}
                 <div style={{background:PINE,borderRadius:28,padding:"30px 24px",boxShadow:"0 10px 30px rgba(18,43,33,.18)"}}>
                   <div style={{fontFamily:SERIF,fontSize:44,color:GOLD,letterSpacing:.3,marginBottom:16,textWrap:"balance"}}>{W.club}</div>
                   {W.lines.map((l,i)=>(<div key={i} style={{fontFamily:SERIF,fontSize:20,color:PAPER,lineHeight:1.5,marginBottom:10,opacity:.96}}>{l}</div>))}
@@ -681,16 +773,29 @@ export default function CaddieOS(){
               </div>;})()}
 
             {phase==="result"&&(()=>{const exp=E.chipCarry(sel||"CHIP");
-              const Z=(lab,fn)=>(<button onClick={()=>{buzz();fn();}} style={{border:"none",borderRadius:16,padding:"24px 10px",fontSize:16,fontWeight:700,cursor:"pointer",background:"#fff",color:INK,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>{lab}</button>);
+              // P6: a shot has a direction AND a resulting lie. Pick the direction
+              // (defaults to On line), then tap where it ended — that logs the shot,
+              // feeds the learning engine, and sets up the next shot's lie (P2).
+              const dirChips=[["line","On line"],["short","Short"],["long","Long"],["left","Left"],["right","Right"]];
+              const gainFor=d=>d==="short"?Math.max(1,exp-10):d==="long"?exp+10:exp;
+              const dOf=d=>d==="left"?"L":d==="right"?"R":null;
+              const logResult=(lieKey,label,lieVal)=>{
+                buzz();
+                if(lieKey==="green"){ setPendingLie(null); logShot(live.rem,true,false,dOf(resDir),"green"); return; }
+                setPendingLie([lieVal,label]);
+                if(lieKey==="water"){ logShot(gainFor(resDir),false,false,dOf(resDir),"water"); addPenalty(); return; }
+                logShot(gainFor(resDir),false,false,dOf(resDir),lieKey);
+              };
+              const lies=[["fairway","Fairway","FW"],["rough","Rough","ROUGH"],["bunker","Bunker","SAND"],["trees","Trees","TREES"],["water","Water","FW"]];
               return <div style={arrive}>
-                <div style={{fontFamily:SERIF,fontSize:22,color:INK,textAlign:"center",marginBottom:20}}>Where'd it finish?</div>
+                <div style={{fontFamily:SERIF,fontSize:22,color:INK,textAlign:"center",marginBottom:6}}>Where'd it finish?</div>
+                <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:14}}>direction, then where it ended</div>
+                <div style={{display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap",marginBottom:16}}>
+                  {dirChips.map(([k,l])=>{const on=resDir===k;return <button key={k} onClick={()=>setResDir(k)} style={{border:"none",borderRadius:18,padding:"10px 15px",fontSize:14,fontWeight:600,cursor:"pointer",background:on?PINE:"#fff",color:on?PAPER:INK,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.06)"}}>{l}</button>;})}
+                </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                  {Z("Short",()=>logShot(Math.max(1,exp-10),false,false,null))}
-                  {Z("Long",()=>logShot(exp+10,false,false,null))}
-                  {Z("Left",()=>logShot(exp,false,false,"L"))}
-                  {Z("Right",()=>logShot(exp,false,false,"R"))}
-                  {Z("On line",()=>logShot(exp,false,false,null))}
-                  <button onClick={()=>{buzz();logShot(live.rem,true,false,null);}} style={{border:"none",borderRadius:16,padding:"24px 10px",fontSize:16,fontWeight:800,cursor:"pointer",background:PINE,color:PAPER}}>On the green</button>
+                  {lies.map(([k,l,v])=>(<button key={k} onClick={()=>logResult(k,l,v)} style={{border:"none",borderRadius:16,padding:"20px 10px",fontSize:16,fontWeight:700,cursor:"pointer",background:"#fff",color:k==="water"?"#3f6d8c":INK,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>{l}</button>))}
+                  <button onClick={()=>logResult("green")} style={{border:"none",borderRadius:16,padding:"20px 10px",fontSize:16,fontWeight:800,cursor:"pointer",background:PINE,color:PAPER}}>On the green</button>
                 </div>
               </div>;})()}
 
