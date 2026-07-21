@@ -293,13 +293,19 @@ def _classify(m: ConfigMetrics, tb: TimeBase, s: Settings) -> None:
 # --------------------------------------------------------------------------- #
 # Seasonality (per model, computed live from the sales history)
 # --------------------------------------------------------------------------- #
-def compute_seasonality(sales: list[Sale], tb: TimeBase) -> dict:
+def compute_seasonality(sales: list[Sale], tb: TimeBase, shrink_k: float = 0.0) -> dict:
     """12-month multiplier curve per model, normalised to average 1.0.
 
     Each calendar month's raw sales are divided by how many times that month
     *occurred* in the data span (part-adjusted for an open current month), which
     turns supply into a comparable monthly rate; the curve is that rate indexed
     to its own 12-month average.
+
+    `shrink_k` (>0) tames sparse-data noise: a month index is pulled toward the
+    neutral 1.0 by weight n/(n+shrink_k), where n is that month's sales count. A
+    peak built on one December (n=1) barely moves the curve; a peak on 20 sales
+    keeps most of its lift. This stops a single data point from swinging the order
+    4x. shrink_k=0 reproduces the raw workbook curve (its parity test pins that).
     """
     latest_calm = ((tb.latest_midx - 1) % 12) + 1 if tb.latest_midx else 0
     out: dict[str, list[float]] = {}
@@ -317,7 +323,14 @@ def compute_seasonality(sales: list[Sale], tb: TimeBase) -> dict:
             occ = max(0.1, occ)
             rates.append(sales_by_month[m - 1] / occ)
         avg = sum(rates) / 12 if rates else 0
-        out[model] = [1.0 if avg == 0 else r / avg for r in rates]
+        raw = [1.0 if avg == 0 else r / avg for r in rates]
+        if shrink_k and shrink_k > 0:
+            damped = [1.0 + (raw[m] - 1.0) * (sales_by_month[m] / (sales_by_month[m] + shrink_k))
+                      for m in range(12)]
+            da = sum(damped) / 12
+            out[model] = [d / da for d in damped] if da > 0 else damped
+        else:
+            out[model] = raw
     return out
 
 
@@ -835,7 +848,7 @@ def run(inventory, sales, settings: Settings, today: _dt.date | None = None) -> 
     today = today or _dt.date.today()
     tb = compute_time_base(sales, today)
     metrics = compute_metrics(sales, tb, settings, settings.effective_roster())
-    seas = compute_seasonality(sales, tb)
+    seas = compute_seasonality(sales, tb, getattr(settings, "seasonality_shrink_k", 0.0))
     loaner_prefixes = _loaner.loaner_stock_prefixes(settings)
     positions = compute_positions(inventory, metrics, settings, today, loaner_prefixes)
 

@@ -273,34 +273,37 @@ def build_sequence(res: EngineResult) -> dict:
     from . import loaner
     s = res.settings
     plan = loaner.loaner_order_plan(res)
-    decay = getattr(s, "order_unit_decay", 1.0)
     out = {}
     for model in MODELS:
         alloc = s.allocations.get(model, 0)
         reserved = plan["per_model"].get(model, 0)     # loaner slots (netting note)
         eff_alloc = max(0, alloc - reserved)
-        retail = []
-        for l in res.lines:
-            if l.model != model or l.suppressed or l.need <= 0 or l.priority <= -1:
-                continue
-            for n in range(int(l.need)):
-                retail.append({"trim": l.trim, "ext": l.ext, "int": l.interior,
-                               "key": l.key, "score": l.priority - decay * n,
+        # Rank combos by priority and show each ONCE with its full quantity — the
+        # actionable order ("order N of A, then M of B"). Splitting a combo's units
+        # into scattered 1x chips read as duplicates/broken to a user.
+        combos = sorted(
+            [l for l in res.lines
+             if l.model == model and not l.suppressed and l.need > 0 and l.priority > -1],
+            key=lambda l: -l.priority)
+        groups, filled = [], 0
+        for l in combos:
+            # split a combo across the allocation line only if it straddles it
+            take_build = max(0, min(int(l.need), eff_alloc - filled))
+            take_alt = int(l.need) - take_build
+            if take_build > 0:
+                groups.append({"key": l.key, "trim": l.trim, "ext": l.ext, "int": l.interior,
+                               "stream": "retail", "tier": "build", "qty": take_build,
                                "dts": l.dts, "momentum": l.momentum})
-        retail.sort(key=lambda u: -u["score"])
-        groups = []
-        for i, u in enumerate(retail):
-            tier = "build" if i < eff_alloc else "alt"
-            if groups and groups[-1]["key"] == u["key"] and groups[-1]["tier"] == tier:
-                groups[-1]["qty"] += 1
-            else:
-                groups.append({"key": u["key"], "trim": u["trim"], "ext": u["ext"],
-                               "int": u["int"], "stream": "retail", "tier": tier,
-                               "qty": 1, "dts": u.get("dts"), "momentum": u.get("momentum")})
+                filled += take_build
+            if take_alt > 0:
+                groups.append({"key": l.key, "trim": l.trim, "ext": l.ext, "int": l.interior,
+                               "stream": "retail", "tier": "alt", "qty": take_alt,
+                               "dts": l.dts, "momentum": l.momentum})
+        total_units = sum(int(l.need) for l in combos)
         build_total = sum(g["qty"] for g in groups if g["tier"] == "build")
         out[model] = {
             "allocation": alloc, "fleet_reserved": reserved, "eff_alloc": eff_alloc,
-            "retail_build": build_total, "groups": groups, "total_units": len(retail),
+            "retail_build": build_total, "groups": groups, "total_units": total_units,
         }
     return {"intake": plan["intake"], "service_months": plan["service_months"],
             "fleet_units": plan["fleet_units"], "per_model": out}

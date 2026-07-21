@@ -132,14 +132,20 @@ function computeMetrics(sales, tb, roster, s){
     let base=m.floor===0?0:Math.max(1,m.floor+adj);
     m.base = smooth?base:Math.round(base); });
   return M; }
-function computeSeasonality(sales, tb){
+function computeSeasonality(sales, tb, shrinkK){
+  shrinkK=shrinkK||0;
   let latestCalm=tb.latest?((tb.latest-1)%12)+1:0, out={};
   MODELS.forEach(model=>{ let byMonth=new Array(12).fill(0);
     sales.forEach(s=>{ if(s.firstVin&&s.model===model&&s.midx>0) byMonth[(s.midx-1)%12]++; });
     let rates=[];
     for(let m=1;m<=12;m++){ let occ=Math.max(1,Math.floor((tb.latest-m)/12)-Math.ceil((tb.earliest-m)/12)+1);
       occ=Math.max(0.1, occ-(latestCalm===m?(1-tb.part):0)); rates.push(byMonth[m-1]/occ); }
-    let avg=rates.reduce((a,b)=>a+b,0)/12; out[model]={index:rates.map(r=>avg===0?1:r/avg),rate:rates}; });
+    let avg=rates.reduce((a,b)=>a+b,0)/12;
+    let raw=rates.map(r=>avg===0?1:r/avg), index=raw;
+    if(shrinkK>0){ // pull sparse months toward neutral 1.0, then renormalize
+      let damped=raw.map((v,m)=>1.0+(v-1.0)*(byMonth[m]/(byMonth[m]+shrinkK)));
+      let da=damped.reduce((a,b)=>a+b,0)/12; index=da>0?damped.map(d=>d/da):damped; }
+    out[model]={index:index,rate:rates}; });
   return out; }
 function isDemo(stock, prefixes){ return prefixes.some(p=>p&&stock.indexOf(p)===0); }
 function matchPrevLoaner(u, list){
@@ -387,18 +393,17 @@ function loanerOrderPlan(res){ let s=res.settings, svc=Math.max(1,parseInt(s.loa
 // RETAIL-only build sequence (mirror of reports.build_sequence). Loaner-fleet
 // units are NEVER injected here — they live in the Loaner section. If the loaner
 // program is active, fleet slots are reported as reserved out of allocation.
-function buildSequence(res){ let s=res.settings, plan=loanerOrderPlan(res), decay=(s.order_unit_decay!==undefined?s.order_unit_decay:1.0), out={};
+function buildSequence(res){ let s=res.settings, plan=loanerOrderPlan(res), out={};
   MODELS.forEach(model=>{ let alloc=s.allocations[model]||0, reserved=plan.perModel[model]||0, effAlloc=Math.max(0,alloc-reserved);
-    let retail=[];
-    res.lines.forEach(l=>{ if(l.model!==model||l.suppressed||l.need<=0||l.priority<=-1) return;
-      for(let n=0;n<l.need;n++) retail.push({trim:l.trim,ext:l.ext,int:l.int,key:l.key,score:l.priority-decay*n,dts:l.dts,momentum:l.mom}); });
-    retail.sort((a,b)=>b.score-a.score);
-    let groups=[];
-    retail.forEach((u,i)=>{ let tier=i<effAlloc?"build":"alt"; let g=groups[groups.length-1];
-      if(g&&g.key===u.key&&g.tier===tier) g.qty++;
-      else groups.push({key:u.key,trim:u.trim,ext:u.ext,int:u.int,stream:"retail",tier:tier,qty:1,dts:u.dts,momentum:u.momentum}); });
+    // rank combos by priority; each shown ONCE with its full quantity
+    let combos=res.lines.filter(l=>l.model===model&&!l.suppressed&&l.need>0&&l.priority>-1).sort((a,b)=>b.priority-a.priority);
+    let groups=[], filled=0, totalUnits=0;
+    combos.forEach(l=>{ totalUnits+=l.need;
+      let takeBuild=Math.max(0,Math.min(l.need, effAlloc-filled)), takeAlt=l.need-takeBuild;
+      if(takeBuild>0){ groups.push({key:l.key,trim:l.trim,ext:l.ext,int:l.int,stream:"retail",tier:"build",qty:takeBuild,dts:l.dts,momentum:l.mom}); filled+=takeBuild; }
+      if(takeAlt>0) groups.push({key:l.key,trim:l.trim,ext:l.ext,int:l.int,stream:"retail",tier:"alt",qty:takeAlt,dts:l.dts,momentum:l.mom}); });
     let buildTotal=groups.filter(g=>g.tier==="build").reduce((a,g)=>a+g.qty,0);
-    out[model]={allocation:alloc,fleet_reserved:reserved,eff_alloc:effAlloc,retail_build:buildTotal,groups:groups,total_units:retail.length}; });
+    out[model]={allocation:alloc,fleet_reserved:reserved,eff_alloc:effAlloc,retail_build:buildTotal,groups:groups,total_units:totalUnits}; });
   return {intake:plan.intake,serviceMonths:plan.serviceMonths,fleetUnits:plan.fleetUnits,perModel:out}; }
 function loanerMatchUnit(stock,inv){ for(let i=0;i<inv.length;i++){ if(stock&&inv[i].stock.indexOf(stock)===0) return inv[i]; } return null; }
 function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], releasing=0;
@@ -421,7 +426,7 @@ function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], rele
   return {target:s.loaner_fleet_target,in_service:inService,releasing_now:releasing,to_add:toAdd,rows:rows}; }
 
 function runEngine(inv,sales,s,today){
-  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,effectiveRoster(s),s), seas=computeSeasonality(sales,tb);
+  let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,effectiveRoster(s),s), seas=computeSeasonality(sales,tb,(s.seasonality_shrink_k!==undefined?s.seasonality_shrink_k:6));
   let loanerPrefixes=loanerStockPrefixes(s), positions=computePositions(inv,metrics,s,today,loanerPrefixes);
   let agedBrakes={}; (s.aged_memory||[]).forEach(e=>{ if(e.active===undefined||e.active===1||e.active===true||e.active==="1") agedBrakes[e.key]=(agedBrakes[e.key]||0)+1; });
   let overrideMap={}; s.overrides.forEach(e=>{ overrideMap[e.key]=(overrideMap[e.key]||0)+parseInt(e.qty||0,10); });

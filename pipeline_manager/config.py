@@ -135,6 +135,10 @@ class Settings:
     # combo loses priority, so the order interleaves ("3x A, then B, then 2 more
     # x A") instead of ordering a whole combo before the next. 0 = combo-blocks.
     order_unit_decay: float = 1.0
+    # Seasonality shrinkage: pull each month's index toward neutral 1.0 by
+    # n/(n+k), so a peak built on one or two months of data can't swing the order
+    # 4x. Higher = flatter/steadier; 0 = raw curve (the workbook's parity mode).
+    seasonality_shrink_k: float = 6.0
 
     # --- tunable thresholds (brief §7/§14/§15/§17) ------------------------- #
     prove_bar: int = 2                   # R90 needed for a demoted combo to surface

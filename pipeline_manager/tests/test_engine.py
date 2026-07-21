@@ -42,7 +42,8 @@ def _run(**kw):
     # cell-for-cell; the data-driven window, demo-return anticipation, and the
     # continuous smooth base are newer layers with their own tests.
     s = Settings(order_month=9, mode="CPO", anticipate_demo_returns=False,
-                 smooth_base=False, cpo_windows={"QX80": 5, "QX60": 5, "QX65": 1}, **kw)
+                 smooth_base=False, seasonality_shrink_k=0,
+                 cpo_windows={"QX80": 5, "QX60": 5, "QX65": 1}, **kw)
     return engine.run(inv, sales, s, today=_AS_OF)
 
 
