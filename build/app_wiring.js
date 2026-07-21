@@ -169,8 +169,21 @@ function addDemoRow(d){ d=d||{};
     "<input class='d-stock' placeholder='Stock# (e.g. N15106)' value=\""+attrq(d.stock)+"\">"+
     "<input type='date' class='d-start' value='"+(d.start||"")+"'>"+
     "<input class='d-note' placeholder='driver / reason' value=\""+attrq(d.note)+"\">"+
-    "<button class='del' title='swap back into sellable inventory'>↩ Return</button>";
-  row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistDemos(); });
+    "<button class='del' title='return this demo to sellable stock — moves it to Previous loaners with today as the return date'>↩ Return</button>";
+  // One-click swap: Return moves the demo into the Previous-loaners list (its demo
+  // start becomes 'taken', today becomes 'returned'), then removes the demo row.
+  row.querySelector(".del").addEventListener("click",function(){
+    let stock=row.querySelector(".d-stock").value.trim();
+    if(stock){
+      let start=row.querySelector(".d-start").value;
+      let note=row.querySelector(".d-note").value.trim();
+      let today=new Date().toISOString().slice(0,10);
+      let lr=addLoanerRow({stock:stock, taken:start, returned:today, note:note});
+      persistLoaners();
+      if(lr) lr.scrollIntoView({behavior:"smooth",block:"center"});
+    }
+    row.remove(); liveRecompute(); persistDemos();
+  });
   row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistDemos(); }));
   document.getElementById("demoRows").appendChild(row);
   return row;

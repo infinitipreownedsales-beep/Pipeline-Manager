@@ -159,8 +159,11 @@ function computePositions(inv, metrics, s, today, loanerPrefixes){
   let P={}; loanerPrefixes=loanerPrefixes||[];
   inv.forEach(u=>{ if(!u.key) return; let p=P[u.key]; if(!p){ p={onlot:0,inbound:0,arrivals:{},stalled:0,aged:[],whole:[],onlotUnits:[]}; P[u.key]=p; }
     let demo=isDemo(u.stock,s.demo_stocks), loaner=isDemo(u.stock,loanerPrefixes);
-    if(u.isDlr){ if(demo||loaner) return;
+    if(u.isDlr){
+      // a returned loaner is sellable again and takes precedence over a stale demo
+      // row, so marking Returned always registers even if the demo row is left in place
       let entry=matchPrevLoaner(u,s.prev_loaners);
+      if(!entry && (demo||loaner)) return;
       if(entry){ u.prevLoaner=true; let dout=loanerDaysOut(entry);
         if(dout!==null) u.retailDis=Math.max(0,u.dis-dout);
         else if(entry.since){ let d=new Date(entry.since); if(!isNaN(d.getTime())) u.retailDis=Math.max(0,Math.round((today-d)/86400000)); } }
@@ -434,7 +437,7 @@ function runEngine(inv,sales,s,today){
   let agedBrakes={}; (s.aged_memory||[]).forEach(e=>{ if(e.active===undefined||e.active===1||e.active===true||e.active==="1") agedBrakes[e.key]=(agedBrakes[e.key]||0)+1; });
   let overrideMap={}; s.overrides.forEach(e=>{ overrideMap[e.key]=(overrideMap[e.key]||0)+parseInt(e.qty||0,10); });
   let windows=resolveWindows(inv,today,s);
-  let demoUnits=inv.filter(u=>u.isDlr&&isDemo(u.stock,s.demo_stocks));
+  let demoUnits=inv.filter(u=>u.isDlr&&isDemo(u.stock,s.demo_stocks)&&!matchPrevLoaner(u,s.prev_loaners));
   let demoReturns=computeDemoReturns(demoUnits,s,today);
   let lines=buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demoReturns);
   let orphans=findOrphans(sales,effectiveRoster(s));

@@ -382,13 +382,14 @@ def compute_positions(inventory: list[InventoryUnit], metrics: dict, s: Settings
         demo = _is_demo(u.stock, s.demo_stocks)
         loaner = _is_demo(u.stock, loaner_prefixes)
         if u.is_dlr_inv:
-            if demo or loaner:
-                continue  # demos and in-service loaners are out of sellable math
-            # Returned loaner: subtract only the hidden demo period (taken ->
-            # returned) from days-in-stock, so the days it was publicly available
-            # before and after the demo still count as real market time. (A bare
-            # legacy `since` re-entry date falls back to today - since.)
+            # A returned loaner is sellable again and takes precedence over a stale
+            # demo-roster entry: marking a unit Returned always registers, even if
+            # its demo row was left in place. (Its retail clock subtracts only the
+            # hidden demo period taken->returned; a bare legacy `since` falls back
+            # to today - since.)
             entry = _match_prev_loaner(u, s.prev_loaners)
+            if entry is None and (demo or loaner):
+                continue  # active demo / in-service loaner: out of sellable math
             if entry is not None:
                 u.prev_loaner = True
                 days_out = _loaner_days_out(entry)
@@ -869,7 +870,8 @@ def run(inventory, sales, settings: Settings, today: _dt.date | None = None) -> 
 
     windows = resolve_windows(inventory, today, settings)
     demo_units = [u for u in inventory
-                  if u.is_dlr_inv and _is_demo(u.stock, settings.demo_stocks)]
+                  if u.is_dlr_inv and _is_demo(u.stock, settings.demo_stocks)
+                  and _match_prev_loaner(u, settings.prev_loaners) is None]
     demo_returns = compute_demo_returns(demo_units, settings, today)
     lines = build_lines(settings, metrics, seas, positions, aged_brakes,
                         override_map, windows, demo_returns)
