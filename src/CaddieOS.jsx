@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { whisper, humanClub, teeWhisper, puttWhisper, benchWhisper } from "./whisper.js";
 
 // CADDIE OS v10 — DYNAMIC ROUND ENGINE
 // Every shot logs the club actually used (tap to change, layups tappable).
@@ -307,8 +308,22 @@ const S = {
   pill:(bg,fg)=>({display:"inline-block",background:bg,color:fg,borderRadius:20,padding:"3px 10px",fontSize:11,fontWeight:800}),
 };
 
+// The Whisper aesthetic: a caddie's leather yardage book meets a meditation app.
+const PINE="#122b21", PAPER="#faf8f4", GOLD="#c8a24a", INK="#233b30", MUTE="#6b7d72";
+const SERIF="Georgia,'Iowan Old Style','Palatino Linotype',serif";
+const arrive={animation:"whisperIn .22s ease both"};
+const WSTYLE=`@keyframes whisperIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}`;
+const buzz=()=>{try{navigator.vibrate&&navigator.vibrate(12);}catch(e){}};
+
 export default function CaddieOS(){
-  const [tab,setTab]=useState("play");
+  const [tab,setTab]=useState("caddie");
+  const [asked,setAsked]=useState(false);        // whisper flow: has the player asked this shot?
+  const [awaitResult,setAwaitResult]=useState(false); // waiting for the six-zone result tap
+  const [qYards,setQYards]=useState("");          // question-screen yardage entry
+  const [lieLabel,setLieLabel]=useState("Fairway"); // which lie chip is lit (Tee vs Fairway both map to FW)
+  const [showAlt,setShowAlt]=useState(false);     // "something else?" expander
+  const [prepOpen,setPrepOpen]=useState(false);   // pre-round PREP card
   const [P,setP]=useState(DEF_PROFILE);
   const [rounds,setRounds]=useState([]);
   const [loaded,setLoaded]=useState(false);
@@ -439,7 +454,8 @@ export default function CaddieOS(){
   const R=live&&!live.onGreen?E.rec(effRem):null;
   const L=live&&!live.onGreen&&(!R||R.zone==="adv")?E.layup(live.rem).filter(o=>o.r.zone!=="adv"):null;
 
-  useEffect(()=>{ if(!live||live.onGreen){setSel(null);return;}
+  useEffect(()=>{ setAsked(false);setAwaitResult(false);setShowAlt(false);setQYards("");
+    if(!live||live.onGreen){setSel(null);return;}
     const hp=getPlan(CH[live.hole]);
     const bk=(!learned&&live.strokes<hp.length)?bookChipOf(hp[live.strokes].c,P):null;
     const bkOk=bk&&!(live.bench||[]).includes(famOf(bk));
@@ -448,8 +464,8 @@ export default function CaddieOS(){
 
   const startRound=()=>saveLive({course:courseSel,hole:0,strokes:0,rem:CH[0].y,onGreen:false,putts:0,pen:0,i35At:null,teeAck:false,bench:[],shots:[],scores:Array(18).fill(null),puttsArr:Array(18).fill(null),convs:Array(18).fill(null)});
   const addPenalty=()=>saveLive({...live,pen:(live.pen||0)+1,shots:[...(live.shots||[]),{pen:1,from:live.rem,c:"Penalty",h:live.hole+1}]});
-  const logShot=(gain,g,syn)=>{
-    const shot={c:sel||"?",from:live.rem,gain,exp:E.chipCarry(sel||"CHIP"),g:g?1:0,p:syn?1:0,h:live.hole+1,lie,dir};
+  const logShot=(gain,g,syn,dirOv)=>{
+    const shot={c:sel||"?",from:live.rem,gain,exp:E.chipCarry(sel||"CHIP"),g:g?1:0,p:syn?1:0,h:live.hole+1,lie,dir:dirOv!==undefined?dirOv:dir};
     let l={...live,strokes:live.strokes+1,shots:[...(live.shots||[]),shot]};
     const nr=live.rem-gain;
     if(g||nr<=0){l.onGreen=true;}
@@ -471,10 +487,10 @@ export default function CaddieOS(){
       saveLive({...live,hole:nxt,strokes:0,rem:(live.teeAdj&&live.teeAdj[nxt])||CH[nxt].y,onGreen:false,putts:0,pen:0,i35At:null,teeAck:false,scores:sc,puttsArr:pa,convs:cv});}
   };
 
-  const TabBtn=({id,icon,label})=>(
-    <button onClick={()=>setTab(id)} style={{flex:1,background:"none",border:"none",cursor:"pointer",padding:"7px 0 3px",display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-      <span style={{fontSize:19,opacity:tab===id?1:0.4}}>{icon}</span>
-      <span style={{fontSize:9,fontWeight:700,color:tab===id?"#1a3a2e":"#8a8a8e"}}>{label}</span>
+  const TabBtn=({id,label})=>(
+    <button onClick={()=>{setTab(id);}} style={{flex:1,background:"none",border:"none",cursor:"pointer",padding:"14px 0 16px",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+      <span style={{width:5,height:5,borderRadius:5,background:tab===id?GOLD:"transparent"}}></span>
+      <span style={{fontSize:11,letterSpacing:2,fontWeight:700,color:tab===id?INK:MUTE,fontFamily:SERIF}}>{label}</span>
     </button>);
 
   if(!loaded)return <div style={{padding:40,textAlign:"center",fontFamily:"-apple-system,sans-serif",color:"#8a8a8e"}}>Loading your caddie…</div>;
@@ -489,7 +505,7 @@ export default function CaddieOS(){
   const inspecting=live&&viewHole!==null&&viewHole!==live.hole;
 
   return (
-    <div style={{background:"#f2f2f7",minHeight:"100vh",width:"100%",maxWidth:430,margin:"0 auto",overflowX:"hidden",fontFamily:"-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif",paddingBottom:76,boxSizing:"border-box"}}>
+    <div style={{background:PAPER,minHeight:"100vh",width:"100%",maxWidth:430,margin:"0 auto",overflowX:"hidden",fontFamily:"-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif",paddingBottom:76,boxSizing:"border-box"}}>
       <div style={{background:"#1a3a2e",padding:"12px 14px 9px",position:"sticky",top:0,zIndex:50}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
@@ -510,244 +526,162 @@ export default function CaddieOS(){
         </div>}
       </div>
 
-      {tab==="play"&&<div style={{padding:12}}>
-        {!live&&<div style={{...S.card,textAlign:"center",padding:26}}>
-          <div style={{fontSize:38,marginBottom:6}}>⛳</div>
-          <div style={S.big}>Ready to play?</div>
-          <div style={{...S.sub,margin:"6px 0 14px"}}>Every shot is called live and logged with the club you actually used. The engine watches your bag in real time — flags a club going cold, celebrates one running hot, and quietly recalibrates the plan around what's true today.</div>
-          <div style={{display:"flex",gap:8,marginBottom:10}}>
+      {tab==="caddie"&&<div style={{padding:0}}>
+        <style>{WSTYLE}</style>
+
+        {!live&&<div style={{padding:"22px 18px"}}>
+          <div style={{fontFamily:SERIF,fontSize:30,color:INK,lineHeight:1.2,marginBottom:6}}>Ready when you are.</div>
+          <div style={{color:MUTE,fontSize:15,marginBottom:20,fontFamily:SERIF}}>Tell me the number and your lie. I'll take care of the rest.</div>
+          <div style={{display:"flex",gap:10,marginBottom:12}}>
             {Object.entries(COURSES).map(([k,c])=>(
-              <button key={k} onClick={()=>setCourseSel(k)} style={{...S.btn,flex:1,fontSize:13,background:courseSel===k?"#1a3a2e":"#f2f2f7",color:courseSel===k?"#86efac":"#111"}}>{c.name}</button>))}
+              <button key={k} onClick={()=>setCourseSel(k)} style={{flex:1,border:"none",borderRadius:16,padding:"14px 10px",fontSize:14,fontWeight:700,cursor:"pointer",background:courseSel===k?PINE:"#fff",color:courseSel===k?PAPER:INK,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>{c.name}</button>))}
           </div>
-          <button onClick={startRound} style={{...S.btn,background:"#1a3a2e",color:"#86efac",width:"100%",fontSize:17}}>START ROUND</button>
-          {!P.clubStats&&<button onClick={()=>setTab("me")} style={{...S.btn,background:"transparent",color:"#1a3a2e",width:"100%",fontSize:13,marginTop:6,textDecoration:"underline"}}>📥 First time? Upload your launch-monitor data → get your caddie profile</button>}
-        </div>}
-
-        {inspecting&&(()=>{const i=viewHole,h=CH[i],sc=live.scores[i];return (<>
-          <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8}}>
-            <button onClick={()=>setViewHole(Math.max(0,i-1))} style={{...S.btn,padding:"9px 13px",background:"white",boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>←</button>
-            <div style={{flex:1,textAlign:"center",fontSize:12,fontWeight:900,color:"#1a3a2e"}}>H{i+1} · {sc!==null?"PLAYED":"AHEAD"} <span style={{color:"#8a8a8e",fontWeight:700}}>(playing H{live.hole+1})</span></div>
-            <button onClick={()=>setViewHole(Math.min(17,i+1))} style={{...S.btn,padding:"9px 13px",background:"white",boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>→</button>
-            <button onClick={()=>setViewHole(null)} style={{...S.btn,padding:"9px 13px",background:"#1a3a2e",color:"#86efac"}}>✕</button>
-          </div>
-          {sc!==null?<div style={S.card}>
-            <div style={S.h}>H{i+1} · par {h.par} · target {h.tgt} — adjust anything</div>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0"}}>
-              <span style={{fontSize:14,fontWeight:800}}>Score</span>
-              <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                <button onClick={()=>editLiveHole(i,-1)} style={{...S.btn,padding:"7px 14px",background:"#f2f2f7"}}>−</button>
-                <span style={{fontSize:24,fontWeight:900,minWidth:30,textAlign:"center",color:sc<=h.tgt?"#1a7f37":sc>=7?"#ff453a":"#111"}}>{sc}</span>
-                <button onClick={()=>editLiveHole(i,1)} style={{...S.btn,padding:"7px 14px",background:"#f2f2f7"}}>+</button>
-              </div>
-            </div>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderTop:"1px solid #f2f2f7"}}>
-              <span style={{fontSize:14,fontWeight:800}}>Putts</span>
-              <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                <button onClick={()=>editLivePutts(i,-1)} style={{...S.btn,padding:"7px 14px",background:"#f2f2f7"}}>−</button>
-                <span style={{fontSize:20,fontWeight:900,minWidth:30,textAlign:"center"}}>{live.puttsArr[i]||0}</span>
-                <button onClick={()=>editLivePutts(i,1)} style={{...S.btn,padding:"7px 14px",background:"#f2f2f7"}}>+</button>
-              </div>
-            </div>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderTop:"1px solid #f2f2f7"}}>
-              <span style={{fontSize:14,fontWeight:800}}>Inside-35 conversion</span>
-              <button onClick={()=>convCycle(i)} style={{...S.btn,padding:"7px 14px",background:"#eaf4ff",color:"#0a84ff"}}>{live.convs[i]===true?"🎯 ✓":live.convs[i]===false?"🎯 ✗":"—"}</button>
-            </div>
-            {(live.shots||[]).filter(x=>x.h===i+1).length>0&&<div style={{borderTop:"1px solid #f2f2f7",paddingTop:8}}>
-              <div style={S.h}>Shot progression</div>
-              {(live.shots||[]).filter(x=>x.h===i+1).map((x,k)=>(<div key={k} style={{fontSize:12,color:x.pen?"#c2410c":"#3a3a3c",padding:"2px 0"}}>{k+1}. {x.pen?<><b>Penalty</b> +1 stroke (stroke &amp; distance, still {x.from}y)</>:<><b>{x.c}</b> from {x.from}y → {x.g?"GREEN":(x.from-x.gain)+"y left"}{x.g?"":" ("+(x.gain-x.exp>=0?"+":"")+(x.gain-x.exp)+" vs number)"}</>}</div>))}
+          <button onClick={()=>{buzz();startRound();}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:18,fontWeight:700,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4}}>Start the round</button>
+          {!P.clubStats&&<button onClick={()=>setTab("me")} style={{width:"100%",marginTop:10,border:"none",background:"transparent",color:INK,fontSize:13,textDecoration:"underline",cursor:"pointer"}}>First time? Upload your launch-monitor data →</button>}
+          <div style={{marginTop:18,background:"#fff",borderRadius:16,padding:16,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+            <button onClick={()=>setPrepOpen(!prepOpen)} style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",background:"none",border:"none",cursor:"pointer",padding:0}}>
+              <span style={{fontFamily:SERIF,fontSize:17,color:INK}}>Warm up first</span>
+              <span style={{color:MUTE,fontSize:20}}>{prepOpen?"–":"+"}</span>
+            </button>
+            {prepOpen&&<div style={{marginTop:10,color:INK,fontSize:14,lineHeight:1.7}}>
+              <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:4}}>Body · 8 min</div>
+              Glute bridges, world's-greatest stretch, torso rotations, then ten swings building to your smooth tempo.
+              <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",margin:"12px 0 4px"}}>Range · fresh first</div>
+              Check alignment, then your wedge windows before anything else. Five smooth 9-irons, five 7s at tempo. Finish on the greens: pace ladder 10/20/30, then five chips — walk to the first tee on a make.
+              <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",margin:"12px 0 4px"}}>Fuel</div>
+              Eat 2–3 hours out, top up every six holes, sip water every hole. Dehydration shows up as a chunked iron before it feels like thirst.
             </div>}
-            <button onClick={()=>playHoleNow(i)} style={{...S.btn,width:"100%",marginTop:10,background:"#fff4ec",color:"#c2410c",fontSize:13}}>REPLAY THIS HOLE (overwrites score)</button>
           </div>
-          :<div style={{...S.card,background:"#1a3a2e"}}>
-            <div style={{color:"#86efac",fontSize:11,letterSpacing:2,fontWeight:800,marginBottom:6}}>UP AHEAD · PAR {h.par} · {h.y} YDS · TARGET {h.tgt}</div>
-            <div style={{color:"white",fontSize:14,lineHeight:1.5,fontWeight:600,marginBottom:6}}>{h.vibe}</div>
-            <MiniMap h={h} P={P} plan={getPlan(h)}/>
-            <div style={{color:"#6b9e7a",fontSize:12,marginBottom:10}}>{getPlan(h).map(p=>p.c).join(" → ")} · ⚠ {h.hz}</div>
-            <button onClick={()=>playHoleNow(i)} style={{...S.btn,width:"100%",background:"#86efac",color:"#1a3a2e"}}>PLAY THIS HOLE NOW</button>
-            <div style={{color:"#6b9e7a",fontSize:10,marginTop:6,textAlign:"center"}}>Shotgun start or skipping around? Jump freely — everything you've played is kept, and the round closes out once all 18 are in.</div>
-          </div>}
-        </>);})()}
-        {live&&!inspecting&&!live.teeAck&&!tourn&&<div style={{...S.card,background:"#1a3a2e",padding:18}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-            <div style={{color:"#86efac",fontSize:11,letterSpacing:2,fontWeight:800}}>HOLE {H.n} · PAR {H.par} · {H.y} YDS</div>
-            <span style={S.pill("rgba(255,255,255,0.18)","#fcd34d")}>TARGET {H.tgt}</span>
-          </div>
-          {!learned&&<div style={{color:"white",fontSize:16,lineHeight:1.5,fontWeight:600,marginBottom:10}}>{H.vibe}</div>}
-          {!learned&&H.r3&&<div style={{color:"#d8b4fe",fontSize:12,fontWeight:700,marginBottom:4}}>◆ R3 leaked here: {H.r3} — today it comes back.</div>}
-          {!learned&&H.gap&&<div style={{color:"#ffb3ad",fontSize:12,fontWeight:700,marginBottom:4}}>🔴 Gap-zone hole — PW smooth center, never the flag.</div>}
-          {holeMarks.length>0&&<div style={{color:"#fcd34d",fontSize:12,fontWeight:700,marginBottom:6}}>{holeMarks.map((m,i)=><div key={i}>▸ {m}</div>)}</div>}
-          <MiniMap h={H} P={P} plan={getPlan(H)}/>
-          <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8}}>
-            <span style={{color:"#6b9e7a",fontSize:10,fontWeight:800,letterSpacing:1}}>TEE DISTANCE</span>
-            <input type="number" value={teeIn!==""?teeIn:live.rem} onChange={e=>setTeeIn(e.target.value)} style={{width:82,padding:"7px 8px",fontSize:16,fontWeight:800,border:"none",borderRadius:9,textAlign:"center"}}/>
-            <button onClick={()=>{const v=parseInt(teeIn)||live.rem;saveLive({...live,rem:v,teeAdj:{...(live.teeAdj||{}),[live.hole]:v}});setTeeIn("");}} style={{...S.btn,padding:"8px 12px",fontSize:12,background:"rgba(255,255,255,0.18)",color:"#86efac"}}>SET</button>
-            <span style={{color:"#6b9e7a",fontSize:9}}>different tees / closed holes</span>
-          </div>
-          <div style={{color:"#6b9e7a",fontSize:12,marginBottom:12}}>{learned?<>⚠ {H.hz}</>:<>{H.plan?"The book":"Caddie plan"}: {getPlan(H).map(p=>p.c).join(" → ")} · ⚠ {H.hz}</>}</div>
-          <button onClick={()=>saveLive({...live,teeAck:true})} style={{...S.btn,width:"100%",background:"#86efac",color:"#1a3a2e",fontSize:16}}>STEP TO THE TEE →</button>
         </div>}
 
-        {live&&!inspecting&&(live.teeAck||tourn)&&<>
-          {coldAlert.map(f=>(<div key={f} style={{...S.card,background:"#fff4ec",border:"2px solid #ff9f0a",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
-            <div style={{minWidth:0}}><div style={{fontSize:14,fontWeight:900,color:"#c2410c"}}>❄ {f} is running cold</div><div style={{fontSize:12,color:"#3a3a3c"}}>Your last two clean-lie {f} strikes finished 15+ yards short of your number this round. Bench it to reroute — or ✕ if the data's wrong.</div></div>
-            <div style={{display:"flex",gap:5,flexShrink:0}}>
-              <button onClick={()=>saveLive({...live,bench:[...live.bench,f]})} style={{...S.btn,background:"#ff9f0a",color:"white",padding:"10px 12px"}}>BENCH</button>
-              <button onClick={()=>saveLive({...live,dismiss:[...(live.dismiss||[]),f]})} style={{...S.btn,background:"#f2f2f7",color:"#3a3a3c",padding:"10px 12px"}}>✕</button>
-            </div>
-          </div>))}
-          {flags.hot.length>0&&<div style={{margin:"-2px 2px 8px",fontSize:12,fontWeight:800,color:"#1a7f37"}}>🔥 Hot right now: {flags.hot.join(", ")} — keep feeding {flags.hot.length>1?"them":"it"}.</div>}
-          {Object.keys(flags.adj).length>0&&<div style={{margin:"-2px 2px 8px",fontSize:11,fontWeight:700,color:"#8a8a8e"}}>Live cal: {Object.entries(flags.adj).map(([k,v])=>`${k} planning at ${E.eff(k)}y (${v})`).join(" · ")}</div>}
-
-          {tourn&&live.strokes===0&&!live.onGreen&&<div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8}}>
-            <span style={{fontSize:10,fontWeight:800,color:"#8a8a8e",letterSpacing:1}}>TEE DISTANCE</span>
-            <input type="number" value={teeIn!==""?teeIn:live.rem} onChange={e=>setTeeIn(e.target.value)} style={{...S.inp,width:78,padding:"7px 8px",fontSize:15,textAlign:"center"}}/>
-            <button onClick={()=>{const v=parseInt(teeIn)||live.rem;saveLive({...live,rem:v,teeAdj:{...(live.teeAdj||{}),[live.hole]:v}});setTeeIn("");}} style={{...S.btn,padding:"8px 12px",fontSize:12,background:"#1a3a2e",color:"#86efac"}}>SET</button>
-          </div>}
-          {!live.onGreen&&<div style={{...S.card,border:`2.5px solid ${R?R.color:"#8a8a8e"}`}}>
-            <div style={S.h}>H{H.n} · Par {H.par} · Target {H.tgt} · Stroke {live.strokes+1} · <b style={{color:"#111"}}>{live.rem}y out</b></div>
-            {R&&<button onClick={()=>setSel(R.chip)} style={{display:"block",width:"100%",textAlign:"left",background:sel===R.chip?"#eafff1":"white",border:sel===R.chip?"2.5px solid #30d158":"2.5px solid #e5e5ea",borderRadius:14,padding:"11px 13px",cursor:"pointer",boxSizing:"border-box"}}>
-              <div style={{fontSize:10,letterSpacing:1.4,fontWeight:800,color:sel===R.chip?"#1a7f37":"#8a8a8e"}}>SUGGESTED{sel===R.chip?" · SELECTED ✓":" — TAP TO SELECT"}</div>
-              <div style={{...S.big,color:R.color==="#30d158"?"#1a7f37":R.color}}>{R.club}</div>
-              {(()=>{const ao=aimOff(famOf(R.chip));return ao?<div style={{fontSize:12,fontWeight:800,color:"#c2410c",margin:"5px 0 3px"}}>⟵⟶ {ao.text}</div>:null;})()}
-              {wind!=="NONE"&&wind!=="CROSS"&&<div style={{fontSize:11,fontWeight:800,color:"#0a84ff",marginBottom:3}}>🌬 {live.rem}y plays like ~{effRem}y {wind==="INTO"?"into the wind":"downwind"}</div>}
-              {wind==="CROSS"&&<div style={{fontSize:11,fontWeight:800,color:"#0a84ff",marginBottom:3}}>🌬 Crosswind — aim the upwind edge; expect a wider spread.</div>}
-              {(()=>{const d=disp(famOf(R.chip));return d?<div style={{fontSize:11,fontWeight:700,color:"#6e6e73",marginBottom:3}}>📏 Distance vs your number: {d.avg>=0?"+":""}{d.avg}y avg · ±{d.sd}y{d.sd>=12?" — wide: center only":""}</div>:null;})()}
-              {(()=>{const t=clubTips(famOf(R.chip));return t.length?<div style={{fontSize:11,fontWeight:700,color:"#1a7f37",marginBottom:3}}>{t.map((x,i)=><div key={i}>📊 {x}</div>)}</div>:null;})()}
-              {(()=>{const gp=greenProb(famOf(R.chip)),cf=conf(famOf(R.chip));return (gp!==null||cf!==null)?<div style={{fontSize:11,fontWeight:800,color:"#1a7f37",marginBottom:3}}>{gp!==null?"🎯 On-target probability ~"+gp+"%":""}{gp!==null&&cf!==null?" · ":""}{cf!==null?"Confidence "+cf+"/100":""}</div>:null;})()}
-              <div style={S.sub}>{R.note}</div>
-            </button>}
-            {!tourn&&L&&L[0]&&(()=>{const o=L[0];return <>
-              <div style={{...S.h,marginTop:6}}>Alternative — tap to choose</div>
-              <button onClick={()=>setSel(o.k)} style={{display:"block",width:"100%",textAlign:"left",background:sel===o.k?"#eafff1":"white",border:sel===o.k?"2px solid #30d158":"2px solid #e5e5ea",borderRadius:12,padding:"10px 12px",marginTop:8,cursor:"pointer"}}>
-                <div style={{fontSize:15,fontWeight:800}}>{sel===o.k?"✅ ":""}{o.k} ({o.carry}y) → leaves {o.rem}y</div>
-                <div style={{fontSize:12,color:o.r.color==="#30d158"?"#1a7f37":o.r.color,fontWeight:700}}>then: {o.r.club}</div>
-              </button>
-            </>;})()}
-            <div style={{display:"flex",gap:5,marginTop:10,flexWrap:"wrap"}}>
-              <span style={{fontSize:10,fontWeight:800,color:"#8a8a8e",letterSpacing:1,alignSelf:"center"}}>LIE</span>
-              {["FW","ROUGH","DEEP","SAND","TREES"].map(v=>(<button key={v} onClick={()=>{setLie(v);if(v==="DEEP")setSel("52FS");else if(v==="TREES")setSel("PW");else if(v==="ROUGH"&&sel&&famOf(sel)==="8i")setSel("9i");}} style={{...S.btn,padding:"7px 10px",fontSize:11,background:lie===v?"#1a3a2e":"#f2f2f7",color:lie===v?"#86efac":"#111"}}>{v==="FW"?"FAIRWAY":v}</button>))}
-            </div>
-            {lie==="TREES"&&<div style={{display:"flex",gap:6,marginTop:8,alignItems:"center"}}>
-              <span style={{fontSize:10,fontWeight:800,color:"#8a8a8e"}}>YDS TO SAFETY</span>
-              <input type="number" value={obIn} onChange={e=>setObIn(e.target.value)} style={{...S.inp,width:70,padding:"7px",textAlign:"center",fontSize:14}}/>
-            </div>}
-            {(()=>{if(lie==="FW")return null;let note="";
-              if(lie==="ROUGH")note="Rough: ball flies ~10% short with low spin — ON PLAN advances 90% of carry automatically. 8i is off the table (fairway-only rule).";
-              if(lie==="DEEP")note="Deep rough: take the medicine. Wedge back to the fairway (~75y advance), then save it with the wedge and the putter.";
-              if(lie==="SAND")note="Sand: one more club, smooth tempo, ball-first strike. Fairway bunker = pick it clean; greenside = splash to center.";
-              if(lie==="TREES"){const need=parseInt(obIn)||0;const pk=need?Object.keys(P.carries).sort((a,b)=>P.carries[a]-P.carries[b]).find(k=>0.62*E.eff(k)>=need)||"7i":null;note=`Blocked: punch OUT low — knee-high under everything, back in play. A punch flies ~60% of normal${need&&pk?` · to cover ${need}y: ${pk} punch`:""}. Never thread loft through branches (the H13 lesson).`;}
-              return <div style={{marginTop:8,background:"#fdf6ec",border:"1px solid #f0d9b5",borderRadius:10,padding:"8px 10px",fontSize:12,color:"#7a5b1e",fontWeight:600}}>{note}</div>;})()}
-            {!tourn&&sel&&(()=>{const d=disp(famOf(sel));return d?<div style={{marginTop:8,fontSize:11,fontWeight:700,color:"#8a8a8e"}}>📊 Your {famOf(sel)}: {d.n} tracked · avg {d.avg>=0?"+":""}{d.avg}y vs number · dispersion ±{d.sd}y{d.sd>=12?" — wide today: center-green only":""}</div>:null;})()}
-            <div style={{marginTop:10}}>
-              <div style={S.h}>Club in hand — tap to change</div>
-              <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:4}}>
-                {chips.map(c=>{const on=sel===c;const cold=flags.cold.includes(famOf(c)),hot=flags.hot.includes(famOf(c));
-                  return <button key={c} onClick={()=>setSel(c)} style={{flexShrink:0,border:"none",borderRadius:10,padding:"9px 11px",fontSize:13,fontWeight:800,cursor:"pointer",background:on?"#1a3a2e":"#f2f2f7",color:on?"#86efac":"#111"}}>{c}{hot?"🔥":cold?"❄":""}<span style={{fontSize:9,fontWeight:700,opacity:0.65}}> {E.chipCarry(c)}</span></button>;})}
+        {live&&(()=>{
+          if(viewHole!=null&&viewHole!==live.hole){const i=viewHole,h=CH[i],sc=live.scores[i];
+            return <div style={{padding:"18px 16px"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                <div style={{fontFamily:SERIF,fontSize:20,color:INK}}>Hole {i+1} · par {h.par} · {h.y}y</div>
+                <button onClick={()=>setViewHole(null)} style={{border:"none",background:PINE,color:PAPER,borderRadius:10,padding:"8px 12px",cursor:"pointer"}}>Close</button>
               </div>
-            </div>
-            {!tourn&&!learned&&live.strokes<GP.length&&<div style={{marginTop:8,background:"#eaf4ff",borderRadius:10,padding:"8px 10px"}}>
-              <div style={{fontSize:10,fontWeight:800,color:"#0a84ff",letterSpacing:1}}>{H.plan?"THE BOOK":"CADDIE CALL"} · SHOT {live.strokes+1} · AUTO-SELECTED</div>
-              <div style={{fontSize:13,fontWeight:800}}>{GP[step].c} — {GP[step].a}</div>
-              <div style={{fontSize:12,color:"#3a3a3c"}}>{GP[step].t}</div>
+              <div style={{color:MUTE,fontSize:14,marginBottom:14,fontFamily:SERIF}}>{h.hz}</div>
+              {sc!=null&&<div style={{display:"flex",alignItems:"center",gap:14,marginBottom:14}}>
+                <button onClick={()=>editLiveHole(i,-1)} style={{border:"none",background:"#fff",borderRadius:10,padding:"8px 16px",fontSize:18,cursor:"pointer",boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>–</button>
+                <span style={{fontSize:26,fontWeight:800,color:INK}}>{sc}</span>
+                <button onClick={()=>editLiveHole(i,1)} style={{border:"none",background:"#fff",borderRadius:10,padding:"8px 16px",fontSize:18,cursor:"pointer",boxShadow:"0 1px 3px rgba(0,0,0,.06)"}}>+</button>
+                <span style={{color:MUTE,fontSize:13}}>score</span>
+              </div>}
+              <button onClick={()=>{buzz();playHoleNow(i);}} style={{width:"100%",border:"none",borderRadius:16,padding:"15px",background:PINE,color:PAPER,fontSize:16,fontWeight:700,cursor:"pointer"}}>Play this hole now</button>
+            </div>;
+          }
+          const phase=live.onGreen?"putt":awaitResult?"result":asked?"whisper":"question";
+          const y=parseInt(qYards)||live.rem;
+          return <div style={{padding:"16px 16px 28px"}}>
+
+            {phase==="question"&&<div style={arrive}>
+              {(()=>{const c=flags.cold.find(f=>!live.bench.includes(f)&&!((live.dismiss||[]).includes(f)));if(!c)return null;
+                return <div style={{background:"#fff",borderRadius:16,padding:14,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+                  <div style={{fontFamily:SERIF,fontSize:16,color:INK,marginBottom:10}}>{benchWhisper(c)}</div>
+                  <div style={{display:"flex",gap:10}}>
+                    <button onClick={()=>saveLive({...live,bench:[...live.bench,c]})} style={{flex:1,border:"none",borderRadius:12,padding:"12px",background:PINE,color:PAPER,fontWeight:700,cursor:"pointer"}}>Yes, route around it</button>
+                    <button onClick={()=>saveLive({...live,dismiss:[...(live.dismiss||[]),c]})} style={{flex:1,border:"none",borderRadius:12,padding:"12px",background:"#f1efe9",color:INK,fontWeight:700,cursor:"pointer"}}>No, it's fine</button>
+                  </div>
+                </div>;})()}
+              {live.strokes===0&&<div style={{fontFamily:SERIF,fontSize:16,color:MUTE,lineHeight:1.5,marginBottom:18}}>{teeWhisper(H,H.y)}</div>}
+              <div style={{textAlign:"center",marginBottom:6,color:MUTE,fontSize:12,letterSpacing:2,textTransform:"uppercase"}}>How far?</div>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:14,marginBottom:18}}>
+                <button onClick={()=>setQYards(String(Math.max(1,y-1)))} style={{border:"none",background:"#fff",width:52,height:52,borderRadius:26,fontSize:24,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>–</button>
+                <input inputMode="numeric" value={qYards!==""?qYards:String(live.rem)} onChange={e=>setQYards(e.target.value.replace(/[^0-9]/g,""))} style={{width:150,textAlign:"center",fontSize:74,fontWeight:800,color:INK,border:"none",background:"transparent",fontVariantNumeric:"tabular-nums",outline:"none"}}/>
+                <button onClick={()=>setQYards(String(y+1))} style={{border:"none",background:"#fff",width:52,height:52,borderRadius:26,fontSize:24,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>+</button>
+              </div>
+              <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:16}}>yards to the middle</div>
+              <div style={{display:"flex",gap:7,justifyContent:"center",flexWrap:"wrap",marginBottom:16}}>
+                {[["Tee","FW"],["Fairway","FW"],["Rough","ROUGH"],["Sand","SAND"],["Trees","TREES"]].map(([lab,v])=>{const on=lieLabel===lab;
+                  return <button key={lab} onClick={()=>{setLie(v);setLieLabel(lab);}} style={{border:"none",borderRadius:20,padding:"10px 16px",fontSize:14,fontWeight:600,cursor:"pointer",background:on?PINE:"#fff",color:on?PAPER:INK,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.06)"}}>{lab}</button>;})}
+              </div>
+              <div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:22}}>
+                {[["NONE","calm"],["INTO","into"],["DOWN","down"],["CROSS","cross"]].map(([k,l])=>(
+                  <button key={k} onClick={()=>setWind(k)} style={{border:"none",borderRadius:14,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer",background:wind===k?INK:"transparent",color:wind===k?PAPER:MUTE}}>{l}</button>))}
+              </div>
+              <button onClick={()=>{buzz();const v=parseInt(qYards)||live.rem;saveLive({...live,rem:v});setAsked(true);setShowAlt(false);}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:17,fontWeight:700,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4}}>Read it</button>
             </div>}
-            {live.i35At!==null&&<div style={{marginTop:8,fontSize:12,fontWeight:800,color:"#0a84ff"}}>🎯 INSIDE 35 LIVE — on in one, two-putt ceiling.</div>}
-          </div>}
 
-          {!live.onGreen&&<div style={S.card}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={S.h}>Struck with {sel||"—"} — where did it finish?</div>
-              {live.strokes>0&&<button onClick={undoShot} style={{border:"none",background:"#f2f2f7",color:"#3a3a3c",borderRadius:8,padding:"5px 10px",fontSize:11,fontWeight:800,cursor:"pointer",marginBottom:6}}>↩ UNDO</button>}
-            </div>
-            <div style={{display:"flex",gap:8,marginBottom:8}}>
-              <button onClick={()=>logShot(live.rem,true)} style={{...S.btn,flex:1,background:"#30d158",color:"white"}}>ON GREEN</button>
-              <button onClick={()=>{const b=E.chipCarry(sel||"CHIP");const g=lie==="DEEP"?75:Math.round(b*(lie==="ROUGH"?0.9:lie==="TREES"?0.62:1));if(g>=live.rem){logShot(live.rem,true);}else{logShot(g,false,true);}}} style={{...S.btn,flex:1,background:"#1a3a2e",color:"#86efac"}}>ON PLAN</button>
-            </div>
-            <div style={{display:"flex",gap:8}}>
-              <input type="number" value={atInput} onChange={e=>setAtInput(e.target.value)} placeholder="yards left" style={{...S.inp,flex:1,fontSize:19}}/>
-              <button onClick={()=>atInput&&logShot(live.rem-parseInt(atInput))} style={{...S.btn,background:"#0a84ff",color:"white"}}>REPLAN</button>
-            </div>
-            <button onClick={addPenalty} style={{...S.btn,width:"100%",marginTop:8,background:"#fff1f0",color:"#c2410c",fontSize:13}}>+ PENALTY (stroke &amp; distance){live.pen>0?" — "+live.pen+" this hole":""}</button>
-            <div style={{display:"flex",gap:5,marginTop:8,flexWrap:"wrap",alignItems:"center"}}>
-              <span style={{fontSize:9,fontWeight:800,color:"#8a8a8e",letterSpacing:1}}>WIND</span>
-              {[["NONE","—"],["INTO","INTO"],["DOWN","DOWN"],["CROSS","CROSS"]].map(([k,l])=>(
-                <button key={k} onClick={()=>setWind(k)} style={{border:"none",borderRadius:8,padding:"6px 9px",fontSize:11,fontWeight:800,cursor:"pointer",background:wind===k?"#0a84ff":"#f2f2f7",color:wind===k?"white":"#111"}}>{l}</button>))}
-              <span style={{fontSize:9,fontWeight:800,color:"#8a8a8e",letterSpacing:1,marginLeft:6}}>MISS</span>
-              {[["L","⟵ L"],["R","R ⟶"]].map(([k,l])=>(
-                <button key={k} onClick={()=>setDir(dir===k?null:k)} style={{border:"none",borderRadius:8,padding:"6px 9px",fontSize:11,fontWeight:800,cursor:"pointer",background:dir===k?"#c2410c":"#f2f2f7",color:dir===k?"white":"#111"}}>{l}</button>))}
-            </div>
-            {pullDraw&&<div style={{marginTop:6,fontSize:11,fontWeight:800,color:"#c2410c"}}>⚠ Pull-draw showing (2 of last 3 left). Note it — do NOT re-aim yet. Watch item.</div>}
-          </div>}
+            {phase==="whisper"&&(()=>{
+              const fam=famOf(sel||"7i");
+              const sideC=(()=>{const c=cstat(fam);if(c&&c.side)return{dir:c.side.dir,pct:c.side.pct};const b=dirBias(fam);if(b)return{dir:b[0],pct:parseInt(b.slice(1))};return null;})();
+              const W=whisper({fam,chip:sel,eff:E.eff(fam),stat:disp(fam),conf:conf(fam),hot:flags.hot.includes(fam),cold:flags.cold.includes(fam),adj:flags.adj[fam]||null,side:sideC,feel:(P.feels&&P.feels[fam])||null,hole:{dzL:H.dzL,dzR:H.dzR},i35:live.rem<=34,wind});
+              return <div style={arrive}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
+                  <div style={{color:MUTE,fontSize:14}}>{live.rem} yards · {lieLabel.toLowerCase()}{wind!=="NONE"?" · "+wind.toLowerCase()+" wind":""}</div>
+                  <button onClick={()=>{setAsked(false);setShowAlt(false);}} style={{border:"none",background:"transparent",color:MUTE,fontSize:13,cursor:"pointer"}}>↩ back</button>
+                </div>
+                <div style={{background:PINE,borderRadius:28,padding:"30px 24px",boxShadow:"0 10px 30px rgba(18,43,33,.18)"}}>
+                  <div style={{fontFamily:SERIF,fontSize:44,color:GOLD,letterSpacing:.3,marginBottom:16,textWrap:"balance"}}>{W.club}</div>
+                  {W.lines.map((l,i)=>(<div key={i} style={{fontFamily:SERIF,fontSize:20,color:PAPER,lineHeight:1.5,marginBottom:10,opacity:.96}}>{l}</div>))}
+                </div>
+                <button onClick={()=>{buzz();setAwaitResult(true);}} style={{width:"100%",border:"none",borderRadius:18,padding:"20px",fontSize:19,fontWeight:800,cursor:"pointer",background:GOLD,color:PINE,letterSpacing:1,marginTop:18}}>HIT IT</button>
+                <button onClick={()=>setShowAlt(!showAlt)} style={{width:"100%",border:"none",background:"transparent",color:MUTE,fontSize:14,cursor:"pointer",marginTop:12,fontFamily:SERIF,fontStyle:"italic"}}>{showAlt?"never mind":"something else?"}</button>
+                {showAlt&&<div style={{marginTop:12,background:"#fff",borderRadius:16,padding:14,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+                  <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8}}>Pick a different club</div>
+                  <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:6,marginBottom:8}}>
+                    {chips.map(c=>{const on=sel===c;return <button key={c} onClick={()=>setSel(c)} style={{flexShrink:0,border:"none",borderRadius:12,padding:"9px 12px",fontSize:14,fontWeight:700,cursor:"pointer",background:on?PINE:"#f1efe9",color:on?PAPER:INK}}>{c}<span style={{opacity:.6,fontSize:10}}> {E.chipCarry(c)}</span></button>;})}
+                  </div>
+                  {(()=>{const d=disp(fam),gp=greenProb(fam),cf=conf(fam);const bits=[];
+                    if(d)bits.push(`${d.n} tracked · ${d.avg>=0?"+":""}${d.avg}y avg · ±${d.sd}y`);
+                    if(gp!=null)bits.push(`on-target ~${gp}%`);
+                    if(cf!=null)bits.push(`confidence ${cf}/100`);
+                    if(sideC&&sideC.pct>=58)bits.push(`miss ${sideC.dir} ${sideC.pct}%`);
+                    return bits.length?<div style={{color:MUTE,fontSize:12,lineHeight:1.6}}>{bits.join(" · ")}</div>:<div style={{color:MUTE,fontSize:12}}>No tracked data yet for this club — the number's your best guide.</div>;})()}
+                  <button onClick={()=>{buzz();addPenalty();}} style={{marginTop:10,border:"none",borderRadius:10,padding:"8px 12px",background:"#f6efe6",color:"#8a6d2f",fontSize:12,fontWeight:700,cursor:"pointer"}}>Add a penalty (stroke & distance)</button>
+                </div>}
+              </div>;})()}
 
-          {live.onGreen&&<div style={{...S.card,border:"2.5px solid #30d158"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={S.h}>On the green</div>
-              <button onClick={undoShot} style={{border:"none",background:"#f2f2f7",color:"#3a3a3c",borderRadius:8,padding:"5px 10px",fontSize:11,fontWeight:800,cursor:"pointer",marginBottom:6}}>↩ UNDO</button>
-            </div>
-            <div style={{...S.big,color:"#1a7f37"}}>BACK OF CUP</div>
-            <div style={{...S.sub,marginBottom:10}}>Two-putt ceiling. Putts: <b>{live.putts}</b>{live.pen>0?<> · penalties: <b>{live.pen}</b></>:null} · holing now = <b>{live.strokes+live.putts+(live.pen||0)+1}</b>{live.i35At!==null?(live.strokes+live.putts+(live.pen||0)+1-live.i35At)<=3?" · 🎯 conversion ✓":" · 🎯 conversion ✗":""}</div>
-            <div style={{display:"flex",gap:8}}>
-              <button onClick={()=>saveLive({...live,putts:live.putts+1})} style={{...S.btn,flex:1,background:"#f2f2f7",color:"#111"}}>+ PUTT missed</button>
-              <button onClick={holeOut} style={{...S.btn,flex:1,background:"#1a3a2e",color:"#86efac"}}>HOLED ✓</button>
-            </div>
-          </div>}
+            {phase==="result"&&(()=>{const exp=E.chipCarry(sel||"CHIP");
+              const Z=(lab,fn)=>(<button onClick={()=>{buzz();fn();}} style={{border:"none",borderRadius:16,padding:"24px 10px",fontSize:16,fontWeight:700,cursor:"pointer",background:"#fff",color:INK,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>{lab}</button>);
+              return <div style={arrive}>
+                <div style={{fontFamily:SERIF,fontSize:22,color:INK,textAlign:"center",marginBottom:20}}>Where'd it finish?</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  {Z("Short",()=>logShot(Math.max(1,exp-10),false,false,null))}
+                  {Z("Long",()=>logShot(exp+10,false,false,null))}
+                  {Z("Left",()=>logShot(exp,false,false,"L"))}
+                  {Z("Right",()=>logShot(exp,false,false,"R"))}
+                  {Z("On line",()=>logShot(exp,false,false,null))}
+                  <button onClick={()=>{buzz();logShot(live.rem,true,false,null);}} style={{border:"none",borderRadius:16,padding:"24px 10px",fontSize:16,fontWeight:800,cursor:"pointer",background:PINE,color:PAPER}}>On the green</button>
+                </div>
+              </div>;})()}
 
-          {!tourn&&<div style={S.card}>
-            <div style={S.h}>Club bench — engine reroutes around benched clubs</div>
-            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-              {["52",...Object.keys(P.carries)].map(k=>{const b=live.bench.includes(k);
-                return <button key={k} onClick={()=>saveLive({...live,bench:b?live.bench.filter(x=>x!==k):[...live.bench,k]})} style={{...S.btn,padding:"9px 14px",fontSize:14,background:b?"#ff453a":"#f2f2f7",color:b?"white":"#111"}}>{k}{b?" ❄":""}</button>;})}
-            </div>
-          </div>}
+            {phase==="putt"&&<div style={arrive}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
+                <div style={{color:MUTE,fontSize:14}}>On the green</div>
+                <button onClick={undoShot} style={{border:"none",background:"transparent",color:MUTE,fontSize:13,cursor:"pointer"}}>↩ back</button>
+              </div>
+              <div style={{background:PINE,borderRadius:28,padding:"30px 24px",boxShadow:"0 10px 30px rgba(18,43,33,.18)"}}>
+                <div style={{fontFamily:SERIF,fontSize:26,color:GOLD,marginBottom:12}}>{live.i35At!=null?"Convert it.":"Putting."}</div>
+                <div style={{fontFamily:SERIF,fontSize:22,color:PAPER,lineHeight:1.5}}>{puttWhisper(live.putts)}</div>
+              </div>
+              <div style={{display:"flex",gap:10,marginTop:18}}>
+                <button onClick={()=>{buzz();saveLive({...live,putts:live.putts+1});}} style={{flex:1,border:"none",borderRadius:16,padding:"18px",fontSize:15,fontWeight:700,cursor:"pointer",background:"#fff",color:INK,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>Missed it · {live.putts} so far</button>
+                <button onClick={()=>{buzz();holeOut();}} style={{flex:1,border:"none",borderRadius:16,padding:"18px",fontSize:15,fontWeight:700,cursor:"pointer",background:PINE,color:PAPER}}>Holed</button>
+              </div>
+            </div>}
 
-        </>}
-        {live&&!inspecting&&done>0&&<div style={S.card}>
-          <div style={S.h}>Live round read</div>
-          {(()=>{const remT=CH.filter((h,i)=>live.scores[i]===null).reduce((a,h)=>a+h.tgt,0);
-            const proj=runTot+remT+Math.round(dv/Math.max(done,1)*(18-done));
-            const pt=live.puttsArr.reduce((a,b)=>a+(b||0),0);
-            const cm=live.convs.filter(c=>c===true).length,ct=live.convs.filter(c=>c!==null).length;
-            const lines=[`Pace: ${dv>0?"+"+dv:dv} through ${done} — projecting ~${proj} (plan ${totalPlan}).`,
-              ct?`Inside-35: ${cm}/${ct}${cm/Math.max(ct,1)>=0.5?" — above baseline. Keep converting.":" — the phase metric. On in one, two putts."}`:null,
-              `Putting: ${(pt/done).toFixed(1)}/hole${pt/done<=2?" — under the ceiling.":" — 3-putt watch: back-of-cup pace."}`,
-              flags.cold.length?`❄ Cold: ${flags.cold.join(", ")} — bench or range-fix, don't fight it.`:flags.hot.length?`🔥 Hot: ${flags.hot.join(", ")} — feed the form.`:null].filter(Boolean);
-            return lines.map((l,i)=><div key={i} style={{fontSize:12,color:"#3a3a3c",padding:"3px 0",lineHeight:1.4}}>▸ {l}</div>);})()}
-        </div>}
-        {live&&!inspecting&&<div style={{display:"flex",gap:8}}>
-          <button onClick={()=>{setCourseHole(live.hole);setTab("course");}} style={{...S.btn,flex:1,background:"white",color:"#1a3a2e",boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>📖 Full page</button>
-          <button onClick={()=>setShowRep(!showRep)} style={{...S.btn,background:showRep?"#1a3a2e":"white",color:showRep?"#86efac":"#0a84ff",boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>📊</button>
-          {!endArm&&<button onClick={()=>setEndArm(true)} style={{...S.btn,background:"white",color:"#ff453a",boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>End round</button>}
-        </div>}
-        {live&&!inspecting&&showRep&&(()=>{const played=live.scores.map((sc,i)=>({sc,i})).filter(x=>x.sc!==null);
-          const pt=played.reduce((a,x)=>a+(live.puttsArr[x.i]||0),0);
-          const cm=live.convs.filter(c=>c===true).length,ct=live.convs.filter(c=>c!==null).length;
-          const blow=played.filter(x=>x.sc>=7).length,tp=played.filter(x=>(live.puttsArr[x.i]||0)>=3).length;
-          const best=played.length?played.reduce((a,x)=>(x.sc-CH[x.i].tgt)<(a.sc-CH[a.i].tgt)?x:a):null;
-          const proj=played.length?Math.round(CH.reduce((a,h2)=>a+h2.tgt,0)+dv/played.length*18):null;
-          return (<div style={{...S.card,border:"2px solid #0a84ff"}}>
-            <div style={S.h}>Live round report · through {played.length} holes</div>
-            <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:8}}>
-              <div><div style={S.big}>{dv>0?"+"+dv:dv}</div><div style={{fontSize:10,color:"#8a8a8e"}}>vs plan</div></div>
-              <div><div style={S.big}>{proj===null?"—":proj}</div><div style={{fontSize:10,color:"#8a8a8e"}}>projected 18</div></div>
-              <div><div style={S.big}>{pt}</div><div style={{fontSize:10,color:"#8a8a8e"}}>putts ({played.length?(pt/played.length).toFixed(1):"—"}/hole)</div></div>
-              <div><div style={S.big}>{cm}/{ct}</div><div style={{fontSize:10,color:"#8a8a8e"}}>inside-35</div></div>
-            </div>
-            <div style={{fontSize:12,color:"#3a3a3c",lineHeight:1.6}}>
-              {tp>0?`⚠ ${tp} three-putt${tp>1?"s":""} — back-of-cup pace, two-putt ceiling. `:"✓ Zero three-putts. "}
-              {blow>0?`⚠ ${blow} blowup hole${blow>1?"s":""} (7+) — stop, three breaths, new hole. `:"✓ No blowups — the governor is holding. "}
-              {ct>0?(cm/ct>=0.5?`✓ Conversion ${Math.round(cm/ct*100)}% — beating the 2/13 baseline. `:`⚠ Conversion ${Math.round(cm/ct*100)}% — one look, commit, ON in one. `):""}
-              {best?`Best hole: H${best.i+1} (${best.sc} vs target ${CH[best.i].tgt}). `:""}
-              {flags.hot.length?`🔥 ${flags.hot.join(", ")} carrying you. `:""}{flags.cold.length?`❄ Watch ${flags.cold.join(", ")}.`:""}
-            </div>
-          </div>);})()}
-        {live&&!inspecting&&endArm&&<div style={{...S.card,border:"2px solid #ff453a",marginTop:8}}>
-          <div style={S.h}>End round now? Played holes can be saved.</div>
-          <div style={{display:"flex",gap:8}}>
-            <button onClick={endSave} style={{...S.btn,flex:1,background:"#1a3a2e",color:"#86efac",fontSize:12,padding:"12px 6px"}}>SAVE {done} CH</button>
-            <button onClick={()=>{saveLive(null);store.set("caddie:live",null);setEndArm(false);}} style={{...S.btn,flex:1,background:"#fff1f0",color:"#ff453a",fontSize:12,padding:"12px 6px"}}>DISCARD</button>
-            <button onClick={()=>setEndArm(false)} style={{...S.btn,background:"#f2f2f7",color:"#111"}}>✕</button>
-          </div>
-        </div>}
+            {!tourn&&<div style={{display:"flex",justifyContent:"center",gap:20,marginTop:28}}>
+              <button onClick={()=>setShowRep(!showRep)} style={{border:"none",background:"transparent",color:MUTE,fontSize:12,cursor:"pointer"}}>round so far</button>
+              <button onClick={()=>setEndArm(!endArm)} style={{border:"none",background:"transparent",color:MUTE,fontSize:12,cursor:"pointer"}}>end round</button>
+            </div>}
+            {showRep&&<div style={{marginTop:14,background:"#fff",borderRadius:16,padding:16,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+              <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8}}>Through {done} holes</div>
+              <div style={{fontFamily:SERIF,fontSize:20,color:INK}}>{runTot} strokes · {done>0?(dv>0?"+"+dv:dv)+" vs plan":"—"}</div>
+            </div>}
+            {endArm&&<div style={{marginTop:14,background:"#fff",borderRadius:16,padding:16,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+              <div style={{fontFamily:SERIF,fontSize:17,color:INK,marginBottom:12}}>End the round? {done} holes are saved.</div>
+              <div style={{display:"flex",gap:10}}>
+                <button onClick={endSave} style={{flex:1,border:"none",borderRadius:14,padding:"14px",background:PINE,color:PAPER,fontWeight:700,cursor:"pointer"}}>Save {done}</button>
+                <button onClick={()=>{saveLive(null);store.set("caddie:live",null);setEndArm(false);}} style={{flex:1,border:"none",borderRadius:14,padding:"14px",background:"#f6ece9",color:"#a3402f",fontWeight:700,cursor:"pointer"}}>Discard</button>
+                <button onClick={()=>setEndArm(false)} style={{border:"none",borderRadius:14,padding:"14px 16px",background:"#f1efe9",color:INK,cursor:"pointer"}}>✕</button>
+              </div>
+            </div>}
+          </div>;
+        })()}
       </div>}
+
       {tab==="prep"&&<div style={{padding:12}}>
         <div style={{display:"flex",gap:6,marginBottom:10}}>
           {[["body","🔥 Body"],["range","🏌️ Range"],["fuel","🥣 Fuel"]].map(([id,l])=>(
@@ -809,7 +743,7 @@ export default function CaddieOS(){
         </div>
       </div>}
 
-      {tab==="trends"&&<div style={{padding:12}}>
+      {tab==="rounds"&&<div style={{padding:12}}>
         {rounds.length===0&&<div style={{...S.card,textAlign:"center",padding:26}}><div style={{fontSize:34}}>📈</div><div style={S.big}>No rounds saved yet</div><div style={S.sub}>Finish a round in PLAY and it lands here for good — score, putts, conversion, benched clubs.</div></div>}
         {rounds.length>0&&(()=>{
           const last=rounds[rounds.length-1];
@@ -1030,13 +964,11 @@ export default function CaddieOS(){
         <div style={{...S.sub,fontSize:11,color:"#8a8a8e",textAlign:"center"}}>Profile + rounds persist on this device across sessions.</div>
       </div>}
 
-      <div style={{position:"fixed",bottom:0,left:0,right:0,maxWidth:430,margin:"0 auto",background:"rgba(255,255,255,0.96)",backdropFilter:"blur(12px)",borderTop:"1px solid #e5e5ea",display:"flex",paddingBottom:12,zIndex:60,boxSizing:"border-box"}}>
-        <TabBtn id="play" icon="⛳" label="PLAY"/>
-        <TabBtn id="course" icon="📖" label="COURSE"/>
-        <TabBtn id="prep" icon="🔥" label="PREP"/>
-        <TabBtn id="trends" icon="📈" label="TRENDS"/>
-        <TabBtn id="me" icon="⚙️" label="ME"/>
-      </div>
+      {!tourn&&<div style={{position:"fixed",bottom:0,left:0,right:0,maxWidth:430,margin:"0 auto",background:"rgba(250,248,244,0.97)",backdropFilter:"blur(12px)",borderTop:"1px solid #e7e2d8",display:"flex",paddingBottom:8,zIndex:60,boxSizing:"border-box"}}>
+        <TabBtn id="caddie" label="CADDIE"/>
+        <TabBtn id="rounds" label="ROUNDS"/>
+        <TabBtn id="me" label="ME"/>
+      </div>}
     </div>
   );
 }
