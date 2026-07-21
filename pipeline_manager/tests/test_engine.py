@@ -500,6 +500,27 @@ def test_sales_loader_accepts_real_export_column_names():
     assert sales[1].key == "QX65|8521|XKJ|K"
 
 
+def test_retail_forecast_is_inventory_constrained():
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    res = engine.run(inv, sales, Settings(order_month=9), today=_AS_OF)
+    f = reports.retail_forecast(res)
+    assert [h["days"] for h in f["horizons"]][1:] == [30, 60]
+    for model, d in f["per_model"].items():
+        # three horizons, non-decreasing (longer window -> more retail)
+        assert len(d["forecast"]) == 3
+        assert d["forecast"][0] <= d["forecast"][1] <= d["forecast"][2]
+        # inventory-constrained: 60-day retail never exceeds what you can hold
+        assert d["forecast"][2] <= d["avail60"] + 1
+        # never forecasts more than the market demands
+        assert d["forecast"][2] <= d["demand"][2] + 1
+        assert d["health"] in ("balanced", "tight — demand outruns stock",
+                               "heavy — stock outruns demand", "cold — little live demand")
+    # total is the sum across models
+    assert f["total"]["forecast"][2] == sum(d["forecast"][2] for d in f["per_model"].values()) \
+        or abs(f["total"]["forecast"][2] - sum(d["forecast"][2] for d in f["per_model"].values())) <= 2
+
+
 def test_recompute_is_deterministic():
     a = reports.build_all(_run())
     b = reports.build_all(_run())

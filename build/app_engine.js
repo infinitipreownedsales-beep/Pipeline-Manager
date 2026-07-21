@@ -226,7 +226,7 @@ function projAt(chain, off){ let lo=Math.floor(off); if(lo>=chain.length-1) retu
 function projectAtArrival(model,pos,metric,seas,s,window,returns){
   returns=returns||[];
   let chain=projChain(model,pos,metric,seas,s,Math.max(8,Math.ceil(window)+1),returns);
-  if(s.mode!=="CPO"){ let back=returns.filter(r=>r===0).length; let pr=pos.onlot+pos.inbound+back; return [xround(pr,1),chain]; }
+  if(s.mode==="MID-MONTH"){ let back=returns.filter(r=>r===0).length; let pr=pos.onlot+pos.inbound+back; return [xround(pr,1),chain]; }
   return [xround(projAt(chain,window),1),chain]; }
 function baseForOrder(key, metrics){ let m=metrics[key]; return m?[m.base,true]:[1,false]; }
 function momFactor(m,dts){ let r90=m?m.r90:0,r180=m?m.r180:0,accel=m?m.momentum==="ACCEL":false,base;
@@ -257,7 +257,7 @@ function buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demo
     let metric=metrics[key]||null, pos=positions[key]||{onlot:0,inbound:0,arrivals:{},stalled:0,aged:[],whole:[]}, dts=metric?metric.dts:null;
     let bf=baseForOrder(key,metrics), base=bf[0], found=bf[1], mf=momFactor(metric,dts);
     let seasOrder=seas[model].index[(s.order_month-1)%12];
-    let win=s.mode==="CPO"?windows[model]:0;
+    let win=(s.mode==="CPO"||s.mode==="PPO")?windows[model]:0;
     let seasArr=interpSeas(seas[model].index, s.order_month, win);
     let returns=demoReturns[key]||[];
     let pj=projectAtArrival(model,pos,metric,seas,s,win,returns), proj=pj[0], chain=pj[1];

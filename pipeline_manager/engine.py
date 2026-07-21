@@ -613,8 +613,10 @@ def project_at_arrival(model, pos, metric, seas, s: Settings, window, returns=()
     """Return (projection_at_arrival, full proj chain) for a fractional window."""
     chain = _proj_chain(model, pos, metric, seas, s,
                         n=max(8, int(math.ceil(window)) + 1), returns=returns)
-    if s.mode != "CPO":
-        # Right-now snapshot still credits demos already back before the window.
+    # CPO and PPO both measure a FUTURE order against what you'll hold at arrival
+    # (the window projection). MID-MONTH is the right-now dealer-trade snapshot:
+    # what you could obtain/hold today, so it uses current on-hand + inbound.
+    if s.mode == "MID-MONTH":
         proj = pos.onlot + pos.inbound_total + sum(1 for r in returns if r == 0)
         return xround(proj, 1), chain
     return xround(_proj_at(chain, window), 1), chain
@@ -749,7 +751,7 @@ def build_lines(s, metrics, seas, positions, aged_brakes, override_map, windows,
         base, found = _base_for_order(key, metrics)
         mf = _mom_factor(metric, dts, s)
         seas_order = seas[model][(s.order_month - 1) % 12]
-        window = windows[model] if s.mode == "CPO" else 0.0
+        window = windows[model] if s.mode in ("CPO", "PPO") else 0.0
         seas_arr = _interp_seas(seas[model], s.order_month, window)
 
         returns = demo_returns.get(key, [])

@@ -7,11 +7,13 @@
 <style>
   :root{
     --bg:#0a0e16; --panel:#111823; --panel2:#161f2e; --panel3:#1c2738;
-    --ink:#e8eef6; --ink2:#c3ccd9; --muted:#8492a6; --line:#243044; --line2:#2f3d54;
-    --accent:#3b82f6; --accent2:#2563eb;
+    /* higher-contrast ink ramp — muted lifted so 10-11px labels never require a squint */
+    --ink:#eef2f8; --ink2:#d3dbe7; --muted:#9dabbf; --muted2:#8492a6;
+    --line:#273448; --line2:#33425b;
+    --accent:#4c8dff; --accent2:#2563eb; --focus:rgba(76,141,255,.5);
     --teal:#5eead4; --teal-bg:#0e3b38; --teal-hd:#0f766e;
     --orange:#fb923c; --orange-bg:#5a2410; --orange-hd:#c2410c;
-    --build:#34d399; --alt:#fbbf24; --option:#60a5fa; --over:#f87171;
+    --build:#34d399; --alt:#fbbf24; --option:#7cb0ff; --over:#f87171;
     --good:#34d399; --warn:#fbbf24; --bad:#f87171;
     --shadow:0 1px 3px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.25);
   }
@@ -19,8 +21,8 @@
   html,body{margin:0}
   body{background:radial-gradient(1200px 600px at 70% -10%,#132036 0,var(--bg) 60%);
     color:var(--ink);min-height:100vh;
-    font:14.5px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    -webkit-font-smoothing:antialiased;}
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
   header{position:sticky;top:0;z-index:20;backdrop-filter:blur(10px);
     background:linear-gradient(180deg,rgba(11,17,28,.96),rgba(11,17,28,.82));
     border-bottom:1px solid var(--line);padding:14px 22px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
@@ -30,42 +32,60 @@
   header .sub{color:var(--muted);font-size:11.5px;letter-spacing:.3px}
   header .ctrls{margin-left:auto;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
   .wrap{max-width:1280px;margin:0 auto;padding:20px 22px 60px}
-  .fld label{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px}
-  select,input[type=date],input[type=number]{background:var(--panel2);color:var(--ink);
-    border:1px solid var(--line2);border-radius:8px;padding:7px 9px;font-size:13px;outline:none}
-  select:focus,input:focus{border-color:var(--accent)}
-  button{cursor:pointer;border:none;border-radius:9px;font-weight:600;font-family:inherit}
+  .fld label{display:block;font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px;font-weight:600}
+  select,input[type=date],input[type=number],input[type=text]{background:var(--panel2);color:var(--ink);
+    border:1px solid var(--line2);border-radius:8px;padding:8px 10px;font-size:13.5px;outline:none;transition:border-color .12s,box-shadow .12s}
+  select:focus,input:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--focus)}
+  button{cursor:pointer;border:none;border-radius:9px;font-weight:600;font-family:inherit;transition:filter .12s,border-color .12s,color .12s}
+  button:focus-visible{outline:none;box-shadow:0 0 0 3px var(--focus)}
   .primary{background:linear-gradient(180deg,#3b82f6,#2563eb);color:#fff;padding:9px 18px;font-size:14px;box-shadow:var(--shadow)}
   .primary:hover{filter:brightness(1.08)}
-  .ghost{background:var(--panel2);color:var(--ink2);border:1px solid var(--line2);padding:7px 13px;font-size:12.5px}
-  .ghost:hover{border-color:var(--accent);color:var(--ink)}
+  .ghost{background:var(--panel2);color:var(--ink2);border:1px solid var(--line2);padding:8px 13px;font-size:12.5px}
+  .ghost:hover{border-color:var(--accent);color:var(--ink);background:var(--panel3)}
   .card{background:linear-gradient(180deg,var(--panel),#0f1622);border:1px solid var(--line);border-radius:14px;
     padding:16px 18px;margin-bottom:16px;box-shadow:var(--shadow)}
-  .card h2{margin:0 0 3px;font-size:15px}
-  .hint{color:var(--muted);font-size:12.5px;margin-bottom:12px}
+  .card h2{margin:0 0 3px;font-size:15.5px;letter-spacing:.2px}
+  .hint{color:var(--muted);font-size:13px;margin-bottom:12px;line-height:1.5}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   @media(max-width:840px){.grid2{grid-template-columns:1fr}.wrap{padding:14px}}
   textarea{width:100%;height:120px;background:#0c1420;color:var(--ink);border:1px solid var(--line2);border-radius:9px;
     padding:9px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;resize:vertical}
   textarea.ok{border-color:var(--good)}
-  label.top{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+  label.top{display:block;font-size:11.5px;color:var(--ink2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;font-weight:700}
   .filerow{display:flex;gap:8px;align-items:center;margin-top:7px;color:var(--muted);font-size:11.5px}
   .databar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  /* collapsible + lockable data-entry sections */
+  .dsec-tools{display:flex;align-items:center;gap:9px;margin:16px 0 4px;flex-wrap:wrap}
+  .dsec-tools-lab{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;font-weight:700}
+  .dsec{border:1px solid var(--line2);border-radius:12px;margin-top:10px;overflow:hidden;background:rgba(12,20,32,.35)}
+  .dsec-bar{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;user-select:none;transition:background .12s}
+  .dsec-bar:hover{background:rgba(76,141,255,.06)}
+  .dsec-cv{color:var(--muted);font-size:12px;width:12px;text-align:center;transition:transform .15s}
+  .dsec-ttl{font-weight:700;font-size:13.5px;letter-spacing:.2px;flex:1;color:var(--ink)}
+  .dsec-badge{font-size:10.5px;color:var(--muted);font-weight:600;background:var(--panel2);border:1px solid var(--line);border-radius:20px;padding:1px 9px}
+  .dsec-lock{background:var(--panel2);border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:5px 12px;font-size:11.5px;font-weight:600;white-space:nowrap}
+  .dsec:not(.dsec-locked) .dsec-lock{color:var(--good);border-color:rgba(52,211,153,.45);background:rgba(52,211,153,.08)}
+  .dsec-lock:hover{filter:brightness(1.12)}
+  .dsec-body{padding:2px 14px 14px}
+  .dsec-collapsed .dsec-body{display:none}
+  .dsec-locked .dsec-body{opacity:.7}
+  .dsec-locked .dsec-body input,.dsec-locked .dsec-body select,.dsec-locked .dsec-body textarea{cursor:not-allowed}
+  .dsec-locked .dsec-body .del,.dsec-locked .dsec-body button{opacity:.5;cursor:not-allowed}
   .databar .dot{width:8px;height:8px;border-radius:50%;background:var(--good);box-shadow:0 0 8px var(--good)}
   /* KPI tiles */
   .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:18px}
   .kpi{background:linear-gradient(180deg,var(--panel2),#111a28);border:1px solid var(--line);border-radius:14px;
     padding:14px 16px;position:relative;overflow:hidden}
-  .kpi .lab{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
-  .kpi .big{font-size:30px;font-weight:800;line-height:1.1;margin-top:4px;font-variant-numeric:tabular-nums}
-  .kpi .sub{font-size:12px;color:var(--ink2);margin-top:2px}
+  .kpi .lab{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;font-weight:600}
+  .kpi .big{font-size:32px;font-weight:800;line-height:1.08;margin-top:5px;font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+  .kpi .sub{font-size:12.5px;color:var(--ink2);margin-top:3px;line-height:1.4}
   .kpi .edge{position:absolute;left:0;top:0;bottom:0;width:4px}
   .kpi.model .big{color:var(--orange)}
   /* section headers */
   .sec{display:flex;align-items:baseline;gap:11px;margin:26px 2px 12px;padding-bottom:7px;border-bottom:1px solid var(--line2);cursor:pointer;user-select:none}
   .sec .n{background:linear-gradient(180deg,#3b82f6,#1e40af);color:#fff;border-radius:7px;padding:3px 9px;font-weight:800;font-size:12px}
-  .sec h2{margin:0;font-size:17px;letter-spacing:.2px}
-  .sec .meta{margin-left:auto;color:var(--muted);font-size:12px}
+  .sec h2{margin:0;font-size:18px;letter-spacing:.2px;font-weight:750}
+  .sec .meta{margin-left:auto;color:var(--muted);font-size:12.5px}
   .sec .caret{color:var(--muted);font-size:12px;display:inline-block;transition:transform .15s;transform:translateY(-1px)}
   .sec:hover h2{color:#fff}
   .sec .sechint{color:var(--muted);font-size:10px;opacity:0;transition:opacity .15s}
@@ -85,13 +105,14 @@
   .tag{background:var(--panel2);border:1px solid var(--line2);border-radius:20px;padding:2px 10px;font-size:11px;color:var(--ink2);font-weight:600}
   /* tables */
   .tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  thead th{background:#0e1523;color:var(--muted);text-transform:uppercase;font-size:10.5px;letter-spacing:.5px;
-    font-weight:700;padding:9px 10px;text-align:left;position:sticky;top:0;border-bottom:1px solid var(--line2)}
-  tbody td{padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap;font-variant-numeric:tabular-nums}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  thead th{background:#0e1523;color:var(--muted);text-transform:uppercase;font-size:11px;letter-spacing:.5px;
+    font-weight:700;padding:10px 11px;text-align:left;position:sticky;top:0;border-bottom:1px solid var(--line2)}
+  tbody td{padding:9px 11px;border-bottom:1px solid var(--line);white-space:nowrap;font-variant-numeric:tabular-nums}
   tbody tr:last-child td{border-bottom:none}
-  tbody tr:hover td{background:rgba(59,130,246,.06)}
+  tbody tr:hover td{background:rgba(76,141,255,.09)}
   td.num,th.num{text-align:right}
+  td.c,th.c{text-align:center}
   th.teal,td.teal{background:var(--teal-bg)}
   th.teal{background:var(--teal-hd);color:#d5fff8}
   td.teal{color:var(--teal);font-weight:700}
@@ -116,9 +137,9 @@
   /* month plan grid */
   .plan{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-top:4px}
   .pcell{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:8px 6px;text-align:center}
-  .pcell .pm{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
-  .pcell .po{font-size:22px;font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums}
-  .pcell .pd{font-size:10px;color:var(--muted);margin-top:2px}
+  .pcell .pm{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600}
+  .pcell .po{font-size:23px;font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums}
+  .pcell .pd{font-size:10.5px;color:var(--muted);margin-top:2px}
   .pcell.hot{border-color:rgba(251,146,60,.5)}
   /* fleet heatmap */
   .heat{border-collapse:separate;border-spacing:3px}
@@ -223,9 +244,9 @@
   .demovin.order{color:var(--warn);font-weight:600;justify-content:center;font-size:12.5px}
   .demoback{color:var(--muted);font-size:11px;margin-top:6px}
   .demoback.warn{color:var(--warn)}
-  .foot{color:var(--muted);font-size:12px;margin-top:8px}
-  .err{color:var(--bad)} .okmsg{color:var(--good)}
-  .empty{color:var(--muted);font-size:13px;padding:10px 2px}
+  .foot{color:var(--muted);font-size:12.5px;margin-top:8px;line-height:1.5}
+  .err{color:#fca5a5} .okmsg{color:#6ee7b7}
+  .empty{color:var(--muted);font-size:13.5px;padding:14px 2px}
   .legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:11.5px;margin:2px 0 8px}
   .legend b{color:var(--ink2)}
   @media print{
@@ -246,10 +267,10 @@
   </div>
   <div class="ctrls">
     <div class="fld"><label>Order month</label><select id="ordmonth"></select></div>
-    <div class="fld"><label>Mode</label><select id="mode">
-      <option value="CPO">CPO · factory order</option>
-      <option value="PPO">PPO · right-now</option>
-      <option value="MID-MONTH">Mid-month · right-now</option></select></div>
+    <div class="fld"><label>Order basis</label><select id="mode" title="What inventory this order is measured against">
+      <option value="CPO">🏭 CPO — factory order (future arrival)</option>
+      <option value="PPO">📦 PPO — this order's arrival window (future)</option>
+      <option value="MID-MONTH">🔄 Dealer trade — available today</option></select></div>
     <div class="fld"><label>QX80</label><input type="number" id="a80" value="50" style="width:64px"></div>
     <div class="fld"><label>QX60</label><input type="number" id="a60" value="100" style="width:64px"></div>
     <div class="fld"><label>QX65</label><input type="number" id="a65" value="100" style="width:64px"></div>
@@ -281,7 +302,13 @@
         <textarea id="sales" placeholder="Paste the Speed-to-Sell export here (with its header row)…"></textarea>
         <div class="filerow"><input type="file" id="salesfile" accept=".csv,.txt,.tsv"><span id="salesstat"></span></div></div>
     </div>
-    <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
+    <div class="dsec-tools noprint">
+      <span class="dsec-tools-lab">Control &amp; settings</span>
+      <button type="button" class="ghost" id="expandAll">⊕ Expand all</button>
+      <button type="button" class="ghost" id="collapseAll">⊖ Collapse all</button>
+      <span class="foot" style="margin:0">Sections are <b>locked</b> by default — click 🔒 on any section to edit it.</span>
+    </div>
+    <div class="dsec-src" style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
       <label class="top">Outbound dealer trade log <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— a trade out is a sale out the other door; days-in-stock grades its speed to enter/exit inventory. Enter the vehicle as Model + Code + Ext + Int — any paint code is accepted.</span></label>
       <div id="tradeHead" class="traderow thead"><span>Date</span><span>Model</span><span>Code</span><span>Ext</span><span>Int</span><span>Days</span><span></span></div>
       <div id="tradeRows" class="scrollrows"></div>
@@ -611,7 +638,7 @@ function projAt(chain, off){ let lo=Math.floor(off); if(lo>=chain.length-1) retu
 function projectAtArrival(model,pos,metric,seas,s,window,returns){
   returns=returns||[];
   let chain=projChain(model,pos,metric,seas,s,Math.max(8,Math.ceil(window)+1),returns);
-  if(s.mode!=="CPO"){ let back=returns.filter(r=>r===0).length; let pr=pos.onlot+pos.inbound+back; return [xround(pr,1),chain]; }
+  if(s.mode==="MID-MONTH"){ let back=returns.filter(r=>r===0).length; let pr=pos.onlot+pos.inbound+back; return [xround(pr,1),chain]; }
   return [xround(projAt(chain,window),1),chain]; }
 function baseForOrder(key, metrics){ let m=metrics[key]; return m?[m.base,true]:[1,false]; }
 function momFactor(m,dts){ let r90=m?m.r90:0,r180=m?m.r180:0,accel=m?m.momentum==="ACCEL":false,base;
@@ -642,7 +669,7 @@ function buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demo
     let metric=metrics[key]||null, pos=positions[key]||{onlot:0,inbound:0,arrivals:{},stalled:0,aged:[],whole:[]}, dts=metric?metric.dts:null;
     let bf=baseForOrder(key,metrics), base=bf[0], found=bf[1], mf=momFactor(metric,dts);
     let seasOrder=seas[model].index[(s.order_month-1)%12];
-    let win=s.mode==="CPO"?windows[model]:0;
+    let win=(s.mode==="CPO"||s.mode==="PPO")?windows[model]:0;
     let seasArr=interpSeas(seas[model].index, s.order_month, win);
     let returns=demoReturns[key]||[];
     let pj=projectAtArrival(model,pos,metric,seas,s,win,returns), proj=pj[0], chain=pj[1];
@@ -848,6 +875,10 @@ function heatColor(t){ t=Math.max(0,Math.min(1,t));
   let a=[22,32,46], b=[34,211,238];
   return "rgb("+Math.round(lerp(a[0],b[0],t))+","+Math.round(lerp(a[1],b[1],t))+","+Math.round(lerp(a[2],b[2],t))+")"; }
 function heatText(t){ return t>0.55?"#06212a":"#dceefc"; }
+// inventory-age chip: fresh -> aged color ramp (green / neutral / amber / red)
+function ageCell(d){ d=Math.round(d||0);
+  let c=d<=30?"var(--good)":(d<=60?"var(--ink2)":(d<=90?"var(--warn)":"var(--bad)"));
+  return "<span style='color:"+c+";font-weight:700;font-variant-numeric:tabular-nums'>"+d+"<span style='font-size:.82em;opacity:.7'>d</span></span>"; }
 
 function orderPriority(res){ let s=res.settings,out={};
   MODELS.forEach(model=>{ let ranked=res.lines.filter(l=>l.model===model&&l.priority>-1).sort((a,b)=>b.priority-a.priority);
@@ -908,6 +939,40 @@ function executiveDemos(res){ let s=res.settings, out={};
   return out; }
 function fleetTargets(res){ let out={}; MODELS.forEach(model=>{ let r=res.seas[model].rate;
     out[model]=[]; for(let m=0;m<12;m++) out[model].push(xround(r[m]+r[(m+1)%12],0)); }); return out; }
+/* ---- inventory-driven retail forecast (mirror of reports.retail_forecast) ---- */
+function retailForecast(res){
+  let today=res.tb.today, s=res.settings;
+  let daysLeft=new Date(today.getFullYear(),today.getMonth()+1,0).getDate()-today.getDate()+1;
+  let horizons=[["This month",daysLeft],["Next 30 days",30],["Next 60 days",60]];
+  function seasFactor(days,seas){ let t=0; for(let d=0;d<days;d++){ t+=seas[new Date(today.getTime()+d*86400000).getMonth()]; } return days?t/days:1; }
+  function inboundIn(pos,days){ if(!pos) return 0; let end=new Date(today.getTime()+days*86400000), n=0;
+    for(let cm in pos.arrivals){ let month=parseInt(cm,10), year=month>=today.getMonth()+1?today.getFullYear():today.getFullYear()+1;
+      let arr=new Date(year,month-1,15); if(arr>=today&&arr<=end) n+=pos.arrivals[cm]; } return n; }
+  function pace(l){ let m=res.metrics[l.key]; return Math.min(s.rate_cap, m?m.prate/2:0); }
+  let out={horizons:horizons.map(h=>({label:h[0],days:h[1]})),per_model:{},total:{forecast:[0,0,0]}};
+  MODELS.forEach(model=>{
+    let lines=res.lines.filter(l=>l.model===model);
+    let onlot=lines.reduce((a,l)=>a+l.onlot,0), inbound=lines.reduce((a,l)=>a+l.inbound,0);
+    let monthlyDemand=lines.reduce((a,l)=>a+pace(l),0), forecasts=[], demands=[];
+    horizons.forEach((h,hi)=>{ let days=h[1], months=days/DPM, sf=seasFactor(days,res.seas[model].index), proj=0;
+      lines.forEach(l=>{ let pos=res.positions[l.key], avail=Math.max(0,l.onlot-l.wholeNow)+inboundIn(pos,days); proj+=Math.min(pace(l)*sf*months, avail); });
+      forecasts.push(Math.round(proj)); demands.push(Math.round(monthlyDemand*sf*months)); out.total.forecast[hi]+=proj; });
+    let sf60=seasFactor(60,res.seas[model].index), demand60=monthlyDemand*sf60*(60/DPM);
+    let avail60=lines.reduce((a,l)=>a+Math.max(0,l.onlot-l.wholeNow)+inboundIn(res.positions[l.key],60),0);
+    let health; if(demand60<=0.01) health="cold — little live demand";
+      else if(avail60<demand60*0.85) health="tight — demand outruns stock";
+      else if(avail60>demand60*1.6) health="heavy — stock outruns demand"; else health="balanced";
+    let dos=monthlyDemand>0?Math.round(onlot/monthlyDemand*DPM):null;
+    out.per_model[model]={forecast:forecasts,demand:demands,onlot:onlot,inbound:inbound,monthly_demand:Math.round(monthlyDemand*10)/10,days_supply:dos,demand60:Math.round(demand60),avail60:avail60,health:health};
+  });
+  out.total.forecast=out.total.forecast.map(x=>Math.round(x));
+  out.total.onlot=Object.values(out.per_model).reduce((a,d)=>a+d.onlot,0);
+  out.total.inbound=Object.values(out.per_model).reduce((a,d)=>a+d.inbound,0);
+  return out;
+}
+function healthBadge(h){ let c=h.indexOf("tight")>=0?"var(--bad)":(h.indexOf("heavy")>=0?"var(--warn)":(h.indexOf("cold")>=0?"var(--muted)":"var(--good)"));
+  let dot=h.indexOf("tight")>=0?"▲":(h.indexOf("heavy")>=0?"▼":(h.indexOf("cold")>=0?"—":"●"));
+  return "<span style='color:"+c+";font-weight:700;white-space:nowrap'>"+dot+" "+esc(h)+"</span>"; }
 function money(n){ n=Math.round(n||0); return (n<0?"-$":"$")+Math.abs(n).toLocaleString(); }
 
 /* ---- power-ranked RETAIL build sequence (per model) ---- */
@@ -1014,32 +1079,43 @@ function tbl(head,cls,rows){
   return h+"</tbody></table></div>"; }
 function sec(n,title,meta){ return "<div class='sec'><span class='caret'>▾</span><span class='n'>"+n+"</span><h2>"+esc(title)+"</h2><span class='meta'>"+esc(meta||"")+"</span><span class='sechint noprint'>click to collapse</span></div>"; }
 
-function sparkline(vals){ // 12 monthly seasonality index values, baseline 1.0
-  let w=210,h=46,pad=4, mn=Math.min.apply(null,vals.concat([1])), mx=Math.max.apply(null,vals.concat([1]));
+function sparkline(vals, nowM){ // 12 monthly seasonality values; split past (dim) vs forward (bright)
+  nowM = (nowM==null? new Date().getMonth() : ((nowM%12)+12)%12);
+  let w=220,h=50,pad=6, mn=Math.min.apply(null,vals.concat([1])), mx=Math.max.apply(null,vals.concat([1]));
   let rng=(mx-mn)||1, X=i=>pad+i*(w-2*pad)/11, Y=v=>h-pad-((v-mn)/rng)*(h-2*pad);
   let pts=vals.map((v,i)=>X(i)+","+Y(v).toFixed(1));
-  let area="M"+X(0)+","+ (h-pad)+" L"+pts.join(" L ")+" L"+X(11)+","+(h-pad)+" Z";
-  let line="M"+pts.join(" L ");
-  let base=Y(1);
+  let area="M"+X(0)+","+(h-pad)+" L"+pts.join(" L ")+" L"+X(11)+","+(h-pad)+" Z";
+  let past="M"+pts.slice(0,nowM+1).join(" L ");
+  let future="M"+pts.slice(nowM).join(" L ");
+  let base=Y(1), nx=X(nowM).toFixed(1), ny=Y(vals[nowM]).toFixed(1);
   return "<svg class='spark' width='"+w+"' height='"+h+"' viewBox='0 0 "+w+" "+h+"'>"+
-    "<path d='"+area+"' fill='rgba(94,234,212,.13)'/>"+
+    "<path d='"+area+"' fill='rgba(94,234,212,.10)'/>"+
     "<line x1='"+pad+"' y1='"+base.toFixed(1)+"' x2='"+(w-pad)+"' y2='"+base.toFixed(1)+"' stroke='#3a4a63' stroke-dasharray='3 3' stroke-width='1'/>"+
-    "<path d='"+line+"' fill='none' stroke='#5eead4' stroke-width='2' stroke-linejoin='round' stroke-linecap='round'/>"+
+    "<line x1='"+nx+"' y1='"+pad+"' x2='"+nx+"' y2='"+(h-pad)+"' stroke='#4c8dff' stroke-width='1' stroke-dasharray='2 2' opacity='.6'/>"+
+    "<path d='"+past+"' fill='none' stroke='#3f6f68' stroke-width='2' stroke-linejoin='round' stroke-linecap='round'/>"+
+    "<path d='"+future+"' fill='none' stroke='#5eead4' stroke-width='2.6' stroke-linejoin='round' stroke-linecap='round'/>"+
+    "<circle cx='"+nx+"' cy='"+ny+"' r='3.2' fill='#4c8dff'/>"+
     "</svg>"; }
+function seasHeading(vals, nowM){ // where demand is trending over the next ~2 months
+  nowM=((nowM%12)+12)%12; let fwd=(vals[(nowM+1)%12]+vals[(nowM+2)%12])/2 - vals[nowM];
+  if(fwd>0.08) return "<span style='color:var(--good)'>▲ demand rising</span>";
+  if(fwd<-0.08) return "<span style='color:var(--warn)'>▼ demand easing</span>";
+  return "<span style='color:var(--muted)'>▬ steady</span>"; }
 
 function render(res){
-  let rep={op:orderPriority(res),over:overstock(res),vins:wholesaleVins(res),demo:demoDashboard(res),pace:paceCheck(res),fleet:fleetTargets(res)};
-  let s=res.settings,tb=res.tb, H=[], paceBy={}; rep.pace.forEach(p=>paceBy[p.model]=p);
+  let rep={op:orderPriority(res),over:overstock(res),vins:wholesaleVins(res),demo:demoDashboard(res),fleet:fleetTargets(res)};
+  let s=res.settings,tb=res.tb, H=[];
+  let fc=retailForecast(res);   // computed once; reused in the Retail Forecast section
   let latest=tb.latest?(Math.floor(tb.latest/12)+"-"+String(tb.latest%12).padStart(2,"0")):"—";
 
-  // KPI tiles
-  let readColor={AHEAD:"var(--good)",ON:"var(--option)",BEHIND:"var(--bad)"};
-  let readLabel={AHEAD:"ahead of pace",ON:"on target",BEHIND:"behind pace"};
+  // KPI tiles — one per model: what to order now, colored by inventory health
+  function hColor(h){ return h.indexOf("tight")>=0?"var(--bad)":(h.indexOf("heavy")>=0?"var(--warn)":(h.indexOf("cold")>=0?"var(--muted)":"var(--good)")); }
+  function hShort(h){ return h.split("—")[0].trim(); }
   H.push("<div class='kpis'>");
-  MODELS.forEach(model=>{ let b=rep.op[model], p=paceBy[model];
-    H.push("<div class='kpi model'><span class='edge' style='background:"+readColor[p.read]+"'></span>"+
+  MODELS.forEach(model=>{ let b=rep.op[model], d=fc.per_model[model], col=hColor(d.health);
+    H.push("<div class='kpi model'><span class='edge' style='background:"+col+"'></span>"+
       "<div class='lab'>"+model+" — order now</div><div class='big'>"+b.totalNeed+"</div>"+
-      "<div class='sub'>"+b.buildUnits+" within allocation · <span style='color:"+readColor[p.read]+"'>"+readLabel[p.read]+"</span></div></div>"); });
+      "<div class='sub'>"+b.buildUnits+" within allocation · <span style='color:"+col+"'>"+esc(hShort(d.health))+"</span> stock</div></div>"); });
   let totWhole=res.lines.reduce((a,l)=>a+l.wholeNow,0), totOver=rep.over.reduce((a,r)=>a+r.over,0);
   H.push("<div class='kpi'><span class='edge' style='background:var(--over)'></span><div class='lab'>Overstock</div>"+
     "<div class='big' style='color:var(--over)'>"+totOver+"</div><div class='sub'>"+totWhole+" ready to wholesale today</div></div>");
@@ -1048,13 +1124,17 @@ function render(res){
     "<div class='sub'>newest "+latest+(tb.open?" · open":"")+" · "+res.orphans.length+" off-roster</div></div>");
   H.push("</div>");
 
-  let winTxt = s.mode==="CPO"
+  let winTxt = (s.mode==="CPO"||s.mode==="PPO")
     ? " · arrival lead "+MODELS.map(m=>m+" "+(res.windows[m]).toFixed(1)+"mo").join(" / ")
     : "";
   let tradeTxt = (s.trades&&s.trades.length) ? " · <b style='color:var(--teal)'>"+s.trades.length+" dealer trade"+(s.trades.length>1?"s":"")+" graded</b>" : "";
+  let modeName={"CPO":"CPO — factory order","PPO":"PPO — this order's arrival window","MID-MONTH":"Dealer trade — available today"}[s.mode]||s.mode;
+  let modeWhy={"CPO":"measured against what you'll hold when the factory order lands",
+    "PPO":"future inventory — measured against your projected on-hand at arrival",
+    "MID-MONTH":"right-now — measured against what you could pull today via dealer trade"}[s.mode]||"";
   H.push("<div class='foot noprint' style='margin:-6px 2px 6px'>Recomputed "+tb.today.toISOString().slice(0,10)+
-    " · order month <b style='color:var(--ink2)'>"+MONTHS[s.order_month-1]+"</b> · mode <b style='color:var(--ink2)'>"+s.mode+
-    "</b>"+winTxt+" · "+res.invCount+" inventory units · "+res.salesCount+" sales rows"+tradeTxt+"</div>");
+    " · order month <b style='color:var(--ink2)'>"+MONTHS[s.order_month-1]+"</b> · basis <b style='color:var(--accent)'>"+esc(modeName)+
+    "</b> <span class='dim'>("+esc(modeWhy)+")</span>"+winTxt+" · "+res.invCount+" inventory units · "+res.salesCount+" sales rows"+tradeTxt+"</div>");
 
   // 1. ORDER PRIORITY
   H.push(sec(1,"Order Priority","teal = where you'll be at arrival · orange = whole trucks to order"));
@@ -1094,12 +1174,13 @@ function render(res){
 
   // 3. FLEET TARGET + SEASONALITY
   H.push(sec(3,"Fleet Stock Target & Seasonality","live 60-day stock target by month, and each model's demand shape"));
+  let nowM=res.tb.today.getMonth();
   MODELS.forEach(model=>{ let f=rep.fleet[model], mx=Math.max.apply(null,f.concat([1]));
-    let cells="<td class='rl'>"+model+"</td>"+f.map((v,i)=>{ let t=v/mx; return "<td class='cell' style='background:"+heatColor(t)+";color:"+heatText(t)+"'>"+v+"</td>"; }).join("");
-    let cur=res.tb.latest?((res.tb.latest-1)%12):0;
-    H.push("<div style='display:flex;gap:20px;align-items:center;flex-wrap:wrap;margin:8px 0'>"+
-      "<table class='heat'><thead><tr><th></th>"+MONTHS.map(m=>"<th style='font-size:9px;color:#6b7891;text-align:center'>"+m+"</th>").join("")+"</tr></thead><tbody><tr>"+cells+"</tr></tbody></table>"+
-      "<div style='text-align:center'>"+sparkline(res.seas[model].index)+"<div class='foot' style='margin:0;text-align:center'>seasonality · avg = 1.0</div></div></div>"); });
+    let cells="<td class='rl'>"+model+"</td>"+f.map((v,i)=>{ let t=v/mx; let now=i===nowM;
+      return "<td class='cell'"+(now?" style='background:"+heatColor(t)+";color:"+heatText(t)+";box-shadow:0 0 0 2px var(--accent) inset'":" style='background:"+heatColor(t)+";color:"+heatText(t)+"'")+">"+v+"</td>"; }).join("");
+    H.push("<div style='display:flex;gap:22px;align-items:center;flex-wrap:wrap;margin:10px 0'>"+
+      "<table class='heat'><thead><tr><th></th>"+MONTHS.map((m,i)=>"<th style='font-size:9.5px;color:"+(i===nowM?"var(--accent)":"#6b7891")+";text-align:center;font-weight:"+(i===nowM?700:400)+"'>"+m+"</th>").join("")+"</tr></thead><tbody><tr>"+cells+"</tr></tbody></table>"+
+      "<div style='text-align:center'>"+sparkline(res.seas[model].index, nowM)+"<div class='foot' style='margin:2px 0 0;text-align:center'>seasonality · "+seasHeading(res.seas[model].index, nowM)+"</div></div></div>"); });
 
   // 4. DEMO CENTER — board (left) + current demos & previous loaners (right)
   let ed=executiveDemos(res), board=[];
@@ -1122,12 +1203,18 @@ function render(res){
     board.push("</div>"); });
   board.push("</div>");
 
-  let dash=["<div class='dc-sub'>Current demos</div>"];
+  let dash=["<div class='dc-sub'>Current demos <span class='dc-note'>age = days in inventory · demo = days out with a driver</span></div>"];
   if(rep.demo.length){
-    dash.push(tbl(["Stock","Driver / reason","Vehicle","As demo","Returns","Swap?"],["","","","num","num",""],
-      rep.demo.map(r=>[esc(r.stock),{html:r.note?esc(r.note):"<span class='dim'>—</span>"},{html:"<span class='dim'>"+esc(r.vehicle)+"</span>"},r.asDemo+"d",
-        {html:r.retIn>0?("~"+r.retIn+"d"):"<span class='swap'>now</span>"},
-        {html:r.swap?"<span class='swap'>⚠ SWAP</span>":"<span style='color:var(--good)'>OK</span>"}])));
+    // Compact: Stock (driver as subtitle) · Ext/Int · Inventory age · Days-as-demo
+    // · Return ETA · Swap — no long vehicle column, so it fits without scrolling.
+    dash.push(tbl(["Stock","E/I","Age","Demo","Ret","Swap"],["","","num","num","num","c"],
+      rep.demo.map(r=>[
+        {html:"<b>"+esc(r.stock)+"</b>"+(r.note?"<div class='dim' style='font-size:10.5px;font-weight:400;margin-top:1px;white-space:normal'>"+esc(r.note)+"</div>":"")},
+        {html:"<span class='dim'>"+esc(r.ei)+"</span>"},
+        {html:ageCell(r.dis)},
+        {html:"<span style='font-variant-numeric:tabular-nums'>"+r.asDemo+"<span style='font-size:.82em;opacity:.6'>d</span></span>"},
+        {html:r.retIn>0?("<span class='dim'>~"+r.retIn+"d</span>"):"<span class='swap'>now</span>"},
+        {html:r.swap?"<span class='swap' title='past swap threshold'>⚠</span>":"<span style='color:var(--good)'>✓</span>"}])));
     if(s.anticipate_demo_returns) dash.push("<div class='foot'>✓ Ordering anticipates each of these coming back (held as slow, used stock), so you don't reorder a unit that's returning.</div>");
   } else dash.push("<div class='empty'>No demos listed. Add them in ✎ Data.</div>");
 
@@ -1165,12 +1252,29 @@ function render(res){
     H.push("<div class='foot noprint'>Use 🖨 Print (top-right) to print this sheet on its own or with any other dashboards.</div>"); }
   else H.push("<div class='empty'>No units past their selling window.</div>");
 
-  // 8. PACE
-  H.push(sec(8,"Pace Check","actual vs predicted 60-day pace"));
-  H.push(tbl(["Model","Actual 90d","Actual 60d pace","Predicted 60d pace","Variance","Read","Coverage"],
-    ["","num","num","num","num","",""],
-    rep.pace.map(r=>{ let rl={AHEAD:"AHEAD of forecast",ON:"ON TARGET",BEHIND:"BEHIND forecast"}[r.read], ic={AHEAD:"▲",ON:"●",BEHIND:"▼"}[r.read];
-      return [r.model,r.a90,r.a60,r.p60,(r.vr>=0?"+":"")+r.vr,{html:"<span class='read "+r.read+"'>"+ic+" "+rl+"</span>"},Math.round(r.cov*100)+"%"]; })));
+  // 8. RETAIL FORECAST — what your current inventory can produce (fc from top)
+  let fh=fc.horizons;
+  H.push(sec(8,"Retail Forecast","what the inventory you own is projected to retail — not a pace extrapolation"));
+  H.push("<div class='kpis' style='margin-bottom:14px'>");
+  ["var(--teal)","var(--accent)","var(--orange)"].forEach(function(col,i){
+    H.push("<div class='kpi'><span class='edge' style='background:"+col+"'></span>"+
+      "<div class='lab'>"+esc(fh[i].label)+"</div>"+
+      "<div class='big' style='color:"+col+"'>"+fc.total.forecast[i]+"</div>"+
+      "<div class='sub'>projected units retailed · all models</div></div>");
+  });
+  H.push("<div class='kpi'><span class='edge' style='background:var(--muted)'></span><div class='lab'>In stock now</div>"+
+    "<div class='big'>"+fc.total.onlot+"</div><div class='sub'>+ "+fc.total.inbound+" inbound in the pipeline</div></div>");
+  H.push("</div>");
+  H.push("<div class='legend'><span><b>Forecast</b> = min(demand, what you own + inbound) per config</span><span><b>Demand</b> = what the market wants regardless of stock</span><span>gap of the two = your mix / stock health</span></div>");
+  H.push(tbl(["Model",fh[0].label,fh[1].label,fh[2].label,"60-day demand","In stock","Inbound","Days supply","Inventory health"],
+    ["","num teal","num","num","num","num","num","num",""],
+    MODELS.map(function(m){ let d=fc.per_model[m];
+      return [ {html:"<b>"+m+"</b>"}, {html:"<b>"+d.forecast[0]+"</b>"}, d.forecast[1],
+        {html:"<b style='color:var(--orange)'>"+d.forecast[2]+"</b>"},
+        {html:"<span class='dim'>"+d.demand[2]+"</span>"}, d.onlot, {html:"<span class='dim'>"+d.inbound+"</span>"},
+        {html:d.days_supply==null?"<span class='dim'>—</span>":d.days_supply+"d"},
+        {html:healthBadge(d.health)} ]; })));
+  H.push("<div class='foot'>Reads inventory intelligence — current stock, model/trim/color mix, per-config speed-to-sale, inbound pipeline, aging (wholesale-flagged units excluded), and seasonality. A model can hold heavy stock yet forecast below demand when the stock is in the wrong configs; that gap is the signal to re-mix or dealer-trade.</div>");
 
   if(res.orphans.length){ let top=res.orphans.slice(0,16).map(o=>o.key+" ("+o.sales+")").join(",  ");
     H.push("<details class='exp' style='margin-top:14px'><summary>Data health — "+res.orphans.length+" configs sold but not on the order roster (ordering can't see them; many are discontinued/legacy — expected)</summary><div class='foot'>"+esc(top)+(res.orphans.length>16?" …":"")+"</div></details>"); }
@@ -1186,7 +1290,7 @@ function groupSections(root){
     "Fleet Stock Target & Seasonality":"fleet","Demo Center":"democenter",
     "Loaner / ICV Program":"loaner",
     "Overstock / Wholesale":"overstock","Wholesale Now — VIN sheet":"vins",
-    "Pace Check":"pace"};
+    "Retail Forecast":"forecast"};
   let kids=[].slice.call(root.childNodes), groups=[], cur={key:"summary",title:"Summary",nodes:[]};
   kids.forEach(node=>{
     if(node.nodeType===1 && node.classList && node.classList.contains("sec")){
@@ -1525,6 +1629,41 @@ function readControls(){ return {m:document.getElementById("ordmonth").value,mod
 function wireFile(inputId,taId,statId){ document.getElementById(inputId).addEventListener("change",function(e){
   let f=e.target.files[0]; if(!f) return; let rd=new FileReader();
   rd.onload=function(){ document.getElementById(taId).value=rd.result; markFilled(); document.getElementById(statId).textContent=f.name; }; rd.readAsText(f); }); }
+/* ---- collapsible + lockable data-entry sections (P2 safety / P3 organization) ---- */
+function lockDSection(sec, locked){
+  sec.classList.toggle("dsec-locked", locked);
+  let btn=sec.querySelector(".dsec-lock");
+  if(btn) btn.innerHTML = locked ? "🔒 Locked" : "🔓 Editing";
+  sec.querySelectorAll(".dsec-body input,.dsec-body select,.dsec-body textarea,.dsec-body button").forEach(function(el){ el.disabled=locked; });
+}
+function persistDCollapse(){ try{ let st={};
+  document.querySelectorAll("#datacard .dsec").forEach(function(s){ st[s.getAttribute("data-title")]=s.classList.contains("dsec-collapsed"); });
+  localStorage.setItem("pm_dcollapsed",JSON.stringify(st)); }catch(e){} }
+function setDCollapsed(sec, col){ sec.classList.toggle("dsec-collapsed", col); let cv=sec.querySelector(".dsec-cv"); if(cv) cv.textContent = col?"▸":"▾"; }
+function setupDataSections(){
+  let dc=document.getElementById("datacard"); if(!dc||dc.querySelector(".dsec")) return;
+  let saved=null; try{ saved=JSON.parse(localStorage.getItem("pm_dcollapsed")||"null"); }catch(e){}
+  let secs=[].slice.call(dc.children).filter(function(d){ return d.tagName==="DIV" && (d.getAttribute("style")||"").indexOf("border-top")>=0; });
+  secs.forEach(function(sec){
+    let label=sec.querySelector("label.top"), title="Section";
+    if(label && label.firstChild && label.firstChild.nodeType===3){ title=label.firstChild.textContent.trim(); label.removeChild(label.firstChild); }
+    else if(label){ title=label.textContent.trim().split("—")[0].trim(); }
+    let bar=document.createElement("div"); bar.className="dsec-bar";
+    bar.innerHTML="<span class='dsec-cv'>▸</span><span class='dsec-ttl'>"+title+"</span><button type='button' class='dsec-lock'>🔒 Locked</button>";
+    let body=document.createElement("div"); body.className="dsec-body";
+    while(sec.firstChild) body.appendChild(sec.firstChild);
+    sec.className="dsec"; sec.removeAttribute("style"); sec.setAttribute("data-title",title);
+    sec.appendChild(bar); sec.appendChild(body);
+    setDCollapsed(sec, saved && (title in saved) ? saved[title] : true);   // default collapsed
+    lockDSection(sec, true);                                                // always locked on load
+    bar.addEventListener("click",function(e){ if(e.target.closest(".dsec-lock")) return;
+      setDCollapsed(sec, !sec.classList.contains("dsec-collapsed")); persistDCollapse(); });
+    bar.querySelector(".dsec-lock").addEventListener("click",function(e){ e.stopPropagation();
+      let nowLocked=!sec.classList.contains("dsec-locked"); lockDSection(sec, nowLocked);
+      if(!nowLocked){ setDCollapsed(sec, false); persistDCollapse(); } });
+  });
+}
+
 window.addEventListener("DOMContentLoaded",function(){
   let sel=document.getElementById("ordmonth"), now=new Date().getMonth();
   MONTHS.forEach((m,i)=>{ let o=document.createElement("option"); o.value=i+1; o.textContent=m; if(i===now) o.selected=true; sel.appendChild(o); });
@@ -1572,6 +1711,10 @@ window.addEventListener("DOMContentLoaded",function(){
   restorePreowned(); restoreLoanCfg();
   document.getElementById("pre").addEventListener("change",function(){ liveRecompute(); persistPreowned(); });
   LOANCFG_IDS.forEach(id=>document.getElementById(id).addEventListener("change",function(){ liveRecompute(); persistLoanCfg(); }));
+  // wrap control sections as collapsible + lockable (after their rows are restored)
+  setupDataSections();
+  document.getElementById("expandAll").addEventListener("click",function(){ document.querySelectorAll("#datacard .dsec").forEach(function(s){ setDCollapsed(s,false); }); persistDCollapse(); });
+  document.getElementById("collapseAll").addEventListener("click",function(){ document.querySelectorAll("#datacard .dsec").forEach(function(s){ setDCollapsed(s,true); }); persistDCollapse(); });
   // print selector
   document.getElementById("printbtn").addEventListener("click",function(e){ e.stopPropagation();
     let m=document.getElementById("printmenu"); if(m.style.display==="block") m.style.display="none"; else openPrintMenu(); });

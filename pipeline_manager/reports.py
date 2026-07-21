@@ -310,6 +310,92 @@ def build_sequence(res: EngineResult) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Retail Forecast — what the inventory you own is capable of producing
+# --------------------------------------------------------------------------- #
+def retail_forecast(res: EngineResult) -> dict:
+    """Inventory-driven retail projection, not a pace extrapolation.
+
+    For each config, projected retail over a horizon = MIN(demand, available):
+      demand    = the config's monthly sell pace x seasonality x horizon-months
+      available = on-lot (minus what should be wholesaled) + inbound arriving in
+                  the horizon
+    So a hot config with no stock forecasts low (inventory-limited) and a deep
+    config with soft demand forecasts at its true velocity (demand-limited).
+    Summed per model + total, for This month / Next 30 / Next 60 days, plus a
+    days-of-supply and an inventory-health read (tight vs heavy).
+    """
+    import calendar as _cal
+    import datetime as _dt
+    today = res.time.today
+    s = res.settings
+    days_left = _cal.monthrange(today.year, today.month)[1] - today.day + 1
+    horizons = [("This month", days_left), ("Next 30 days", 30), ("Next 60 days", 60)]
+
+    def seas_factor(days, seas):
+        return sum(seas[(today + _dt.timedelta(days=d)).month - 1] for d in range(days)) / days if days else 1.0
+
+    def inbound_in(pos, days):
+        if not pos:
+            return 0
+        end = today + _dt.timedelta(days=days)
+        n = 0
+        for cm, cnt in pos.arrivals.items():
+            year = today.year if cm >= today.month else today.year + 1
+            if today <= _dt.date(year, cm, 15) <= end:
+                n += cnt
+        return n
+
+    def pace(l):
+        m = res.metrics.get(l.key)
+        return min(s.rate_cap, (m.prate / 2) if m else 0.0)
+
+    out = {"horizons": [{"label": lab, "days": d} for lab, d in horizons],
+           "per_model": {}, "total": {"forecast": [0.0, 0.0, 0.0]}}
+    for model in MODELS:
+        lines = [l for l in res.lines if l.model == model]
+        onlot = sum(l.onlot for l in lines)
+        inbound = sum(l.inbound for l in lines)
+        monthly_demand = sum(pace(l) for l in lines)
+        forecasts, demands = [], []
+        for hi, (lab, days) in enumerate(horizons):
+            months = days / _DAYS_PER_MONTH
+            sf = seas_factor(days, res.seasonality[model])
+            proj = 0.0
+            for l in lines:
+                pos = res.positions.get(l.key)
+                avail = max(0, l.onlot - l.wholesale_now) + inbound_in(pos, days)
+                proj += min(pace(l) * sf * months, avail)
+            forecasts.append(round(proj))
+            demands.append(round(monthly_demand * sf * months))
+            out["total"]["forecast"][hi] += proj
+        # 60-day demand vs available -> health
+        demand60 = monthly_demand * seas_factor(60, res.seasonality[model]) * (60 / _DAYS_PER_MONTH)
+        avail60 = sum(max(0, l.onlot - l.wholesale_now) + inbound_in(res.positions.get(l.key), 60)
+                      for l in lines)
+        if demand60 <= 0.01:
+            health = "cold — little live demand"
+        elif avail60 < demand60 * 0.85:
+            health = "tight — demand outruns stock"
+        elif avail60 > demand60 * 1.6:
+            health = "heavy — stock outruns demand"
+        else:
+            health = "balanced"
+        dos = round(onlot / monthly_demand * _DAYS_PER_MONTH) if monthly_demand > 0 else None
+        out["per_model"][model] = {
+            "forecast": forecasts, "demand": demands, "onlot": onlot, "inbound": inbound,
+            "monthly_demand": round(monthly_demand, 1), "days_supply": dos,
+            "demand60": round(demand60), "avail60": avail60, "health": health,
+        }
+    out["total"]["forecast"] = [round(x) for x in out["total"]["forecast"]]
+    out["total"]["onlot"] = sum(d["onlot"] for d in out["per_model"].values())
+    out["total"]["inbound"] = sum(d["inbound"] for d in out["per_model"].values())
+    return out
+
+
+_DAYS_PER_MONTH = 30.44
+
+
+# --------------------------------------------------------------------------- #
 # 5. Pace Check
 # --------------------------------------------------------------------------- #
 def pace_check(res: EngineResult) -> list:
@@ -407,6 +493,7 @@ def build_all(res: EngineResult) -> dict:
         "loaner_board": loaner_board(res),
         "loaner_fleet": loaner_fleet(res),
         "build_sequence": build_sequence(res),
+        "retail_forecast": retail_forecast(res),
         "pace_check": pace_check(res),
         "fleet_targets": fleet_targets(res),
         "data_health": data_health(res),

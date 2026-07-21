@@ -319,6 +319,41 @@ function readControls(){ return {m:document.getElementById("ordmonth").value,mod
 function wireFile(inputId,taId,statId){ document.getElementById(inputId).addEventListener("change",function(e){
   let f=e.target.files[0]; if(!f) return; let rd=new FileReader();
   rd.onload=function(){ document.getElementById(taId).value=rd.result; markFilled(); document.getElementById(statId).textContent=f.name; }; rd.readAsText(f); }); }
+/* ---- collapsible + lockable data-entry sections (P2 safety / P3 organization) ---- */
+function lockDSection(sec, locked){
+  sec.classList.toggle("dsec-locked", locked);
+  let btn=sec.querySelector(".dsec-lock");
+  if(btn) btn.innerHTML = locked ? "🔒 Locked" : "🔓 Editing";
+  sec.querySelectorAll(".dsec-body input,.dsec-body select,.dsec-body textarea,.dsec-body button").forEach(function(el){ el.disabled=locked; });
+}
+function persistDCollapse(){ try{ let st={};
+  document.querySelectorAll("#datacard .dsec").forEach(function(s){ st[s.getAttribute("data-title")]=s.classList.contains("dsec-collapsed"); });
+  localStorage.setItem("pm_dcollapsed",JSON.stringify(st)); }catch(e){} }
+function setDCollapsed(sec, col){ sec.classList.toggle("dsec-collapsed", col); let cv=sec.querySelector(".dsec-cv"); if(cv) cv.textContent = col?"▸":"▾"; }
+function setupDataSections(){
+  let dc=document.getElementById("datacard"); if(!dc||dc.querySelector(".dsec")) return;
+  let saved=null; try{ saved=JSON.parse(localStorage.getItem("pm_dcollapsed")||"null"); }catch(e){}
+  let secs=[].slice.call(dc.children).filter(function(d){ return d.tagName==="DIV" && (d.getAttribute("style")||"").indexOf("border-top")>=0; });
+  secs.forEach(function(sec){
+    let label=sec.querySelector("label.top"), title="Section";
+    if(label && label.firstChild && label.firstChild.nodeType===3){ title=label.firstChild.textContent.trim(); label.removeChild(label.firstChild); }
+    else if(label){ title=label.textContent.trim().split("—")[0].trim(); }
+    let bar=document.createElement("div"); bar.className="dsec-bar";
+    bar.innerHTML="<span class='dsec-cv'>▸</span><span class='dsec-ttl'>"+title+"</span><button type='button' class='dsec-lock'>🔒 Locked</button>";
+    let body=document.createElement("div"); body.className="dsec-body";
+    while(sec.firstChild) body.appendChild(sec.firstChild);
+    sec.className="dsec"; sec.removeAttribute("style"); sec.setAttribute("data-title",title);
+    sec.appendChild(bar); sec.appendChild(body);
+    setDCollapsed(sec, saved && (title in saved) ? saved[title] : true);   // default collapsed
+    lockDSection(sec, true);                                                // always locked on load
+    bar.addEventListener("click",function(e){ if(e.target.closest(".dsec-lock")) return;
+      setDCollapsed(sec, !sec.classList.contains("dsec-collapsed")); persistDCollapse(); });
+    bar.querySelector(".dsec-lock").addEventListener("click",function(e){ e.stopPropagation();
+      let nowLocked=!sec.classList.contains("dsec-locked"); lockDSection(sec, nowLocked);
+      if(!nowLocked){ setDCollapsed(sec, false); persistDCollapse(); } });
+  });
+}
+
 window.addEventListener("DOMContentLoaded",function(){
   let sel=document.getElementById("ordmonth"), now=new Date().getMonth();
   MONTHS.forEach((m,i)=>{ let o=document.createElement("option"); o.value=i+1; o.textContent=m; if(i===now) o.selected=true; sel.appendChild(o); });
@@ -366,6 +401,10 @@ window.addEventListener("DOMContentLoaded",function(){
   restorePreowned(); restoreLoanCfg();
   document.getElementById("pre").addEventListener("change",function(){ liveRecompute(); persistPreowned(); });
   LOANCFG_IDS.forEach(id=>document.getElementById(id).addEventListener("change",function(){ liveRecompute(); persistLoanCfg(); }));
+  // wrap control sections as collapsible + lockable (after their rows are restored)
+  setupDataSections();
+  document.getElementById("expandAll").addEventListener("click",function(){ document.querySelectorAll("#datacard .dsec").forEach(function(s){ setDCollapsed(s,false); }); persistDCollapse(); });
+  document.getElementById("collapseAll").addEventListener("click",function(){ document.querySelectorAll("#datacard .dsec").forEach(function(s){ setDCollapsed(s,true); }); persistDCollapse(); });
   // print selector
   document.getElementById("printbtn").addEventListener("click",function(e){ e.stopPropagation();
     let m=document.getElementById("printmenu"); if(m.style.display==="block") m.style.display="none"; else openPrintMenu(); });

@@ -13,6 +13,10 @@ function heatColor(t){ t=Math.max(0,Math.min(1,t));
   let a=[22,32,46], b=[34,211,238];
   return "rgb("+Math.round(lerp(a[0],b[0],t))+","+Math.round(lerp(a[1],b[1],t))+","+Math.round(lerp(a[2],b[2],t))+")"; }
 function heatText(t){ return t>0.55?"#06212a":"#dceefc"; }
+// inventory-age chip: fresh -> aged color ramp (green / neutral / amber / red)
+function ageCell(d){ d=Math.round(d||0);
+  let c=d<=30?"var(--good)":(d<=60?"var(--ink2)":(d<=90?"var(--warn)":"var(--bad)"));
+  return "<span style='color:"+c+";font-weight:700;font-variant-numeric:tabular-nums'>"+d+"<span style='font-size:.82em;opacity:.7'>d</span></span>"; }
 
 function orderPriority(res){ let s=res.settings,out={};
   MODELS.forEach(model=>{ let ranked=res.lines.filter(l=>l.model===model&&l.priority>-1).sort((a,b)=>b.priority-a.priority);
@@ -73,6 +77,40 @@ function executiveDemos(res){ let s=res.settings, out={};
   return out; }
 function fleetTargets(res){ let out={}; MODELS.forEach(model=>{ let r=res.seas[model].rate;
     out[model]=[]; for(let m=0;m<12;m++) out[model].push(xround(r[m]+r[(m+1)%12],0)); }); return out; }
+/* ---- inventory-driven retail forecast (mirror of reports.retail_forecast) ---- */
+function retailForecast(res){
+  let today=res.tb.today, s=res.settings;
+  let daysLeft=new Date(today.getFullYear(),today.getMonth()+1,0).getDate()-today.getDate()+1;
+  let horizons=[["This month",daysLeft],["Next 30 days",30],["Next 60 days",60]];
+  function seasFactor(days,seas){ let t=0; for(let d=0;d<days;d++){ t+=seas[new Date(today.getTime()+d*86400000).getMonth()]; } return days?t/days:1; }
+  function inboundIn(pos,days){ if(!pos) return 0; let end=new Date(today.getTime()+days*86400000), n=0;
+    for(let cm in pos.arrivals){ let month=parseInt(cm,10), year=month>=today.getMonth()+1?today.getFullYear():today.getFullYear()+1;
+      let arr=new Date(year,month-1,15); if(arr>=today&&arr<=end) n+=pos.arrivals[cm]; } return n; }
+  function pace(l){ let m=res.metrics[l.key]; return Math.min(s.rate_cap, m?m.prate/2:0); }
+  let out={horizons:horizons.map(h=>({label:h[0],days:h[1]})),per_model:{},total:{forecast:[0,0,0]}};
+  MODELS.forEach(model=>{
+    let lines=res.lines.filter(l=>l.model===model);
+    let onlot=lines.reduce((a,l)=>a+l.onlot,0), inbound=lines.reduce((a,l)=>a+l.inbound,0);
+    let monthlyDemand=lines.reduce((a,l)=>a+pace(l),0), forecasts=[], demands=[];
+    horizons.forEach((h,hi)=>{ let days=h[1], months=days/DPM, sf=seasFactor(days,res.seas[model].index), proj=0;
+      lines.forEach(l=>{ let pos=res.positions[l.key], avail=Math.max(0,l.onlot-l.wholeNow)+inboundIn(pos,days); proj+=Math.min(pace(l)*sf*months, avail); });
+      forecasts.push(Math.round(proj)); demands.push(Math.round(monthlyDemand*sf*months)); out.total.forecast[hi]+=proj; });
+    let sf60=seasFactor(60,res.seas[model].index), demand60=monthlyDemand*sf60*(60/DPM);
+    let avail60=lines.reduce((a,l)=>a+Math.max(0,l.onlot-l.wholeNow)+inboundIn(res.positions[l.key],60),0);
+    let health; if(demand60<=0.01) health="cold — little live demand";
+      else if(avail60<demand60*0.85) health="tight — demand outruns stock";
+      else if(avail60>demand60*1.6) health="heavy — stock outruns demand"; else health="balanced";
+    let dos=monthlyDemand>0?Math.round(onlot/monthlyDemand*DPM):null;
+    out.per_model[model]={forecast:forecasts,demand:demands,onlot:onlot,inbound:inbound,monthly_demand:Math.round(monthlyDemand*10)/10,days_supply:dos,demand60:Math.round(demand60),avail60:avail60,health:health};
+  });
+  out.total.forecast=out.total.forecast.map(x=>Math.round(x));
+  out.total.onlot=Object.values(out.per_model).reduce((a,d)=>a+d.onlot,0);
+  out.total.inbound=Object.values(out.per_model).reduce((a,d)=>a+d.inbound,0);
+  return out;
+}
+function healthBadge(h){ let c=h.indexOf("tight")>=0?"var(--bad)":(h.indexOf("heavy")>=0?"var(--warn)":(h.indexOf("cold")>=0?"var(--muted)":"var(--good)"));
+  let dot=h.indexOf("tight")>=0?"▲":(h.indexOf("heavy")>=0?"▼":(h.indexOf("cold")>=0?"—":"●"));
+  return "<span style='color:"+c+";font-weight:700;white-space:nowrap'>"+dot+" "+esc(h)+"</span>"; }
 function money(n){ n=Math.round(n||0); return (n<0?"-$":"$")+Math.abs(n).toLocaleString(); }
 
 /* ---- power-ranked RETAIL build sequence (per model) ---- */
@@ -179,32 +217,43 @@ function tbl(head,cls,rows){
   return h+"</tbody></table></div>"; }
 function sec(n,title,meta){ return "<div class='sec'><span class='caret'>▾</span><span class='n'>"+n+"</span><h2>"+esc(title)+"</h2><span class='meta'>"+esc(meta||"")+"</span><span class='sechint noprint'>click to collapse</span></div>"; }
 
-function sparkline(vals){ // 12 monthly seasonality index values, baseline 1.0
-  let w=210,h=46,pad=4, mn=Math.min.apply(null,vals.concat([1])), mx=Math.max.apply(null,vals.concat([1]));
+function sparkline(vals, nowM){ // 12 monthly seasonality values; split past (dim) vs forward (bright)
+  nowM = (nowM==null? new Date().getMonth() : ((nowM%12)+12)%12);
+  let w=220,h=50,pad=6, mn=Math.min.apply(null,vals.concat([1])), mx=Math.max.apply(null,vals.concat([1]));
   let rng=(mx-mn)||1, X=i=>pad+i*(w-2*pad)/11, Y=v=>h-pad-((v-mn)/rng)*(h-2*pad);
   let pts=vals.map((v,i)=>X(i)+","+Y(v).toFixed(1));
-  let area="M"+X(0)+","+ (h-pad)+" L"+pts.join(" L ")+" L"+X(11)+","+(h-pad)+" Z";
-  let line="M"+pts.join(" L ");
-  let base=Y(1);
+  let area="M"+X(0)+","+(h-pad)+" L"+pts.join(" L ")+" L"+X(11)+","+(h-pad)+" Z";
+  let past="M"+pts.slice(0,nowM+1).join(" L ");
+  let future="M"+pts.slice(nowM).join(" L ");
+  let base=Y(1), nx=X(nowM).toFixed(1), ny=Y(vals[nowM]).toFixed(1);
   return "<svg class='spark' width='"+w+"' height='"+h+"' viewBox='0 0 "+w+" "+h+"'>"+
-    "<path d='"+area+"' fill='rgba(94,234,212,.13)'/>"+
+    "<path d='"+area+"' fill='rgba(94,234,212,.10)'/>"+
     "<line x1='"+pad+"' y1='"+base.toFixed(1)+"' x2='"+(w-pad)+"' y2='"+base.toFixed(1)+"' stroke='#3a4a63' stroke-dasharray='3 3' stroke-width='1'/>"+
-    "<path d='"+line+"' fill='none' stroke='#5eead4' stroke-width='2' stroke-linejoin='round' stroke-linecap='round'/>"+
+    "<line x1='"+nx+"' y1='"+pad+"' x2='"+nx+"' y2='"+(h-pad)+"' stroke='#4c8dff' stroke-width='1' stroke-dasharray='2 2' opacity='.6'/>"+
+    "<path d='"+past+"' fill='none' stroke='#3f6f68' stroke-width='2' stroke-linejoin='round' stroke-linecap='round'/>"+
+    "<path d='"+future+"' fill='none' stroke='#5eead4' stroke-width='2.6' stroke-linejoin='round' stroke-linecap='round'/>"+
+    "<circle cx='"+nx+"' cy='"+ny+"' r='3.2' fill='#4c8dff'/>"+
     "</svg>"; }
+function seasHeading(vals, nowM){ // where demand is trending over the next ~2 months
+  nowM=((nowM%12)+12)%12; let fwd=(vals[(nowM+1)%12]+vals[(nowM+2)%12])/2 - vals[nowM];
+  if(fwd>0.08) return "<span style='color:var(--good)'>▲ demand rising</span>";
+  if(fwd<-0.08) return "<span style='color:var(--warn)'>▼ demand easing</span>";
+  return "<span style='color:var(--muted)'>▬ steady</span>"; }
 
 function render(res){
-  let rep={op:orderPriority(res),over:overstock(res),vins:wholesaleVins(res),demo:demoDashboard(res),pace:paceCheck(res),fleet:fleetTargets(res)};
-  let s=res.settings,tb=res.tb, H=[], paceBy={}; rep.pace.forEach(p=>paceBy[p.model]=p);
+  let rep={op:orderPriority(res),over:overstock(res),vins:wholesaleVins(res),demo:demoDashboard(res),fleet:fleetTargets(res)};
+  let s=res.settings,tb=res.tb, H=[];
+  let fc=retailForecast(res);   // computed once; reused in the Retail Forecast section
   let latest=tb.latest?(Math.floor(tb.latest/12)+"-"+String(tb.latest%12).padStart(2,"0")):"—";
 
-  // KPI tiles
-  let readColor={AHEAD:"var(--good)",ON:"var(--option)",BEHIND:"var(--bad)"};
-  let readLabel={AHEAD:"ahead of pace",ON:"on target",BEHIND:"behind pace"};
+  // KPI tiles — one per model: what to order now, colored by inventory health
+  function hColor(h){ return h.indexOf("tight")>=0?"var(--bad)":(h.indexOf("heavy")>=0?"var(--warn)":(h.indexOf("cold")>=0?"var(--muted)":"var(--good)")); }
+  function hShort(h){ return h.split("—")[0].trim(); }
   H.push("<div class='kpis'>");
-  MODELS.forEach(model=>{ let b=rep.op[model], p=paceBy[model];
-    H.push("<div class='kpi model'><span class='edge' style='background:"+readColor[p.read]+"'></span>"+
+  MODELS.forEach(model=>{ let b=rep.op[model], d=fc.per_model[model], col=hColor(d.health);
+    H.push("<div class='kpi model'><span class='edge' style='background:"+col+"'></span>"+
       "<div class='lab'>"+model+" — order now</div><div class='big'>"+b.totalNeed+"</div>"+
-      "<div class='sub'>"+b.buildUnits+" within allocation · <span style='color:"+readColor[p.read]+"'>"+readLabel[p.read]+"</span></div></div>"); });
+      "<div class='sub'>"+b.buildUnits+" within allocation · <span style='color:"+col+"'>"+esc(hShort(d.health))+"</span> stock</div></div>"); });
   let totWhole=res.lines.reduce((a,l)=>a+l.wholeNow,0), totOver=rep.over.reduce((a,r)=>a+r.over,0);
   H.push("<div class='kpi'><span class='edge' style='background:var(--over)'></span><div class='lab'>Overstock</div>"+
     "<div class='big' style='color:var(--over)'>"+totOver+"</div><div class='sub'>"+totWhole+" ready to wholesale today</div></div>");
@@ -213,13 +262,17 @@ function render(res){
     "<div class='sub'>newest "+latest+(tb.open?" · open":"")+" · "+res.orphans.length+" off-roster</div></div>");
   H.push("</div>");
 
-  let winTxt = s.mode==="CPO"
+  let winTxt = (s.mode==="CPO"||s.mode==="PPO")
     ? " · arrival lead "+MODELS.map(m=>m+" "+(res.windows[m]).toFixed(1)+"mo").join(" / ")
     : "";
   let tradeTxt = (s.trades&&s.trades.length) ? " · <b style='color:var(--teal)'>"+s.trades.length+" dealer trade"+(s.trades.length>1?"s":"")+" graded</b>" : "";
+  let modeName={"CPO":"CPO — factory order","PPO":"PPO — this order's arrival window","MID-MONTH":"Dealer trade — available today"}[s.mode]||s.mode;
+  let modeWhy={"CPO":"measured against what you'll hold when the factory order lands",
+    "PPO":"future inventory — measured against your projected on-hand at arrival",
+    "MID-MONTH":"right-now — measured against what you could pull today via dealer trade"}[s.mode]||"";
   H.push("<div class='foot noprint' style='margin:-6px 2px 6px'>Recomputed "+tb.today.toISOString().slice(0,10)+
-    " · order month <b style='color:var(--ink2)'>"+MONTHS[s.order_month-1]+"</b> · mode <b style='color:var(--ink2)'>"+s.mode+
-    "</b>"+winTxt+" · "+res.invCount+" inventory units · "+res.salesCount+" sales rows"+tradeTxt+"</div>");
+    " · order month <b style='color:var(--ink2)'>"+MONTHS[s.order_month-1]+"</b> · basis <b style='color:var(--accent)'>"+esc(modeName)+
+    "</b> <span class='dim'>("+esc(modeWhy)+")</span>"+winTxt+" · "+res.invCount+" inventory units · "+res.salesCount+" sales rows"+tradeTxt+"</div>");
 
   // 1. ORDER PRIORITY
   H.push(sec(1,"Order Priority","teal = where you'll be at arrival · orange = whole trucks to order"));
@@ -259,12 +312,13 @@ function render(res){
 
   // 3. FLEET TARGET + SEASONALITY
   H.push(sec(3,"Fleet Stock Target & Seasonality","live 60-day stock target by month, and each model's demand shape"));
+  let nowM=res.tb.today.getMonth();
   MODELS.forEach(model=>{ let f=rep.fleet[model], mx=Math.max.apply(null,f.concat([1]));
-    let cells="<td class='rl'>"+model+"</td>"+f.map((v,i)=>{ let t=v/mx; return "<td class='cell' style='background:"+heatColor(t)+";color:"+heatText(t)+"'>"+v+"</td>"; }).join("");
-    let cur=res.tb.latest?((res.tb.latest-1)%12):0;
-    H.push("<div style='display:flex;gap:20px;align-items:center;flex-wrap:wrap;margin:8px 0'>"+
-      "<table class='heat'><thead><tr><th></th>"+MONTHS.map(m=>"<th style='font-size:9px;color:#6b7891;text-align:center'>"+m+"</th>").join("")+"</tr></thead><tbody><tr>"+cells+"</tr></tbody></table>"+
-      "<div style='text-align:center'>"+sparkline(res.seas[model].index)+"<div class='foot' style='margin:0;text-align:center'>seasonality · avg = 1.0</div></div></div>"); });
+    let cells="<td class='rl'>"+model+"</td>"+f.map((v,i)=>{ let t=v/mx; let now=i===nowM;
+      return "<td class='cell'"+(now?" style='background:"+heatColor(t)+";color:"+heatText(t)+";box-shadow:0 0 0 2px var(--accent) inset'":" style='background:"+heatColor(t)+";color:"+heatText(t)+"'")+">"+v+"</td>"; }).join("");
+    H.push("<div style='display:flex;gap:22px;align-items:center;flex-wrap:wrap;margin:10px 0'>"+
+      "<table class='heat'><thead><tr><th></th>"+MONTHS.map((m,i)=>"<th style='font-size:9.5px;color:"+(i===nowM?"var(--accent)":"#6b7891")+";text-align:center;font-weight:"+(i===nowM?700:400)+"'>"+m+"</th>").join("")+"</tr></thead><tbody><tr>"+cells+"</tr></tbody></table>"+
+      "<div style='text-align:center'>"+sparkline(res.seas[model].index, nowM)+"<div class='foot' style='margin:2px 0 0;text-align:center'>seasonality · "+seasHeading(res.seas[model].index, nowM)+"</div></div></div>"); });
 
   // 4. DEMO CENTER — board (left) + current demos & previous loaners (right)
   let ed=executiveDemos(res), board=[];
@@ -287,12 +341,18 @@ function render(res){
     board.push("</div>"); });
   board.push("</div>");
 
-  let dash=["<div class='dc-sub'>Current demos</div>"];
+  let dash=["<div class='dc-sub'>Current demos <span class='dc-note'>age = days in inventory · demo = days out with a driver</span></div>"];
   if(rep.demo.length){
-    dash.push(tbl(["Stock","Driver / reason","Vehicle","As demo","Returns","Swap?"],["","","","num","num",""],
-      rep.demo.map(r=>[esc(r.stock),{html:r.note?esc(r.note):"<span class='dim'>—</span>"},{html:"<span class='dim'>"+esc(r.vehicle)+"</span>"},r.asDemo+"d",
-        {html:r.retIn>0?("~"+r.retIn+"d"):"<span class='swap'>now</span>"},
-        {html:r.swap?"<span class='swap'>⚠ SWAP</span>":"<span style='color:var(--good)'>OK</span>"}])));
+    // Compact: Stock (driver as subtitle) · Ext/Int · Inventory age · Days-as-demo
+    // · Return ETA · Swap — no long vehicle column, so it fits without scrolling.
+    dash.push(tbl(["Stock","E/I","Age","Demo","Ret","Swap"],["","","num","num","num","c"],
+      rep.demo.map(r=>[
+        {html:"<b>"+esc(r.stock)+"</b>"+(r.note?"<div class='dim' style='font-size:10.5px;font-weight:400;margin-top:1px;white-space:normal'>"+esc(r.note)+"</div>":"")},
+        {html:"<span class='dim'>"+esc(r.ei)+"</span>"},
+        {html:ageCell(r.dis)},
+        {html:"<span style='font-variant-numeric:tabular-nums'>"+r.asDemo+"<span style='font-size:.82em;opacity:.6'>d</span></span>"},
+        {html:r.retIn>0?("<span class='dim'>~"+r.retIn+"d</span>"):"<span class='swap'>now</span>"},
+        {html:r.swap?"<span class='swap' title='past swap threshold'>⚠</span>":"<span style='color:var(--good)'>✓</span>"}])));
     if(s.anticipate_demo_returns) dash.push("<div class='foot'>✓ Ordering anticipates each of these coming back (held as slow, used stock), so you don't reorder a unit that's returning.</div>");
   } else dash.push("<div class='empty'>No demos listed. Add them in ✎ Data.</div>");
 
@@ -330,12 +390,29 @@ function render(res){
     H.push("<div class='foot noprint'>Use 🖨 Print (top-right) to print this sheet on its own or with any other dashboards.</div>"); }
   else H.push("<div class='empty'>No units past their selling window.</div>");
 
-  // 8. PACE
-  H.push(sec(8,"Pace Check","actual vs predicted 60-day pace"));
-  H.push(tbl(["Model","Actual 90d","Actual 60d pace","Predicted 60d pace","Variance","Read","Coverage"],
-    ["","num","num","num","num","",""],
-    rep.pace.map(r=>{ let rl={AHEAD:"AHEAD of forecast",ON:"ON TARGET",BEHIND:"BEHIND forecast"}[r.read], ic={AHEAD:"▲",ON:"●",BEHIND:"▼"}[r.read];
-      return [r.model,r.a90,r.a60,r.p60,(r.vr>=0?"+":"")+r.vr,{html:"<span class='read "+r.read+"'>"+ic+" "+rl+"</span>"},Math.round(r.cov*100)+"%"]; })));
+  // 8. RETAIL FORECAST — what your current inventory can produce (fc from top)
+  let fh=fc.horizons;
+  H.push(sec(8,"Retail Forecast","what the inventory you own is projected to retail — not a pace extrapolation"));
+  H.push("<div class='kpis' style='margin-bottom:14px'>");
+  ["var(--teal)","var(--accent)","var(--orange)"].forEach(function(col,i){
+    H.push("<div class='kpi'><span class='edge' style='background:"+col+"'></span>"+
+      "<div class='lab'>"+esc(fh[i].label)+"</div>"+
+      "<div class='big' style='color:"+col+"'>"+fc.total.forecast[i]+"</div>"+
+      "<div class='sub'>projected units retailed · all models</div></div>");
+  });
+  H.push("<div class='kpi'><span class='edge' style='background:var(--muted)'></span><div class='lab'>In stock now</div>"+
+    "<div class='big'>"+fc.total.onlot+"</div><div class='sub'>+ "+fc.total.inbound+" inbound in the pipeline</div></div>");
+  H.push("</div>");
+  H.push("<div class='legend'><span><b>Forecast</b> = min(demand, what you own + inbound) per config</span><span><b>Demand</b> = what the market wants regardless of stock</span><span>gap of the two = your mix / stock health</span></div>");
+  H.push(tbl(["Model",fh[0].label,fh[1].label,fh[2].label,"60-day demand","In stock","Inbound","Days supply","Inventory health"],
+    ["","num teal","num","num","num","num","num","num",""],
+    MODELS.map(function(m){ let d=fc.per_model[m];
+      return [ {html:"<b>"+m+"</b>"}, {html:"<b>"+d.forecast[0]+"</b>"}, d.forecast[1],
+        {html:"<b style='color:var(--orange)'>"+d.forecast[2]+"</b>"},
+        {html:"<span class='dim'>"+d.demand[2]+"</span>"}, d.onlot, {html:"<span class='dim'>"+d.inbound+"</span>"},
+        {html:d.days_supply==null?"<span class='dim'>—</span>":d.days_supply+"d"},
+        {html:healthBadge(d.health)} ]; })));
+  H.push("<div class='foot'>Reads inventory intelligence — current stock, model/trim/color mix, per-config speed-to-sale, inbound pipeline, aging (wholesale-flagged units excluded), and seasonality. A model can hold heavy stock yet forecast below demand when the stock is in the wrong configs; that gap is the signal to re-mix or dealer-trade.</div>");
 
   if(res.orphans.length){ let top=res.orphans.slice(0,16).map(o=>o.key+" ("+o.sales+")").join(",  ");
     H.push("<details class='exp' style='margin-top:14px'><summary>Data health — "+res.orphans.length+" configs sold but not on the order roster (ordering can't see them; many are discontinued/legacy — expected)</summary><div class='foot'>"+esc(top)+(res.orphans.length>16?" …":"")+"</div></details>"); }
@@ -351,7 +428,7 @@ function groupSections(root){
     "Fleet Stock Target & Seasonality":"fleet","Demo Center":"democenter",
     "Loaner / ICV Program":"loaner",
     "Overstock / Wholesale":"overstock","Wholesale Now — VIN sheet":"vins",
-    "Pace Check":"pace"};
+    "Retail Forecast":"forecast"};
   let kids=[].slice.call(root.childNodes), groups=[], cur={key:"summary",title:"Summary",nodes:[]};
   kids.forEach(node=>{
     if(node.nodeType===1 && node.classList && node.classList.contains("sec")){
