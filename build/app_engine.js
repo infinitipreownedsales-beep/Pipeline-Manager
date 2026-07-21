@@ -382,22 +382,22 @@ function loanerOrderPlan(res){ let s=res.settings, svc=Math.max(1,parseInt(s.loa
       fleetUnits.push({model:c.model,key:c.key,trim:c.trim,ext:c.ext,int:c.int,econ:c.econ,netValue:c.netValue,n:counts[c.key]});
       perModel[c.model]++; i++; guard++; } }
   return {intake:intake,serviceMonths:svc,fleetUnits:fleetUnits,perModel:perModel}; }
+// RETAIL-only build sequence (mirror of reports.build_sequence). Loaner-fleet
+// units are NEVER injected here — they live in the Loaner section. If the loaner
+// program is active, fleet slots are reported as reserved out of allocation.
 function buildSequence(res){ let s=res.settings, plan=loanerOrderPlan(res), decay=(s.order_unit_decay!==undefined?s.order_unit_decay:1.0), out={};
-  MODELS.forEach(model=>{ let alloc=s.allocations[model]||0;
-    let fleet=plan.fleetUnits.filter(fu=>fu.model===model), seq=[];
-    fleet.forEach(fu=>{ let e=fu.econ; seq.push({stream:"fleet",trim:fu.trim,ext:fu.ext,int:fu.int,key:fu.key,score:1e9,netValue:fu.netValue,upsideDown:e.upsideDown}); });
+  MODELS.forEach(model=>{ let alloc=s.allocations[model]||0, reserved=plan.perModel[model]||0, effAlloc=Math.max(0,alloc-reserved);
     let retail=[];
     res.lines.forEach(l=>{ if(l.model!==model||l.suppressed||l.need<=0||l.priority<=-1) return;
-      for(let n=0;n<l.need;n++) retail.push({stream:"retail",trim:l.trim,ext:l.ext,int:l.int,key:l.key,score:l.priority-decay*n,dts:l.dts,momentum:l.mom,n:n+1}); });
-    retail.sort((a,b)=>b.score-a.score); seq=seq.concat(retail);
+      for(let n=0;n<l.need;n++) retail.push({trim:l.trim,ext:l.ext,int:l.int,key:l.key,score:l.priority-decay*n,dts:l.dts,momentum:l.mom}); });
+    retail.sort((a,b)=>b.score-a.score);
     let groups=[];
-    seq.forEach((u,i)=>{ let tier=i<alloc?"build":"alt";
-      let g=groups[groups.length-1];
-      if(g&&g.key===u.key&&g.stream===u.stream&&g.tier===tier) g.qty++;
-      else groups.push({key:u.key,trim:u.trim,ext:u.ext,int:u.int,stream:u.stream,tier:tier,qty:1,netValue:u.netValue,dts:u.dts,momentum:u.momentum,upsideDown:u.upsideDown||false}); });
+    retail.forEach((u,i)=>{ let tier=i<effAlloc?"build":"alt"; let g=groups[groups.length-1];
+      if(g&&g.key===u.key&&g.tier===tier) g.qty++;
+      else groups.push({key:u.key,trim:u.trim,ext:u.ext,int:u.int,stream:"retail",tier:tier,qty:1,dts:u.dts,momentum:u.momentum}); });
     let buildTotal=groups.filter(g=>g.tier==="build").reduce((a,g)=>a+g.qty,0);
-    out[model]={allocation:alloc,fleet:fleet.length,retail_build:buildTotal-fleet.length,groups:groups,total_units:seq.length}; });
-  return {intake:plan.intake,serviceMonths:plan.serviceMonths,perModel:out}; }
+    out[model]={allocation:alloc,fleet_reserved:reserved,eff_alloc:effAlloc,retail_build:buildTotal,groups:groups,total_units:retail.length}; });
+  return {intake:plan.intake,serviceMonths:plan.serviceMonths,fleetUnits:plan.fleetUnits,perModel:out}; }
 function loanerMatchUnit(stock,inv){ for(let i=0;i<inv.length;i++){ if(stock&&inv[i].stock.indexOf(stock)===0) return inv[i]; } return null; }
 function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], releasing=0;
   (s.loaner_units||[]).forEach(e=>{ let stock=String(e.stock||"").trim(); if(!stock) return;

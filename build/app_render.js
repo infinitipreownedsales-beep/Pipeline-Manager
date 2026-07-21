@@ -75,21 +75,23 @@ function fleetTargets(res){ let out={}; MODELS.forEach(model=>{ let r=res.seas[m
     out[model]=[]; for(let m=0;m<12;m++) out[model].push(xround(r[m]+r[(m+1)%12],0)); }); return out; }
 function money(n){ n=Math.round(n||0); return (n<0?"-$":"$")+Math.abs(n).toLocaleString(); }
 
-/* ---- power-ranked build sequence (per model) ---- */
+/* ---- power-ranked RETAIL build sequence (per model) ---- */
 function buildSeqBlock(res, model){
-  let bs=res.buildSeq, d=bs&&bs.perModel?bs.perModel[model]:null; if(!d||!d.groups.length) return "";
-  let steps=[], n=0, shownAltNote=false, H=[];
+  let bs=res.buildSeq, d=bs&&bs.perModel?bs.perModel[model]:null; if(!d) return "";
+  let H=[], reservedNote=d.fleet_reserved>0?" · "+d.fleet_reserved+" reserved for loaner fleet (see Loaner section)":"";
+  if(!d.groups.length){
+    return "<div class='bseqwrap'><div class='bseqhd'>Build sequence <span class='bseqsub'>no retail order needed this month for "+esc(model)+" — on-hand + inbound already cover the seasonal target"+reservedNote+"</span></div></div>";
+  }
+  let n=0, shownAltNote=false;
   H.push("<div class='bseqwrap'><div class='bseqhd'>Build sequence <span class='bseqsub'>order in this order · "+
-    d.fleet+" fleet + "+d.retail_build+" retail of "+d.allocation+" allocation"+
-    (bs.intake?" · cascade intake ~"+bs.intake+"/mo":"")+"</span></div><div class='bseq'>");
+    d.retail_build+" of "+d.allocation+" allocation"+reservedNote+"</span></div><div class='bseq'>");
   d.groups.forEach(g=>{
     if(g.tier==="alt" && !shownAltNote){ H.push("<span class='bseqcut'>▸ beyond allocation</span>"); shownAltNote=true; }
     n++;
-    let cls="bstep "+(g.stream==="fleet"?"fleet":"")+(g.tier==="alt"?" alt":"");
-    let tag=g.stream==="fleet"?"<span class='btag'>fleet"+(g.upsideDown?" · <span class='bloss'>loss</span>":"")+"</span>":"";
-    let dts=(g.stream==="retail"&&g.dts!=null)?" <span class='btag'>"+Math.round(g.dts)+"d</span>":"";
+    let cls="bstep"+(g.tier==="alt"?" alt":"");
+    let dts=(g.dts!=null)?" <span class='btag'>"+Math.round(g.dts)+"d</span>":"";
     H.push("<span class='"+cls+"'><span class='bnum'>"+n+".</span><span class='bqty'>"+g.qty+"×</span> "+
-      esc(g.trim)+" <span class='demoei'>"+esc(g.ext)+"/"+esc(g.int)+"</span>"+tag+dts+"</span>");
+      esc(g.trim)+" <span class='demoei'>"+esc(g.ext)+"/"+esc(g.int)+"</span>"+dts+"</span>");
   });
   H.push("</div></div>");
   return H.join("");
@@ -108,6 +110,19 @@ function loanerRender(res){
   let best=null; MODELS.forEach(m=>(board[m]||[]).forEach(p=>{ if(!best||p.netValue>best.netValue) best=p; }));
   if(best) H.push("<div class='lkpi'><div class='lab'>Best used gross</div><div class='big' style='color:var(--teal)'>"+money(best.netValue)+"</div><div class='foot' style='margin:2px 0 0'>"+esc(best.trim)+" "+esc(best.ext)+"/"+esc(best.int)+"</div></div>");
   H.push("</div>");
+
+  // Fleet order this cascade — which combos to bring in for the loaner fleet.
+  // This is netted out of the retail allocation (noted in Order Priority), but is
+  // shown HERE, not mixed into the retail order.
+  let fu=(res.buildSeq&&res.buildSeq.fleetUnits)||[];
+  if(fu.length){
+    H.push("<div class='dc-sub' style='margin-top:4px'>Fleet order this cascade <span class='dc-note'>"+fu.length+" units (~"+res.buildSeq.intake+"/mo) — best preowned economics · netted out of retail allocation</span></div>");
+    H.push("<div class='bseq' style='margin-bottom:14px'>");
+    fu.forEach((u,i)=>{ let e=u.econ, loss=e&&e.upsideDown;
+      H.push("<span class='bstep fleet'><span class='bnum'>"+(i+1)+".</span><span class='bqty'>1×</span> "+
+        esc(u.model)+" "+esc(u.trim)+" <span class='demoei'>"+esc(u.ext)+"/"+esc(u.int)+"</span> <span class='btag'>"+money(u.netValue)+(loss?" <span class='bloss'>loss</span>":"")+"</span></span>"); });
+    H.push("</div>");
+  }
 
   // current in-service fleet + cascading release
   if(plan.rows.length){

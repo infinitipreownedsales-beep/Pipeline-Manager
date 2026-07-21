@@ -443,7 +443,7 @@ def test_measured_preowned_overrides_modeled():
     assert st.modeled is False and st.count == 2 and st.used_dts == 15.0
 
 
-def test_build_sequence_reserves_fleet_and_power_ranks_retail():
+def test_build_sequence_is_retail_only_and_nets_fleet_out_of_allocation():
     inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
     sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
     # ICV set -> the loaner program is active, so the fleet reserves slots.
@@ -453,22 +453,22 @@ def test_build_sequence_reserves_fleet_and_power_ranks_retail():
     res = engine.run(inv, sales, s, today=_AS_OF)
     bs = reports.build_sequence(res)
     assert bs["intake"] == round(20 / 4)          # auto cascade = target / service months
-    total_fleet = sum(d["fleet"] for d in bs["per_model"].values())
-    assert total_fleet == bs["intake"]            # every fleet slot placed
+    assert len(bs["fleet_units"]) == bs["intake"]  # fleet lives here, not in the order
     for model, d in bs["per_model"].items():
-        # build units never exceed allocation; fleet is reserved first
+        # the build sequence is RETAIL only — never a loaner-fleet unit
+        assert all(g["stream"] == "retail" for g in d["groups"])
+        # fleet is netted out of allocation, and retail build fits the remainder
+        assert d["eff_alloc"] == max(0, d["allocation"] - d["fleet_reserved"])
         build = sum(g["qty"] for g in d["groups"] if g["tier"] == "build")
-        assert build <= d["allocation"]
-        streams = [g["stream"] for g in d["groups"]]
-        if d["fleet"] and "retail" in streams:
-            assert streams.index("fleet") < streams.index("retail")
-    # program inactive by default -> no fleet reservation contaminates the order
+        assert build <= d["eff_alloc"]
+    # program inactive by default -> no fleet reservation, full allocation to retail
     s_off = Settings(order_month=9)
     bs_off = reports.build_sequence(engine.run(inv, sales, s_off, today=_AS_OF))
     assert bs_off["intake"] == 0
-    assert all(d["fleet"] == 0 for d in bs_off["per_model"].values())
+    assert all(d["fleet_reserved"] == 0 and d["eff_alloc"] == d["allocation"]
+               for d in bs_off["per_model"].values())
     # decay 0 keeps a combo's units contiguous (whole combo before the next)
-    s0 = Settings(order_month=9, loaner_fleet_target=0, order_unit_decay=0.0)
+    s0 = Settings(order_month=9, order_unit_decay=0.0)
     g0 = reports.build_sequence(engine.run(inv, sales, s0, today=_AS_OF))["per_model"]["QX80"]["groups"]
     keys = [g["key"] for g in g0]
     assert len(keys) == len(set(keys))            # no combo appears in two separate runs

@@ -354,6 +354,7 @@
       <button class="primary" id="run">Compute order ▶</button>
       <button class="ghost" id="loadsample">Load sample data</button>
       <button class="ghost" id="clearall">Clear</button>
+      <button class="ghost" id="resetsettings" title="Reset order month, allocations, arrival window, and loaner setup to defaults. Keeps your pasted exports, trade log, demos, and roster control.">↺ Reset settings</button>
       <div class="fld" style="margin-left:6px"><label>As-of date</label><input type="date" id="today"></div>
       <span id="status" class="foot"></span>
     </div>
@@ -766,22 +767,22 @@ function loanerOrderPlan(res){ let s=res.settings, svc=Math.max(1,parseInt(s.loa
       fleetUnits.push({model:c.model,key:c.key,trim:c.trim,ext:c.ext,int:c.int,econ:c.econ,netValue:c.netValue,n:counts[c.key]});
       perModel[c.model]++; i++; guard++; } }
   return {intake:intake,serviceMonths:svc,fleetUnits:fleetUnits,perModel:perModel}; }
+// RETAIL-only build sequence (mirror of reports.build_sequence). Loaner-fleet
+// units are NEVER injected here — they live in the Loaner section. If the loaner
+// program is active, fleet slots are reported as reserved out of allocation.
 function buildSequence(res){ let s=res.settings, plan=loanerOrderPlan(res), decay=(s.order_unit_decay!==undefined?s.order_unit_decay:1.0), out={};
-  MODELS.forEach(model=>{ let alloc=s.allocations[model]||0;
-    let fleet=plan.fleetUnits.filter(fu=>fu.model===model), seq=[];
-    fleet.forEach(fu=>{ let e=fu.econ; seq.push({stream:"fleet",trim:fu.trim,ext:fu.ext,int:fu.int,key:fu.key,score:1e9,netValue:fu.netValue,upsideDown:e.upsideDown}); });
+  MODELS.forEach(model=>{ let alloc=s.allocations[model]||0, reserved=plan.perModel[model]||0, effAlloc=Math.max(0,alloc-reserved);
     let retail=[];
     res.lines.forEach(l=>{ if(l.model!==model||l.suppressed||l.need<=0||l.priority<=-1) return;
-      for(let n=0;n<l.need;n++) retail.push({stream:"retail",trim:l.trim,ext:l.ext,int:l.int,key:l.key,score:l.priority-decay*n,dts:l.dts,momentum:l.mom,n:n+1}); });
-    retail.sort((a,b)=>b.score-a.score); seq=seq.concat(retail);
+      for(let n=0;n<l.need;n++) retail.push({trim:l.trim,ext:l.ext,int:l.int,key:l.key,score:l.priority-decay*n,dts:l.dts,momentum:l.mom}); });
+    retail.sort((a,b)=>b.score-a.score);
     let groups=[];
-    seq.forEach((u,i)=>{ let tier=i<alloc?"build":"alt";
-      let g=groups[groups.length-1];
-      if(g&&g.key===u.key&&g.stream===u.stream&&g.tier===tier) g.qty++;
-      else groups.push({key:u.key,trim:u.trim,ext:u.ext,int:u.int,stream:u.stream,tier:tier,qty:1,netValue:u.netValue,dts:u.dts,momentum:u.momentum,upsideDown:u.upsideDown||false}); });
+    retail.forEach((u,i)=>{ let tier=i<effAlloc?"build":"alt"; let g=groups[groups.length-1];
+      if(g&&g.key===u.key&&g.tier===tier) g.qty++;
+      else groups.push({key:u.key,trim:u.trim,ext:u.ext,int:u.int,stream:"retail",tier:tier,qty:1,dts:u.dts,momentum:u.momentum}); });
     let buildTotal=groups.filter(g=>g.tier==="build").reduce((a,g)=>a+g.qty,0);
-    out[model]={allocation:alloc,fleet:fleet.length,retail_build:buildTotal-fleet.length,groups:groups,total_units:seq.length}; });
-  return {intake:plan.intake,serviceMonths:plan.serviceMonths,perModel:out}; }
+    out[model]={allocation:alloc,fleet_reserved:reserved,eff_alloc:effAlloc,retail_build:buildTotal,groups:groups,total_units:retail.length}; });
+  return {intake:plan.intake,serviceMonths:plan.serviceMonths,fleetUnits:plan.fleetUnits,perModel:out}; }
 function loanerMatchUnit(stock,inv){ for(let i=0;i<inv.length;i++){ if(stock&&inv[i].stock.indexOf(stock)===0) return inv[i]; } return null; }
 function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], releasing=0;
   (s.loaner_units||[]).forEach(e=>{ let stock=String(e.stock||"").trim(); if(!stock) return;
@@ -896,21 +897,23 @@ function fleetTargets(res){ let out={}; MODELS.forEach(model=>{ let r=res.seas[m
     out[model]=[]; for(let m=0;m<12;m++) out[model].push(xround(r[m]+r[(m+1)%12],0)); }); return out; }
 function money(n){ n=Math.round(n||0); return (n<0?"-$":"$")+Math.abs(n).toLocaleString(); }
 
-/* ---- power-ranked build sequence (per model) ---- */
+/* ---- power-ranked RETAIL build sequence (per model) ---- */
 function buildSeqBlock(res, model){
-  let bs=res.buildSeq, d=bs&&bs.perModel?bs.perModel[model]:null; if(!d||!d.groups.length) return "";
-  let steps=[], n=0, shownAltNote=false, H=[];
+  let bs=res.buildSeq, d=bs&&bs.perModel?bs.perModel[model]:null; if(!d) return "";
+  let H=[], reservedNote=d.fleet_reserved>0?" · "+d.fleet_reserved+" reserved for loaner fleet (see Loaner section)":"";
+  if(!d.groups.length){
+    return "<div class='bseqwrap'><div class='bseqhd'>Build sequence <span class='bseqsub'>no retail order needed this month for "+esc(model)+" — on-hand + inbound already cover the seasonal target"+reservedNote+"</span></div></div>";
+  }
+  let n=0, shownAltNote=false;
   H.push("<div class='bseqwrap'><div class='bseqhd'>Build sequence <span class='bseqsub'>order in this order · "+
-    d.fleet+" fleet + "+d.retail_build+" retail of "+d.allocation+" allocation"+
-    (bs.intake?" · cascade intake ~"+bs.intake+"/mo":"")+"</span></div><div class='bseq'>");
+    d.retail_build+" of "+d.allocation+" allocation"+reservedNote+"</span></div><div class='bseq'>");
   d.groups.forEach(g=>{
     if(g.tier==="alt" && !shownAltNote){ H.push("<span class='bseqcut'>▸ beyond allocation</span>"); shownAltNote=true; }
     n++;
-    let cls="bstep "+(g.stream==="fleet"?"fleet":"")+(g.tier==="alt"?" alt":"");
-    let tag=g.stream==="fleet"?"<span class='btag'>fleet"+(g.upsideDown?" · <span class='bloss'>loss</span>":"")+"</span>":"";
-    let dts=(g.stream==="retail"&&g.dts!=null)?" <span class='btag'>"+Math.round(g.dts)+"d</span>":"";
+    let cls="bstep"+(g.tier==="alt"?" alt":"");
+    let dts=(g.dts!=null)?" <span class='btag'>"+Math.round(g.dts)+"d</span>":"";
     H.push("<span class='"+cls+"'><span class='bnum'>"+n+".</span><span class='bqty'>"+g.qty+"×</span> "+
-      esc(g.trim)+" <span class='demoei'>"+esc(g.ext)+"/"+esc(g.int)+"</span>"+tag+dts+"</span>");
+      esc(g.trim)+" <span class='demoei'>"+esc(g.ext)+"/"+esc(g.int)+"</span>"+dts+"</span>");
   });
   H.push("</div></div>");
   return H.join("");
@@ -929,6 +932,19 @@ function loanerRender(res){
   let best=null; MODELS.forEach(m=>(board[m]||[]).forEach(p=>{ if(!best||p.netValue>best.netValue) best=p; }));
   if(best) H.push("<div class='lkpi'><div class='lab'>Best used gross</div><div class='big' style='color:var(--teal)'>"+money(best.netValue)+"</div><div class='foot' style='margin:2px 0 0'>"+esc(best.trim)+" "+esc(best.ext)+"/"+esc(best.int)+"</div></div>");
   H.push("</div>");
+
+  // Fleet order this cascade — which combos to bring in for the loaner fleet.
+  // This is netted out of the retail allocation (noted in Order Priority), but is
+  // shown HERE, not mixed into the retail order.
+  let fu=(res.buildSeq&&res.buildSeq.fleetUnits)||[];
+  if(fu.length){
+    H.push("<div class='dc-sub' style='margin-top:4px'>Fleet order this cascade <span class='dc-note'>"+fu.length+" units (~"+res.buildSeq.intake+"/mo) — best preowned economics · netted out of retail allocation</span></div>");
+    H.push("<div class='bseq' style='margin-bottom:14px'>");
+    fu.forEach((u,i)=>{ let e=u.econ, loss=e&&e.upsideDown;
+      H.push("<span class='bstep fleet'><span class='bnum'>"+(i+1)+".</span><span class='bqty'>1×</span> "+
+        esc(u.model)+" "+esc(u.trim)+" <span class='demoei'>"+esc(u.ext)+"/"+esc(u.int)+"</span> <span class='btag'>"+money(u.netValue)+(loss?" <span class='bloss'>loss</span>":"")+"</span></span>"); });
+    H.push("</div>");
+  }
 
   // current in-service fleet + cascading release
   if(plan.rows.length){
@@ -1493,6 +1509,13 @@ window.addEventListener("DOMContentLoaded",function(){
   document.getElementById("loadsample").addEventListener("click",function(){
     document.getElementById("inv").value=SAMPLE.inv; document.getElementById("sales").value=SAMPLE.sales;
     document.getElementById("ordmonth").value=9; markFilled(); computeAndCollapse(); });
+  document.getElementById("resetsettings").addEventListener("click",function(){
+    // Clear stale control-state that can silently distort the order: allocations
+    // / order month / window (pm_set) and the whole loaner setup (pm_loancfg,
+    // pm_fleet, pm_pre). Keeps pasted data, trade log, demos, and roster control.
+    ["pm_set","pm_loancfg","pm_fleet","pm_pre"].forEach(function(k){ try{ localStorage.removeItem(k); }catch(e){} });
+    location.reload();
+  });
   document.getElementById("clearall").addEventListener("click",function(){
     document.getElementById("inv").value=""; document.getElementById("sales").value=""; markFilled();
     document.getElementById("results").innerHTML=""; HAS_RUN=false;

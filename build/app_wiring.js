@@ -316,6 +316,13 @@ window.addEventListener("DOMContentLoaded",function(){
   document.getElementById("loadsample").addEventListener("click",function(){
     document.getElementById("inv").value=SAMPLE.inv; document.getElementById("sales").value=SAMPLE.sales;
     document.getElementById("ordmonth").value=9; markFilled(); computeAndCollapse(); });
+  document.getElementById("resetsettings").addEventListener("click",function(){
+    // Clear stale control-state that can silently distort the order: allocations
+    // / order month / window (pm_set) and the whole loaner setup (pm_loancfg,
+    // pm_fleet, pm_pre). Keeps pasted data, trade log, demos, and roster control.
+    ["pm_set","pm_loancfg","pm_fleet","pm_pre"].forEach(function(k){ try{ localStorage.removeItem(k); }catch(e){} });
+    location.reload();
+  });
   document.getElementById("clearall").addEventListener("click",function(){
     document.getElementById("inv").value=""; document.getElementById("sales").value=""; markFilled();
     document.getElementById("results").innerHTML=""; HAS_RUN=false;
