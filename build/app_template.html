@@ -131,10 +131,10 @@
   details.exp summary::before{content:"▸ ";color:var(--muted)}
   details.exp[open] summary::before{content:"▾ "}
   /* trade log editor */
-  .traderow{display:grid;grid-template-columns:140px 1fr 120px 34px;gap:8px;align-items:center;margin-bottom:6px}
+  .traderow{display:grid;grid-template-columns:120px 92px 78px 66px 56px 78px 34px;gap:7px;align-items:center;margin-bottom:6px}
   .traderow.thead{margin-bottom:4px}
   .traderow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
-  .traderow input{width:100%}
+  .traderow input,.traderow select{width:100%}
   .traderow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 0;font-size:14px}
   .traderow .del:hover{border-color:var(--bad);color:var(--bad)}
   @media(max-width:640px){.traderow{grid-template-columns:1fr 1fr;}.traderow.thead{display:none}}
@@ -282,11 +282,11 @@
         <div class="filerow"><input type="file" id="salesfile" accept=".csv,.txt,.tsv"><span id="salesstat"></span></div></div>
     </div>
     <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
-      <label class="top">Outbound dealer trade log <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— a trade out is a sale out the other door; days-in-stock grades its speed to enter/exit inventory</span></label>
-      <div id="tradeHead" class="traderow thead"><span>Date</span><span>Combo</span><span>Days in stock</span><span></span></div>
+      <label class="top">Outbound dealer trade log <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— a trade out is a sale out the other door; days-in-stock grades its speed to enter/exit inventory. Enter the vehicle as Model + Code + Ext + Int — any paint code is accepted.</span></label>
+      <div id="tradeHead" class="traderow thead"><span>Date</span><span>Model</span><span>Code</span><span>Ext</span><span>Int</span><span>Days</span><span></span></div>
       <div id="tradeRows" class="scrollrows"></div>
       <button class="ghost" id="addTrade" style="margin-top:8px">＋ Add trade</button>
-      <datalist id="combolist"></datalist>
+      <datalist id="codelist"></datalist>
     </div>
     <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
       <label class="top">Demo roster <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— units driven by execs, pulled from sellable inventory. Add a Stock# to pull one; ✕ (or Return) to swap it back in. Demo start sets exact aging &amp; return timing.</span></label>

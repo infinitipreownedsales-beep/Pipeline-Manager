@@ -150,6 +150,9 @@ class Settings:
     demo_pick_min_r180: int = 2          # two sales in 180d = repeat demand, not a whim
     demo_picks_per_model: int = 3        # top combos to surface per model
     demo_vins_per_combo: int = 2         # candidate VINs to offer per combo
+    loaner_picks_per_model: int = 6      # loaner candidates to surface per model
+                                         # (wider than demos so in-stock standard
+                                         #  trims aren't hidden behind the cheapest)
     rate_cap: float = 5.0                # no config sells more than ~5/month
     paperweight_dts: int = 90            # DTS veto: >90 days can never earn a base
     # Carry the 60-day pace as a continuous base and round only once, at the

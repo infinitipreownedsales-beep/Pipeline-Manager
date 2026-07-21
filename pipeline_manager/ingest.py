@@ -171,7 +171,9 @@ def load_inventory(path: str) -> list[InventoryUnit]:
 
     ci = {
         "stock": col("Stock#", "Stock"),
-        "serial": col("Serial"),
+        # Serial IS the VIN in these exports; accept whatever the report labels it
+        # so the Wholesale sheet always has a vehicle identifier to act on.
+        "serial": col("Serial", "VIN", "Vin", "VIN#", "Vin#", "Serial#", "Serial Number"),
         "status": col("Status"),
         "my": col("MY"),
         "model_line": col("Model Line"),

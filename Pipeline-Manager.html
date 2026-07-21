@@ -131,10 +131,10 @@
   details.exp summary::before{content:"▸ ";color:var(--muted)}
   details.exp[open] summary::before{content:"▾ "}
   /* trade log editor */
-  .traderow{display:grid;grid-template-columns:140px 1fr 120px 34px;gap:8px;align-items:center;margin-bottom:6px}
+  .traderow{display:grid;grid-template-columns:120px 92px 78px 66px 56px 78px 34px;gap:7px;align-items:center;margin-bottom:6px}
   .traderow.thead{margin-bottom:4px}
   .traderow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
-  .traderow input{width:100%}
+  .traderow input,.traderow select{width:100%}
   .traderow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 0;font-size:14px}
   .traderow .del:hover{border-color:var(--bad);color:var(--bad)}
   @media(max-width:640px){.traderow{grid-template-columns:1fr 1fr;}.traderow.thead{display:none}}
@@ -282,11 +282,11 @@
         <div class="filerow"><input type="file" id="salesfile" accept=".csv,.txt,.tsv"><span id="salesstat"></span></div></div>
     </div>
     <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
-      <label class="top">Outbound dealer trade log <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— a trade out is a sale out the other door; days-in-stock grades its speed to enter/exit inventory</span></label>
-      <div id="tradeHead" class="traderow thead"><span>Date</span><span>Combo</span><span>Days in stock</span><span></span></div>
+      <label class="top">Outbound dealer trade log <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— a trade out is a sale out the other door; days-in-stock grades its speed to enter/exit inventory. Enter the vehicle as Model + Code + Ext + Int — any paint code is accepted.</span></label>
+      <div id="tradeHead" class="traderow thead"><span>Date</span><span>Model</span><span>Code</span><span>Ext</span><span>Int</span><span>Days</span><span></span></div>
       <div id="tradeRows" class="scrollrows"></div>
       <button class="ghost" id="addTrade" style="margin-top:8px">＋ Add trade</button>
-      <datalist id="combolist"></datalist>
+      <datalist id="codelist"></datalist>
     </div>
     <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
       <label class="top">Demo roster <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— units driven by execs, pulled from sellable inventory. Add a Stock# to pull one; ✕ (or Return) to swap it back in. Demo start sets exact aging &amp; return timing.</span></label>
@@ -439,7 +439,7 @@ function parseArrivalMonth(location, eta){
   return 0; }
 function loadInventory(text){
   let rows=parseTable(text), h=findHeader(rows,["Stock#","Model Code","Location"]), cm=colmap(rows[h]);
-  let ci={ stock:pick(cm,"Stock#","Stock"),serial:pick(cm,"Serial"),status:pick(cm,"Status"),my:pick(cm,"MY"),
+  let ci={ stock:pick(cm,"Stock#","Stock"),serial:pick(cm,"Serial","VIN","Vin","VIN#","Vin#","Serial#","Serial Number"),status:pick(cm,"Status"),my:pick(cm,"MY"),
     modelLine:pick(cm,"Model Line"),code:pick(cm,"Model Code"),desc:pick(cm,"Description"),trans:pick(cm,"Trans"),
     ext:pick(cm,"Ext"),int:pick(cm,"Int"),msrp:pick(cm,"MSRP"),inv:pick(cm,"Inv"),loc:pick(cm,"Location"),
     dis:pick(cm,"DIS"),eta:pick(cm,"ETA"),prod:pick(cm,"Production Month") };
@@ -642,9 +642,17 @@ function buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demo
     let need=blocked?0:Math.max(0,xround(orderTarget-proj-agedBrake,0))+ov;
     let rate=projRate(metric,dts,s), excess=Math.max(0,xround(pos.onlot+pos.inbound-3*rate-overstockTarget,0));
     let wholeNow=Math.min(excess,pos.whole.length), mom=metric?metric.momentum:"dormant";
-    let plan=[]; for(let k=0;k<6;k++){ let cal=(s.order_month-1+k)%12;
-      let tgt=Math.max(needFloor,xround(base*seas[model].index[cal],0)), arr=pos.arrivals[cal+1]||0;
-      let ordk=blocked?0:Math.max(0,xround(tgt-chain[k],0)); if(k===0&&!blocked) ordk+=ov;
+    // Six-month plan carries its own prior orders forward and sells down at the
+    // config's DEMAND pace (prate/2 per month), not _proj_rate's 30.4/DTS retail
+    // velocity — so it tops up to the seasonal target instead of re-ordering the
+    // whole target every month. (Mirror of engine.py build_lines.)
+    let planRate=metric?Math.min(s.rate_cap,metric.prate/2):0, onhand=pos.onlot, held=pos.stalled||0;
+    let plan=[]; for(let k=0;k<6;k++){ let cal=(s.order_month-1+k)%12, seasK=seas[model].index[cal];
+      let arr=pos.arrivals[cal+1]||0;
+      onhand=Math.max(held,onhand-planRate*seasK)+arr;
+      let tgt=Math.max(needFloor,xround(base*seasK,0));
+      let ordk=blocked?0:Math.max(0,xround(tgt-onhand,0)); if(k===0&&!blocked) ordk+=ov;
+      onhand+=ordk;
       plan.push({month:cal+1,tgt:tgt,arr:arr,ord:ordk}); }
     let prio=sup?-1:priority(dts,mom,need,proj,orderTarget,seasArr,effDem,i);
     lines.push({model:model,code:code,ext:ext,int:intr,trim:c.trim,key:key,dts:dts,mom:mom,onlot:pos.onlot,inbound:pos.inbound,
@@ -722,13 +730,16 @@ function loanerCandReason(econ,pstat,line){ let src=pstat.modeled?"modeled":(pst
   if(line.dts!==null&&line.dts<=30&&(line.mom==="ACCEL"||line.mom==="steady")) bits.push("fast new-seller — weigh opportunity cost");
   return bits.join(" · "); }
 function allCandidates(res){ let s=res.settings, rm=repMaps(res.inv), pre=res.preowned, out=[];
-  res.lines.forEach(l=>{ if(l.suppressed) return; let model=l.model;
+  res.lines.forEach(l=>{ let model=l.model;
+    let pos=res.positions[l.key], inStock=!!(pos&&pos.onlotUnits&&pos.onlotUnits.length);
+    // suppressed-but-in-stock is still a valid loaner (designate existing stock)
+    if(l.suppressed&&!inStock) return;
     let code=l.key.split("|")[1], tk=model+"|"+code, pstat=pre[tk]; if(!pstat) return;
     let cm=repCostMsrp(l.key,model,code,rm), cost=cm[0], msrp=cm[1]; if(cost<=0&&msrp<=0) return;
     let metric=res.metrics[l.key]||null, rebate=modelRebate(s,model);
     let usedPrice=pstat.modeled?(Math.max(0,cost-rebate)*s.preowned_price_pct):pstat.usedPrice;
     let econ=loanerEconomics(cost,msrp,model,pstat.usedDts,usedPrice,s,rebate);
-    let pos=res.positions[l.key], fresh=pos?pos.onlotUnits.slice().sort((a,b)=>a.dis-b.dis):[];
+    let fresh=pos?pos.onlotUnits.slice().sort((a,b)=>a.dis-b.dis):[];
     let units=fresh.slice(0,s.demo_vins_per_combo).map(u=>({stock:u.stock||"—",vin:(u.serial||u.stock),
       vin_last6:(u.serial||u.stock)?(u.serial||u.stock).slice(-6):"—",dis:Math.round(u.dis),msrp:u.msrp,cost:u.cost,
       year:u.myear||u.my||"",ext_int:u.ext+"/"+u.int}));
@@ -737,11 +748,17 @@ function allCandidates(res){ let s=res.settings, rm=repMaps(res.inv), pre=res.pr
       modeled:pstat.modeled,score:Math.round(score*10)/10,netValue:econ.usedGross,econ:econ,newDts:l.dts,
       onlot:l.onlot,inStock:units.length>0,units:units,reason:loanerCandReason(econ,pstat,l)}); });
   out.sort((a,b)=>b.score-a.score); return out; }
-function loanerCandidates(res){ let s=res.settings, out={}; MODELS.forEach(m=>out[m]=[]);
+function loanerCandidates(res){ let s=res.settings, n=(s.loaner_picks_per_model!==undefined?s.loaner_picks_per_model:6), out={}; MODELS.forEach(m=>out[m]=[]);
   allCandidates(res).forEach(p=>out[p.model].push(p));
-  MODELS.forEach(m=>out[m]=out[m].slice(0,s.demo_picks_per_model)); return out; }
+  MODELS.forEach(m=>{ out[m].sort((a,b)=>((a.inStock?0:1)-(b.inStock?0:1))||(b.score-a.score)); out[m]=out[m].slice(0,n); }); return out; }
+function loanerProgramActive(s){
+  // Fleet reservation must NOT contaminate the core order until the program is
+  // actually set up (else every model's build sequence is seeded with loss picks).
+  let icv=Object.values(s.loaner_icv||{}).some(v=>parseFloat(v||0)>0);
+  let reb=Object.values(s.rebates||{}).some(v=>parseFloat(v||0)>0);
+  return !!(icv||reb||(s.loaner_units&&s.loaner_units.length)||(s.preowned_sales&&s.preowned_sales.length)); }
 function loanerOrderPlan(res){ let s=res.settings, svc=Math.max(1,parseInt(s.loaner_service_months,10)||1);
-  let intake=Math.max(0,Math.round(s.loaner_fleet_target/svc)), ranked=allCandidates(res);
+  let intake=loanerProgramActive(s)?Math.max(0,Math.round(s.loaner_fleet_target/svc)):0, ranked=allCandidates(res);
   let fleetUnits=[], perModel={}; MODELS.forEach(m=>perModel[m]=0);
   if(intake&&ranked.length){ let i=0, guard=0, counts={};
     while(fleetUnits.length<intake && guard<intake*ranked.length+ranked.length){
@@ -832,7 +849,7 @@ function overstock(res){ let rows=[];
   rows.sort((a,b)=>(MODELS.indexOf(a.model)-MODELS.indexOf(b.model))||(b.over-a.over)||(b.wholeNow-a.wholeNow)); return rows; }
 function wholesaleVins(res){ let rows=[];
   res.lines.forEach(l=>{ if(l.wholeNow<=0) return; let units=l.pos.whole.slice().sort((a,b)=>b.dis-a.dis).slice(0,l.wholeNow);
-    units.forEach(u=>{ let vin=u.serial||u.stock; rows.push({stock:u.stock||"—",vin6:vin?vin.slice(-6):"—",year:u.myear||u.my||"",model:u.model,trim:l.trim||u.desc,ei:u.ext+"/"+u.int,dis:Math.round(u.dis)}); }); });
+    units.forEach(u=>{ let vin=u.serial||u.stock; rows.push({stock:u.stock||"—",vin:vin||"—",vin6:vin?vin.slice(-6):"—",year:u.myear||u.my||"",model:u.model,trim:l.trim||u.desc,ei:u.ext+"/"+u.int,dis:Math.round(u.dis)}); }); });
   rows.sort((a,b)=>b.dis-a.dis); rows.forEach((r,i)=>r.num=i+1); return rows; }
 function demoDashboard(res){ let s=res.settings, rows=[];
   res.demoUnits.forEach(u=>{ let dis=Math.round(u.dis), asDemo=dis;
@@ -1114,8 +1131,8 @@ function render(res){
   // 7. WHOLESALE VIN SHEET
   H.push(sec(7,"Wholesale Now — VIN sheet","aged, over-target, non-demo · print & send to other dealers"));
   if(rep.vins.length){ H.push("<div id='print-vin'><h2>WHOLESALE VIN SHEET — "+tb.today.toISOString().slice(0,10)+"</h2></div>");
-    H.push(tbl(["#","Stock #","VIN (last 6)","Year","Model","Trim","Ext/Int","Days in stock"],["num","","","","","","","num"],
-      rep.vins.map(r=>[r.num,esc(r.stock),esc(r.vin6),r.year,r.model,esc(r.trim),esc(r.ei),r.dis])));
+    H.push(tbl(["#","Stock #","VIN","Year","Model","Trim","Ext/Int","Days in stock"],["num","","vincol","","","","","num"],
+      rep.vins.map(r=>[r.num,esc(r.stock),{html:"<span class='vintag'>"+esc(r.vin)+"</span>"},r.year,r.model,esc(r.trim),esc(r.ei),r.dis])));
     H.push("<div class='foot noprint'>Use 🖨 Print (top-right) to print this sheet on its own or with any other dashboards.</div>"); }
   else H.push("<div class='empty'>No units past their selling window.</div>");
 
@@ -1174,7 +1191,7 @@ function getSettings(){
     demo_stocks:readDemos().demo_stocks, demo_starts:readDemos().demo_starts, demo_notes:readDemos().demo_notes, prev_loaners:readLoaners(), aged_memory:[],
     prove_bar:2, swap_threshold:90, rate_cap:5.0, paperweight_dts:90, wholesale_min_age:60, stall_days:120, aged_days:60,
     smooth_base:true, anticipate_demo_returns:true, trades:readTrades(),
-    demo_pick_max_dts:45, demo_pick_min_total:2, demo_pick_min_r180:2, demo_picks_per_model:3, demo_vins_per_combo:2,
+    demo_pick_max_dts:45, demo_pick_min_total:2, demo_pick_min_r180:2, demo_picks_per_model:3, demo_vins_per_combo:2, loaner_picks_per_model:6,
     loaner_fleet_target:numVal("lfleet",20),
     loaner_icv:{QX80:numVal("licv80",0),QX60:numVal("licv60",0),QX65:numVal("licv65",0)},
     loaner_depr_pct:numVal("ldepr",1.25), loaner_depr_base:document.getElementById("lbase").value,
@@ -1239,60 +1256,79 @@ function readPreowned(){
   return out; }
 function persistPreowned(){ try{ localStorage.setItem("pm_pre",(document.getElementById("pre")||{}).value||""); }catch(e){} }
 function restorePreowned(){ try{ let v=localStorage.getItem("pm_pre"); if(v!=null) document.getElementById("pre").value=v; }catch(e){} }
-/* ---- outbound dealer trade log ---- */
-const COMBO_MAP = {};
-function comboLabel(c){ return c.model+" "+(c.trim||"")+" "+c.ext+"/"+c.int+" ("+c.code+")"; }
-function buildComboList(){
-  let dl=document.getElementById("combolist"); dl.innerHTML="";
-  ROSTER.forEach(c=>{ let label=comboLabel(c); COMBO_MAP[label]={model:c.model,code:c.code,ext:c.ext,int:c.int};
-    let o=document.createElement("option"); o.value=label; dl.appendChild(o); });
+/* ---- outbound dealer trade log ----
+   The vehicle is captured as explicit Model + Code + Ext + Int fields, so ANY
+   paint code (present or future) is accepted — no roster membership check and no
+   fixed-length assumption that would silently reject a valid trade. */
+function buildCodeList(){
+  let dl=document.getElementById("codelist"); if(!dl) return; dl.innerHTML="";
+  let seen={};
+  ROSTER.forEach(c=>{ if(seen[c.code]) return; seen[c.code]=1;
+    let o=document.createElement("option"); o.value=c.code; o.label=c.model+" "+(c.trim||""); dl.appendChild(o); });
 }
+function tModelOpts(sel){ return ["QX80","QX60","QX65"].map(m=>"<option "+((sel||"")===m?"selected":"")+">"+m+"</option>").join(""); }
 function addTradeRow(t,prepend){ t=t||{};
   let row=document.createElement("div"); row.className="traderow";
   row.innerHTML =
     "<input type='date' class='t-date' value='"+(t.date||"")+"'>"+
-    "<input class='t-combo' list='combolist' placeholder='pick a combo…' value=\""+(t.label||"")+"\">"+
+    "<select class='t-model'><option value=''>—</option>"+tModelOpts(t.model)+"</select>"+
+    "<input class='t-code' list='codelist' placeholder='code' value=\""+attrq(t.code||"")+"\">"+
+    "<input class='t-ext' placeholder='ext' value=\""+attrq(t.ext||"")+"\">"+
+    "<input class='t-int' placeholder='int' value=\""+attrq(t.int||"")+"\">"+
     "<input type='number' class='t-days' min='0' placeholder='days' value='"+(t.days!=null?t.days:"")+"'>"+
     "<button class='del' title='remove'>✕</button>";
   row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistTrades(); });
-  row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistTrades(); }));
+  row.querySelectorAll("input,select").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistTrades(); }));
   let box=document.getElementById("tradeRows");
   if(prepend && box.firstChild) box.insertBefore(row, box.firstChild); else box.appendChild(row);
   return row;
 }
+// Backward-compat: parse a legacy single-field combo string into parts. Forgiving
+// on paint-code length; used only to migrate previously-saved trades.
 function resolveCombo(label){
-  label=(label||"").trim();
-  if(COMBO_MAP[label]) return COMBO_MAP[label];
+  label=(label||"").trim(); if(!label) return null;
   let p=label.split("|");                              // "QX80|8361|XKJ|A"
-  if(p.length===4) return {model:p[0].trim(),code:p[1].trim(),ext:p[2].trim(),int:p[3].trim()};
-  let m=label.match(/^([A-Za-z0-9]+).*?([A-Za-z0-9]{2,3})\/([A-Za-z0-9])\s*\((\d{4,5})\)/); // "MODEL … EXT/INT (CODE)"
-  if(m) return {model:m[1],code:m[4].slice(0,4),ext:m[2].toUpperCase(),int:m[3].toUpperCase()};
+  if(p.length===4) return {model:p[0].trim(),code:digitsOnly(p[1]).slice(0,4),ext:p[2].trim().toUpperCase(),int:p[3].trim().toUpperCase()};
+  let ei=label.match(/([A-Za-z0-9]{1,4})\/([A-Za-z0-9]{1,2})/);         // any EXT/INT
+  let codeM=label.match(/(\d{4,5})/);                                    // 4-5 digit code
+  let modelM=label.match(/QX\s?(80|60|65)/i);
+  let model=modelM?("QX"+modelM[1]):(codeM?modelFromCode(codeM[1]):"");
+  let code=codeM?codeM[1].slice(0,4):"";
+  if(model&&code&&ei) return {model:model,code:code,ext:ei[1].toUpperCase(),int:ei[2].toUpperCase()};
   return null;
 }
-// Raw row contents — everything the user typed, saved verbatim so nothing is
-// ever lost until they delete the row (survives pipeline changes and reloads).
+// Raw row contents — saved verbatim so nothing is lost until the user deletes it.
 function rawTrades(){
   let out=[];
   document.querySelectorAll("#tradeRows .traderow").forEach(row=>{
+    if(row.classList.contains("thead")) return;
     out.push({date:row.querySelector(".t-date").value,
-              combo:row.querySelector(".t-combo").value,
+              model:row.querySelector(".t-model").value,
+              code:row.querySelector(".t-code").value.trim(),
+              ext:row.querySelector(".t-ext").value.trim(),
+              int:row.querySelector(".t-int").value.trim(),
               days:row.querySelector(".t-days").value});
   });
   return out;
 }
-// Parsed, gradeable trades for the engine (rows that resolve to a combo + days).
+// Gradeable trades for the engine: any row with a code (model inferred from it
+// if blank) and a days value. Ext/Int are free-form and pass through untouched.
 function readTrades(){
   let out=[];
   rawTrades().forEach(r=>{
-    let c=resolveCombo(r.combo);
-    if(!c || r.days==="") return;
-    out.push({date:r.date,model:c.model,code:c.code,ext:c.ext,int:c.int,days:parseFloat(r.days),label:r.combo});
+    let code=digitsOnly(r.code).slice(0,4);
+    if(!code || r.days==="") return;
+    let model=r.model||modelFromCode(code);
+    if(!model) return;
+    out.push({date:r.date,model:model,code:code,ext:r.ext.toUpperCase(),int:r.int.toUpperCase(),days:parseFloat(r.days)});
   });
   return out;
 }
 function persistTrades(){ try{ localStorage.setItem("pm_trades",JSON.stringify(rawTrades())); }catch(e){} }
-function restoreTrades(){ try{ JSON.parse(localStorage.getItem("pm_trades")||"[]")
-  .forEach(r=>addTradeRow({date:r.date,label:r.combo,days:r.days})); }catch(e){} }
+function restoreTrades(){ try{ JSON.parse(localStorage.getItem("pm_trades")||"[]").forEach(r=>{
+  if(r.model!==undefined||r.code!==undefined&&r.ext!==undefined){ addTradeRow(r); }   // new format
+  else { let c=resolveCombo(r.combo); addTradeRow(c?{date:r.date,model:c.model,code:c.code,ext:c.ext,int:c.int,days:r.days}:{date:r.date,days:r.days}); }
+}); }catch(e){} }
 
 /* ---- demo roster (editable) ---- */
 function attrq(v){ return String(v||"").replace(/"/g,"&quot;"); }
@@ -1463,7 +1499,7 @@ window.addEventListener("DOMContentLoaded",function(){
     try{ localStorage.removeItem("pm_inv"); localStorage.removeItem("pm_sales"); }catch(e){} });
   document.getElementById("inv").addEventListener("input",markFilled);
   document.getElementById("sales").addEventListener("input",markFilled);
-  buildComboList();
+  buildCodeList();
   document.getElementById("addTrade").addEventListener("click",function(){ addTradeRow(null,true); persistTrades(); });
   restoreTrades();
   // collapse/expand any dashboard by clicking its header

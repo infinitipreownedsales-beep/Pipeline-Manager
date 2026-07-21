@@ -14,7 +14,7 @@ function getSettings(){
     demo_stocks:readDemos().demo_stocks, demo_starts:readDemos().demo_starts, demo_notes:readDemos().demo_notes, prev_loaners:readLoaners(), aged_memory:[],
     prove_bar:2, swap_threshold:90, rate_cap:5.0, paperweight_dts:90, wholesale_min_age:60, stall_days:120, aged_days:60,
     smooth_base:true, anticipate_demo_returns:true, trades:readTrades(),
-    demo_pick_max_dts:45, demo_pick_min_total:2, demo_pick_min_r180:2, demo_picks_per_model:3, demo_vins_per_combo:2,
+    demo_pick_max_dts:45, demo_pick_min_total:2, demo_pick_min_r180:2, demo_picks_per_model:3, demo_vins_per_combo:2, loaner_picks_per_model:6,
     loaner_fleet_target:numVal("lfleet",20),
     loaner_icv:{QX80:numVal("licv80",0),QX60:numVal("licv60",0),QX65:numVal("licv65",0)},
     loaner_depr_pct:numVal("ldepr",1.25), loaner_depr_base:document.getElementById("lbase").value,
@@ -79,60 +79,79 @@ function readPreowned(){
   return out; }
 function persistPreowned(){ try{ localStorage.setItem("pm_pre",(document.getElementById("pre")||{}).value||""); }catch(e){} }
 function restorePreowned(){ try{ let v=localStorage.getItem("pm_pre"); if(v!=null) document.getElementById("pre").value=v; }catch(e){} }
-/* ---- outbound dealer trade log ---- */
-const COMBO_MAP = {};
-function comboLabel(c){ return c.model+" "+(c.trim||"")+" "+c.ext+"/"+c.int+" ("+c.code+")"; }
-function buildComboList(){
-  let dl=document.getElementById("combolist"); dl.innerHTML="";
-  ROSTER.forEach(c=>{ let label=comboLabel(c); COMBO_MAP[label]={model:c.model,code:c.code,ext:c.ext,int:c.int};
-    let o=document.createElement("option"); o.value=label; dl.appendChild(o); });
+/* ---- outbound dealer trade log ----
+   The vehicle is captured as explicit Model + Code + Ext + Int fields, so ANY
+   paint code (present or future) is accepted — no roster membership check and no
+   fixed-length assumption that would silently reject a valid trade. */
+function buildCodeList(){
+  let dl=document.getElementById("codelist"); if(!dl) return; dl.innerHTML="";
+  let seen={};
+  ROSTER.forEach(c=>{ if(seen[c.code]) return; seen[c.code]=1;
+    let o=document.createElement("option"); o.value=c.code; o.label=c.model+" "+(c.trim||""); dl.appendChild(o); });
 }
+function tModelOpts(sel){ return ["QX80","QX60","QX65"].map(m=>"<option "+((sel||"")===m?"selected":"")+">"+m+"</option>").join(""); }
 function addTradeRow(t,prepend){ t=t||{};
   let row=document.createElement("div"); row.className="traderow";
   row.innerHTML =
     "<input type='date' class='t-date' value='"+(t.date||"")+"'>"+
-    "<input class='t-combo' list='combolist' placeholder='pick a combo…' value=\""+(t.label||"")+"\">"+
+    "<select class='t-model'><option value=''>—</option>"+tModelOpts(t.model)+"</select>"+
+    "<input class='t-code' list='codelist' placeholder='code' value=\""+attrq(t.code||"")+"\">"+
+    "<input class='t-ext' placeholder='ext' value=\""+attrq(t.ext||"")+"\">"+
+    "<input class='t-int' placeholder='int' value=\""+attrq(t.int||"")+"\">"+
     "<input type='number' class='t-days' min='0' placeholder='days' value='"+(t.days!=null?t.days:"")+"'>"+
     "<button class='del' title='remove'>✕</button>";
   row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistTrades(); });
-  row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistTrades(); }));
+  row.querySelectorAll("input,select").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistTrades(); }));
   let box=document.getElementById("tradeRows");
   if(prepend && box.firstChild) box.insertBefore(row, box.firstChild); else box.appendChild(row);
   return row;
 }
+// Backward-compat: parse a legacy single-field combo string into parts. Forgiving
+// on paint-code length; used only to migrate previously-saved trades.
 function resolveCombo(label){
-  label=(label||"").trim();
-  if(COMBO_MAP[label]) return COMBO_MAP[label];
+  label=(label||"").trim(); if(!label) return null;
   let p=label.split("|");                              // "QX80|8361|XKJ|A"
-  if(p.length===4) return {model:p[0].trim(),code:p[1].trim(),ext:p[2].trim(),int:p[3].trim()};
-  let m=label.match(/^([A-Za-z0-9]+).*?([A-Za-z0-9]{2,3})\/([A-Za-z0-9])\s*\((\d{4,5})\)/); // "MODEL … EXT/INT (CODE)"
-  if(m) return {model:m[1],code:m[4].slice(0,4),ext:m[2].toUpperCase(),int:m[3].toUpperCase()};
+  if(p.length===4) return {model:p[0].trim(),code:digitsOnly(p[1]).slice(0,4),ext:p[2].trim().toUpperCase(),int:p[3].trim().toUpperCase()};
+  let ei=label.match(/([A-Za-z0-9]{1,4})\/([A-Za-z0-9]{1,2})/);         // any EXT/INT
+  let codeM=label.match(/(\d{4,5})/);                                    // 4-5 digit code
+  let modelM=label.match(/QX\s?(80|60|65)/i);
+  let model=modelM?("QX"+modelM[1]):(codeM?modelFromCode(codeM[1]):"");
+  let code=codeM?codeM[1].slice(0,4):"";
+  if(model&&code&&ei) return {model:model,code:code,ext:ei[1].toUpperCase(),int:ei[2].toUpperCase()};
   return null;
 }
-// Raw row contents — everything the user typed, saved verbatim so nothing is
-// ever lost until they delete the row (survives pipeline changes and reloads).
+// Raw row contents — saved verbatim so nothing is lost until the user deletes it.
 function rawTrades(){
   let out=[];
   document.querySelectorAll("#tradeRows .traderow").forEach(row=>{
+    if(row.classList.contains("thead")) return;
     out.push({date:row.querySelector(".t-date").value,
-              combo:row.querySelector(".t-combo").value,
+              model:row.querySelector(".t-model").value,
+              code:row.querySelector(".t-code").value.trim(),
+              ext:row.querySelector(".t-ext").value.trim(),
+              int:row.querySelector(".t-int").value.trim(),
               days:row.querySelector(".t-days").value});
   });
   return out;
 }
-// Parsed, gradeable trades for the engine (rows that resolve to a combo + days).
+// Gradeable trades for the engine: any row with a code (model inferred from it
+// if blank) and a days value. Ext/Int are free-form and pass through untouched.
 function readTrades(){
   let out=[];
   rawTrades().forEach(r=>{
-    let c=resolveCombo(r.combo);
-    if(!c || r.days==="") return;
-    out.push({date:r.date,model:c.model,code:c.code,ext:c.ext,int:c.int,days:parseFloat(r.days),label:r.combo});
+    let code=digitsOnly(r.code).slice(0,4);
+    if(!code || r.days==="") return;
+    let model=r.model||modelFromCode(code);
+    if(!model) return;
+    out.push({date:r.date,model:model,code:code,ext:r.ext.toUpperCase(),int:r.int.toUpperCase(),days:parseFloat(r.days)});
   });
   return out;
 }
 function persistTrades(){ try{ localStorage.setItem("pm_trades",JSON.stringify(rawTrades())); }catch(e){} }
-function restoreTrades(){ try{ JSON.parse(localStorage.getItem("pm_trades")||"[]")
-  .forEach(r=>addTradeRow({date:r.date,label:r.combo,days:r.days})); }catch(e){} }
+function restoreTrades(){ try{ JSON.parse(localStorage.getItem("pm_trades")||"[]").forEach(r=>{
+  if(r.model!==undefined||r.code!==undefined&&r.ext!==undefined){ addTradeRow(r); }   // new format
+  else { let c=resolveCombo(r.combo); addTradeRow(c?{date:r.date,model:c.model,code:c.code,ext:c.ext,int:c.int,days:r.days}:{date:r.date,days:r.days}); }
+}); }catch(e){} }
 
 /* ---- demo roster (editable) ---- */
 function attrq(v){ return String(v||"").replace(/"/g,"&quot;"); }
@@ -303,7 +322,7 @@ window.addEventListener("DOMContentLoaded",function(){
     try{ localStorage.removeItem("pm_inv"); localStorage.removeItem("pm_sales"); }catch(e){} });
   document.getElementById("inv").addEventListener("input",markFilled);
   document.getElementById("sales").addEventListener("input",markFilled);
-  buildComboList();
+  buildCodeList();
   document.getElementById("addTrade").addEventListener("click",function(){ addTradeRow(null,true); persistTrades(); });
   restoreTrades();
   // collapse/expand any dashboard by clicking its header

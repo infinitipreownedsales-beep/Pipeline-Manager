@@ -28,7 +28,7 @@ function overstock(res){ let rows=[];
   rows.sort((a,b)=>(MODELS.indexOf(a.model)-MODELS.indexOf(b.model))||(b.over-a.over)||(b.wholeNow-a.wholeNow)); return rows; }
 function wholesaleVins(res){ let rows=[];
   res.lines.forEach(l=>{ if(l.wholeNow<=0) return; let units=l.pos.whole.slice().sort((a,b)=>b.dis-a.dis).slice(0,l.wholeNow);
-    units.forEach(u=>{ let vin=u.serial||u.stock; rows.push({stock:u.stock||"—",vin6:vin?vin.slice(-6):"—",year:u.myear||u.my||"",model:u.model,trim:l.trim||u.desc,ei:u.ext+"/"+u.int,dis:Math.round(u.dis)}); }); });
+    units.forEach(u=>{ let vin=u.serial||u.stock; rows.push({stock:u.stock||"—",vin:vin||"—",vin6:vin?vin.slice(-6):"—",year:u.myear||u.my||"",model:u.model,trim:l.trim||u.desc,ei:u.ext+"/"+u.int,dis:Math.round(u.dis)}); }); });
   rows.sort((a,b)=>b.dis-a.dis); rows.forEach((r,i)=>r.num=i+1); return rows; }
 function demoDashboard(res){ let s=res.settings, rows=[];
   res.demoUnits.forEach(u=>{ let dis=Math.round(u.dis), asDemo=dis;
@@ -310,8 +310,8 @@ function render(res){
   // 7. WHOLESALE VIN SHEET
   H.push(sec(7,"Wholesale Now — VIN sheet","aged, over-target, non-demo · print & send to other dealers"));
   if(rep.vins.length){ H.push("<div id='print-vin'><h2>WHOLESALE VIN SHEET — "+tb.today.toISOString().slice(0,10)+"</h2></div>");
-    H.push(tbl(["#","Stock #","VIN (last 6)","Year","Model","Trim","Ext/Int","Days in stock"],["num","","","","","","","num"],
-      rep.vins.map(r=>[r.num,esc(r.stock),esc(r.vin6),r.year,r.model,esc(r.trim),esc(r.ei),r.dis])));
+    H.push(tbl(["#","Stock #","VIN","Year","Model","Trim","Ext/Int","Days in stock"],["num","","vincol","","","","","num"],
+      rep.vins.map(r=>[r.num,esc(r.stock),{html:"<span class='vintag'>"+esc(r.vin)+"</span>"},r.year,r.model,esc(r.trim),esc(r.ei),r.dis])));
     H.push("<div class='foot noprint'>Use 🖨 Print (top-right) to print this sheet on its own or with any other dashboards.</div>"); }
   else H.push("<div class='empty'>No units past their selling window.</div>");
 

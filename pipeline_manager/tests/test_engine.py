@@ -142,15 +142,46 @@ def test_projection_need_target_match_grid():
         assert l.overstock_target == (g["tgt_m"] or 0), f"{key} target"
 
 
-def test_six_month_plan_matches_grid():
+def test_six_month_plan_targets_match_grid_and_orders_carry_forward():
     res = _run()
     plan = _load("plan_ref.json")
     lines = {l.key: l for l in res.lines}
+    # Monthly TARGET and ARRIVALS are unchanged from the workbook grid.
     for key, months in plan.items():
         got = lines[key].monthly_plan
         for i, exp in enumerate(months):
-            for f in ("tgt", "arr", "ord"):
+            for f in ("tgt", "arr"):
                 assert (got[i][f] or 0) == (exp[f] or 0), f"{key} month {i} {f}"
+    # ORDERS now carry the plan's own prior orders forward and sell down at the
+    # config's demand pace (prate/2), so a later month tops up to target instead
+    # of re-ordering it whole. Reconstruct that rolling sim and require an exact
+    # match (this is the documented, corrected behavior).
+    s = res.settings
+    ov = {}
+    for e in s.overrides:
+        ov[e["key"]] = ov.get(e["key"], 0) + int(e.get("qty", 0))
+    for l in res.lines:
+        m = res.metrics.get(l.key)
+        pos = res.positions.get(l.key)
+        stalled = pos.stalled if pos else 0
+        blocked = l.suppressed or l.eff_demote
+        nf = 0 if l.base == 0 else 1
+        rate = min(s.rate_cap, m.prate / 2) if m else 0.0
+        onhand = float(l.onlot)
+        for k in range(6):
+            cal = (s.order_month - 1 + k) % 12
+            sk = res.seasonality[l.model][cal]
+            arr = pos.arrivals.get(cal + 1, 0) if pos else 0
+            onhand = max(stalled, onhand - rate * sk) + arr
+            tgt = max(nf, xround(l.base * sk))
+            expected = 0 if blocked else max(0, xround(tgt - onhand))
+            if k == 0 and not blocked:
+                expected += ov.get(l.key, 0)
+            onhand += expected
+            assert l.monthly_plan[k]["ord"] == expected, f"{l.key} m{k}"
+    # The QX65 six-month total must be sane (the double-count bug summed to ~65).
+    q65 = sum(p["ord"] for l in res.lines if l.model == "QX65" for p in l.monthly_plan)
+    assert q65 < 40, f"QX65 six-month plan still inflated: {q65}"
 
 
 def test_order_priority_ranking_matches_workbook():
@@ -393,8 +424,8 @@ def test_loaner_board_ranks_by_used_gross_and_flags_bonus():
     board = reports.loaner_board(res)
     assert set(board) == {"QX80", "QX60", "QX65"}
     for picks in board.values():
-        # sorted by score, descending
-        assert picks == sorted(picks, key=lambda p: -p["score"])
+        # in-stock candidates first (you can designate them today), then by score
+        assert picks == sorted(picks, key=lambda p: (0 if p["in_stock"] else 1, -p["score"]))
         for p in picks:
             assert "used_gross" in p["econ"] and "bonus_ok" in p["econ"]
 
@@ -415,7 +446,9 @@ def test_measured_preowned_overrides_modeled():
 def test_build_sequence_reserves_fleet_and_power_ranks_retail():
     inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
     sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    # ICV set -> the loaner program is active, so the fleet reserves slots.
     s = Settings(order_month=9, loaner_fleet_target=20, loaner_service_months=4,
+                 loaner_icv={"QX80": 650, "QX60": 500, "QX65": 500},
                  allocations={"QX80": 50, "QX60": 100, "QX65": 100})
     res = engine.run(inv, sales, s, today=_AS_OF)
     bs = reports.build_sequence(res)
@@ -429,6 +462,11 @@ def test_build_sequence_reserves_fleet_and_power_ranks_retail():
         streams = [g["stream"] for g in d["groups"]]
         if d["fleet"] and "retail" in streams:
             assert streams.index("fleet") < streams.index("retail")
+    # program inactive by default -> no fleet reservation contaminates the order
+    s_off = Settings(order_month=9)
+    bs_off = reports.build_sequence(engine.run(inv, sales, s_off, today=_AS_OF))
+    assert bs_off["intake"] == 0
+    assert all(d["fleet"] == 0 for d in bs_off["per_model"].values())
     # decay 0 keeps a combo's units contiguous (whole combo before the next)
     s0 = Settings(order_month=9, loaner_fleet_target=0, order_unit_decay=0.0)
     g0 = reports.build_sequence(engine.run(inv, sales, s0, today=_AS_OF))["per_model"]["QX80"]["groups"]

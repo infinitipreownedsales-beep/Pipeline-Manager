@@ -772,18 +772,35 @@ def build_lines(s, metrics, seas, positions, aged_brakes, override_map, windows,
             key, model, dts, momentum, need, proj_at_arr, order_target,
             seas_arr, eff_demote, i)
 
-        # Six-month rolling plan: per month, the seasonal target (always shown,
-        # even for demoted combos), what arrives, and what to order. A manual
-        # override lands once, on the first order month.
+        # Six-month rolling plan. Each month shows the seasonal target, what
+        # arrives, and what to order. Crucially this carries its OWN prior orders
+        # forward: on-hand sells down at the config's seasonal pace, then takes in
+        # scheduled inbound arrivals AND the units this plan already ordered, so a
+        # later month only tops up the gap to target instead of re-ordering the
+        # whole target every month (which otherwise multiplies a 6-month plan into
+        # ~6x the real need and spikes on a seasonal peak).
+        # Plan sell-down uses the config's actual monthly DEMAND pace (prate is
+        # per 60 days -> /2 per month), NOT the projection's _proj_rate. The
+        # latter takes max(pace, 30.4/DTS), and 30.4/DTS is retail *velocity*
+        # (how fast one unit sells once on the lot), not how many sell per month.
+        # For a fast-but-thin combo (DTS 7, two lifetime sales) that reads ~4/mo
+        # of phantom demand, evaporating inventory every month and making the plan
+        # re-order the full target repeatedly. Pace keeps carried units on hand.
         blocked = suppressed or eff_demote
+        plan_rate = min(s.rate_cap, metric.prate / 2) if metric else 0.0
+        onhand = float(pos.onlot)
+        held = float(pos.stalled)
         monthly_plan = []
         for k in range(6):
             cal = (s.order_month - 1 + k) % 12
-            tgt = max(need_floor, xround(base * seas[model][cal]))
+            seas_k = seas[model][cal]
             arr = pos.arrivals.get(cal + 1, 0)
-            order_k = 0 if blocked else max(0, xround(tgt - chain[k]))
+            onhand = max(held, onhand - plan_rate * seas_k) + arr
+            tgt = max(need_floor, xround(base * seas_k))
+            order_k = 0 if blocked else max(0, xround(tgt - onhand))
             if k == 0 and not blocked:
                 order_k += override_qty
+            onhand += order_k          # carry ordered units forward
             monthly_plan.append({"month": cal + 1, "tgt": tgt, "arr": arr, "ord": order_k})
 
         lines.append(OrderLine(

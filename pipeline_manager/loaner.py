@@ -230,7 +230,12 @@ def _all_candidates(res) -> list:
     pre = res.preowned
     out = []
     for l in res.lines:
-        if l.suppressed:
+        pos = res.positions.get(l.key)
+        in_stock = bool(pos and pos.onlot_units)
+        # A discontinued combo you can't reorder is still a valid loaner if you
+        # already own one — you designate existing inventory into service. Only
+        # skip a suppressed combo when there is nothing on the lot to designate.
+        if l.suppressed and not in_stock:
             continue
         model = l.model
         code = l.key.split("|")[1]
@@ -249,7 +254,6 @@ def _all_candidates(res) -> list:
                       if pstat.modeled else pstat.used_price)
         econ = loaner_economics(cost, msrp, model, pstat.used_dts, used_price, s,
                                 rebate=rebate)
-        pos = res.positions.get(l.key)
         fresh = sorted(pos.onlot_units, key=lambda u: u.dis) if pos else []
         units = [{
             "stock": u.stock or "—", "vin": (u.serial or u.stock),
@@ -272,12 +276,28 @@ def _all_candidates(res) -> list:
 
 def loaner_candidates(res) -> dict:
     """Per model, the best configs to designate as loaners, VIN-led from current
-    sellable inventory (like the executive demo board)."""
+    sellable inventory. In-stock candidates surface first (you can designate one
+    today) so standard trims you own aren't hidden behind a cheaper order-only
+    combo; then by preowned economics."""
     s = res.settings
+    n = getattr(s, "loaner_picks_per_model", 6)
     out = {m: [] for m in MODELS}
     for p in _all_candidates(res):
         out[p["model"]].append(p)
-    return {m: out[m][:s.demo_picks_per_model] for m in MODELS}
+    for m in MODELS:
+        out[m].sort(key=lambda p: (0 if p["in_stock"] else 1, -p["score"]))
+    return {m: out[m][:n] for m in MODELS}
+
+
+def loaner_program_active(s) -> bool:
+    """True only when the loaner program has actually been set up. Until then the
+    fleet must NOT reserve slots out of the core order — an un-configured program
+    would otherwise seed every model's build sequence with loss-making picks and
+    make the order look broken. Active = any ICV set, any rebate set, a fleet
+    roster entered, or preowned data pasted."""
+    icv = any(float(v or 0) > 0 for v in (s.loaner_icv or {}).values())
+    reb = any(float(v or 0) > 0 for v in (s.rebates or {}).values())
+    return bool(icv or reb or (s.loaner_units or []) or (s.preowned_sales or []))
 
 
 def loaner_order_plan(res) -> dict:
@@ -289,11 +309,13 @@ def loaner_order_plan(res) -> dict:
     Cascade intake = fleet_target / service_months (to hold the target in service
     when each unit serves that many months, one cascades in as one cascades out).
     Slots are filled round-robin over the best-preowned combos so the fleet spans
-    the strongest economics rather than piling onto a single config.
+    the strongest economics rather than piling onto a single config. Returns an
+    empty plan until the program is actually configured, so it never contaminates
+    the core order by default.
     """
     s = res.settings
     svc = max(1, int(s.loaner_service_months))
-    intake = max(0, round(s.loaner_fleet_target / svc))
+    intake = max(0, round(s.loaner_fleet_target / svc)) if loaner_program_active(s) else 0
     ranked = _all_candidates(res)                # best preowned first
     fleet_units, per_model = [], {m: 0 for m in MODELS}
     if intake and ranked:

@@ -55,7 +55,7 @@ function parseArrivalMonth(location, eta){
   return 0; }
 function loadInventory(text){
   let rows=parseTable(text), h=findHeader(rows,["Stock#","Model Code","Location"]), cm=colmap(rows[h]);
-  let ci={ stock:pick(cm,"Stock#","Stock"),serial:pick(cm,"Serial"),status:pick(cm,"Status"),my:pick(cm,"MY"),
+  let ci={ stock:pick(cm,"Stock#","Stock"),serial:pick(cm,"Serial","VIN","Vin","VIN#","Vin#","Serial#","Serial Number"),status:pick(cm,"Status"),my:pick(cm,"MY"),
     modelLine:pick(cm,"Model Line"),code:pick(cm,"Model Code"),desc:pick(cm,"Description"),trans:pick(cm,"Trans"),
     ext:pick(cm,"Ext"),int:pick(cm,"Int"),msrp:pick(cm,"MSRP"),inv:pick(cm,"Inv"),loc:pick(cm,"Location"),
     dis:pick(cm,"DIS"),eta:pick(cm,"ETA"),prod:pick(cm,"Production Month") };
@@ -258,9 +258,17 @@ function buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demo
     let need=blocked?0:Math.max(0,xround(orderTarget-proj-agedBrake,0))+ov;
     let rate=projRate(metric,dts,s), excess=Math.max(0,xround(pos.onlot+pos.inbound-3*rate-overstockTarget,0));
     let wholeNow=Math.min(excess,pos.whole.length), mom=metric?metric.momentum:"dormant";
-    let plan=[]; for(let k=0;k<6;k++){ let cal=(s.order_month-1+k)%12;
-      let tgt=Math.max(needFloor,xround(base*seas[model].index[cal],0)), arr=pos.arrivals[cal+1]||0;
-      let ordk=blocked?0:Math.max(0,xround(tgt-chain[k],0)); if(k===0&&!blocked) ordk+=ov;
+    // Six-month plan carries its own prior orders forward and sells down at the
+    // config's DEMAND pace (prate/2 per month), not _proj_rate's 30.4/DTS retail
+    // velocity — so it tops up to the seasonal target instead of re-ordering the
+    // whole target every month. (Mirror of engine.py build_lines.)
+    let planRate=metric?Math.min(s.rate_cap,metric.prate/2):0, onhand=pos.onlot, held=pos.stalled||0;
+    let plan=[]; for(let k=0;k<6;k++){ let cal=(s.order_month-1+k)%12, seasK=seas[model].index[cal];
+      let arr=pos.arrivals[cal+1]||0;
+      onhand=Math.max(held,onhand-planRate*seasK)+arr;
+      let tgt=Math.max(needFloor,xround(base*seasK,0));
+      let ordk=blocked?0:Math.max(0,xround(tgt-onhand,0)); if(k===0&&!blocked) ordk+=ov;
+      onhand+=ordk;
       plan.push({month:cal+1,tgt:tgt,arr:arr,ord:ordk}); }
     let prio=sup?-1:priority(dts,mom,need,proj,orderTarget,seasArr,effDem,i);
     lines.push({model:model,code:code,ext:ext,int:intr,trim:c.trim,key:key,dts:dts,mom:mom,onlot:pos.onlot,inbound:pos.inbound,
@@ -338,13 +346,16 @@ function loanerCandReason(econ,pstat,line){ let src=pstat.modeled?"modeled":(pst
   if(line.dts!==null&&line.dts<=30&&(line.mom==="ACCEL"||line.mom==="steady")) bits.push("fast new-seller — weigh opportunity cost");
   return bits.join(" · "); }
 function allCandidates(res){ let s=res.settings, rm=repMaps(res.inv), pre=res.preowned, out=[];
-  res.lines.forEach(l=>{ if(l.suppressed) return; let model=l.model;
+  res.lines.forEach(l=>{ let model=l.model;
+    let pos=res.positions[l.key], inStock=!!(pos&&pos.onlotUnits&&pos.onlotUnits.length);
+    // suppressed-but-in-stock is still a valid loaner (designate existing stock)
+    if(l.suppressed&&!inStock) return;
     let code=l.key.split("|")[1], tk=model+"|"+code, pstat=pre[tk]; if(!pstat) return;
     let cm=repCostMsrp(l.key,model,code,rm), cost=cm[0], msrp=cm[1]; if(cost<=0&&msrp<=0) return;
     let metric=res.metrics[l.key]||null, rebate=modelRebate(s,model);
     let usedPrice=pstat.modeled?(Math.max(0,cost-rebate)*s.preowned_price_pct):pstat.usedPrice;
     let econ=loanerEconomics(cost,msrp,model,pstat.usedDts,usedPrice,s,rebate);
-    let pos=res.positions[l.key], fresh=pos?pos.onlotUnits.slice().sort((a,b)=>a.dis-b.dis):[];
+    let fresh=pos?pos.onlotUnits.slice().sort((a,b)=>a.dis-b.dis):[];
     let units=fresh.slice(0,s.demo_vins_per_combo).map(u=>({stock:u.stock||"—",vin:(u.serial||u.stock),
       vin_last6:(u.serial||u.stock)?(u.serial||u.stock).slice(-6):"—",dis:Math.round(u.dis),msrp:u.msrp,cost:u.cost,
       year:u.myear||u.my||"",ext_int:u.ext+"/"+u.int}));
@@ -353,11 +364,17 @@ function allCandidates(res){ let s=res.settings, rm=repMaps(res.inv), pre=res.pr
       modeled:pstat.modeled,score:Math.round(score*10)/10,netValue:econ.usedGross,econ:econ,newDts:l.dts,
       onlot:l.onlot,inStock:units.length>0,units:units,reason:loanerCandReason(econ,pstat,l)}); });
   out.sort((a,b)=>b.score-a.score); return out; }
-function loanerCandidates(res){ let s=res.settings, out={}; MODELS.forEach(m=>out[m]=[]);
+function loanerCandidates(res){ let s=res.settings, n=(s.loaner_picks_per_model!==undefined?s.loaner_picks_per_model:6), out={}; MODELS.forEach(m=>out[m]=[]);
   allCandidates(res).forEach(p=>out[p.model].push(p));
-  MODELS.forEach(m=>out[m]=out[m].slice(0,s.demo_picks_per_model)); return out; }
+  MODELS.forEach(m=>{ out[m].sort((a,b)=>((a.inStock?0:1)-(b.inStock?0:1))||(b.score-a.score)); out[m]=out[m].slice(0,n); }); return out; }
+function loanerProgramActive(s){
+  // Fleet reservation must NOT contaminate the core order until the program is
+  // actually set up (else every model's build sequence is seeded with loss picks).
+  let icv=Object.values(s.loaner_icv||{}).some(v=>parseFloat(v||0)>0);
+  let reb=Object.values(s.rebates||{}).some(v=>parseFloat(v||0)>0);
+  return !!(icv||reb||(s.loaner_units&&s.loaner_units.length)||(s.preowned_sales&&s.preowned_sales.length)); }
 function loanerOrderPlan(res){ let s=res.settings, svc=Math.max(1,parseInt(s.loaner_service_months,10)||1);
-  let intake=Math.max(0,Math.round(s.loaner_fleet_target/svc)), ranked=allCandidates(res);
+  let intake=loanerProgramActive(s)?Math.max(0,Math.round(s.loaner_fleet_target/svc)):0, ranked=allCandidates(res);
   let fleetUnits=[], perModel={}; MODELS.forEach(m=>perModel[m]=0);
   if(intake&&ranked.length){ let i=0, guard=0, counts={};
     while(fleetUnits.length<intake && guard<intake*ranked.length+ranked.length){
