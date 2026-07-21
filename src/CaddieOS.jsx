@@ -193,8 +193,8 @@ const IMP_FIELDS={
   axis:["spin axis","spinaxis","side spin","sidespin","side angle","launch direction","horizontal launch","direction","axis"],
   date:["date","time","timestamp","datetime","date/time","shot time"]
 };
-const impNorm=h=>String(h||"").toLowerCase().replace(/[()]/g," ").replace(/[_\-]/g," ")
-  .replace(/\b(yds|yards|yard|mph|rpm|deg|degrees|ft|feet|m)\b/g," ")
+const impNorm=h=>String(h||"").replace(/^﻿/,"").toLowerCase().replace(/[()]/g," ").replace(/[_\-]/g," ")
+  .replace(/\b(yd|yds|yards|yard|mph|rpm|deg|degrees|ft|feet|m)\b/g," ")
   .replace(/[^a-z0-9 /]/g," ").replace(/\s+/g," ").trim();
 function impLoftWedge(deg){
   if(deg>=44&&deg<=48) return "PW";
@@ -206,6 +206,7 @@ function impLoftWedge(deg){
 function impRecognizeClub(raw){
   if(raw==null) return null;
   let s=String(raw).trim().toLowerCase().replace(/°/g,"").replace(/\s+/g," ");
+  s=s.replace(/\s*-.*$/,"").trim();   // SC4 tags clubs like "9i - " / "GW - " — drop the tag
   if(!s) return null;
   const a={"driver":"Dr","dr":"Dr","d":"Dr","1w":"Dr","1 wood":"Dr","3 wood":"3W","3w":"3W",
     "5 wood":"5W","5w":"5W","7 wood":"7W","7w":"7W","pw":"PW","pitching wedge":"PW",
@@ -270,6 +271,19 @@ function impParse(text){
 const impMed=a=>{const s=a.slice().sort((x,y)=>x-y);const m=s.length>>1;return s.length%2?s[m]:(s[m-1]+s[m])/2;};
 const impQ=(a,q)=>{const s=a.slice().sort((x,y)=>x-y);const p=(s.length-1)*q,b=Math.floor(p),r=p-b;
   return s[b+1]!==undefined?s[b]+r*(s[b+1]-s[b]):s[b];};
+// Effort windows (half / three-quarter / full) for the scoring wedge. The SC4 export
+// doesn't label swing effort, so we INFER it: exclude short chips, then split the
+// committed wedge carries into three distance bands. Effort tracks carry (and, on
+// this monitor, club speed), so the low band is the half swing and the high band the
+// full swing. Returns null when there aren't enough shots to split reliably.
+const impWindows=carries=>{
+  const cs=carries.filter(c=>c>=35).sort((a,b)=>a-b);
+  if(cs.length<9) return null;
+  const band=a=>[Math.round(impQ(a,0.25)),Math.round(impQ(a,0.75))];
+  const t=Math.floor(cs.length/3);
+  const w={half:band(cs.slice(0,t)),tq:band(cs.slice(t,2*t)),fs:band(cs.slice(2*t))};
+  return (w.half[1]<=w.tq[1]&&w.tq[1]<=w.fs[1])?w:null;   // sane, monotonic bands only
+};
 function impClean(rows){
   const removed={unusable:0,impossible:0,duplicate:0,mishit:0};
   const seen=new Set(); const step=[];
@@ -300,15 +314,19 @@ function impClean(rows){
     clubs[k]={n:kept.length,carry:Math.round(m2),lowN:Math.round(impQ(cs,0.2)),hiN:Math.round(impQ(cs,0.8)),
       sd:Math.round(Math.sqrt(cs.reduce((a,b)=>a+(b-m2)*(b-m2),0)/cs.length)),
       shortRate:Math.round(cs.filter(c=>c<m2-8).length/cs.length*100),side,
-      spdLo:spd?spd.lo:null,spdHi:spd?spd.hi:null};}
+      spdLo:spd?spd.lo:null,spdHi:spd?spd.hi:null,
+      windows:k==="52m"?impWindows(cs):null};}   // inferred half/¾/full for the scoring wedge
   return {clubs,removed,unknownLabels:[...new Set(unknown.filter(Boolean))],kept:step.length};
 }
 const IMP_ORDER=["Dr","2W","3W","4W","5W","7W","9W","1H","2H","3H","4H","5H","6H",
   "2i","3i","4i","5i","6i","7i","8i","9i","PW","SW","LW"];
 function impToProfile(clubs){
   const carries={}; for(const k of IMP_ORDER){if(clubs[k])carries[k]=clubs[k].carry;}
-  const w52fs=clubs["52m"]?[clubs["52m"].lowN,clubs["52m"].hiN]:null;
-  return {carries,w52fs};
+  const mw=clubs["52m"];
+  // Full effort windows when we could infer them, else just the full-smooth window.
+  const w52=mw?(mw.windows||{fs:[mw.lowN,mw.hiN]}):null;
+  const w52fs=mw?[mw.lowN,mw.hiN]:null;   // kept for backward compatibility
+  return {carries,w52,w52fs};
 }
 // ====================================================================
 
@@ -488,11 +506,11 @@ export default function CaddieOS(){
   const applyImport=()=>{
     if(!imp) return;
     const carries={...P.carries,...imp.patch.carries};
-    const w52=imp.patch.w52fs?{...P.w52,fs:imp.patch.w52fs}:P.w52;
+    const w52=imp.patch.w52?{...P.w52,...imp.patch.w52}:P.w52;
     const clubStats={...(P.clubStats||{}),...imp.clubs};
     const p={...P,carries,w52,clubStats,updated:new Date().toISOString()};
     setP(p); store.set("caddie:profile",p);
-    const n=Object.keys(imp.patch.carries).length+(imp.patch.w52fs?1:0);
+    const n=Object.keys(imp.patch.carries).length+(imp.patch.w52?1:0);
     setMeMsg(`Imported ${imp.raw} shots — ${n} clubs learned. Your caddie now runs on your real numbers.`);
     setImp(null); setImpErr("");
   };
@@ -1057,7 +1075,9 @@ export default function CaddieOS(){
               </div>
               {dropped>0&&<div style={{fontSize:11,color:"#8a8a8e",marginBottom:6}}>Filtered out {dropped}: {[rm.mishit&&rm.mishit+" mishits",rm.duplicate&&rm.duplicate+" duplicates",rm.impossible&&rm.impossible+" impossible readings",rm.unusable&&rm.unusable+" blank rows"].filter(Boolean).join(" · ")}.</div>}
               {imp.unknownLabels.length>0&&<div style={{fontSize:11,color:"#c2410c",marginBottom:6}}>⚠ Couldn't recognize {imp.unknownLabels.length} label(s): {imp.unknownLabels.slice(0,6).join(", ")} — those shots were skipped.</div>}
-              {imp.patch.w52fs&&<div style={{fontSize:11,color:"#1a7f37",marginBottom:8}}>Your 52° full-smooth window set to {imp.patch.w52fs[0]}–{imp.patch.w52fs[1]}y.</div>}
+              {imp.patch.w52&&(()=>{const w=imp.patch.w52;return w.half&&w.tq?
+                <div style={{fontSize:11,color:"#1a7f37",marginBottom:8}}>Wedge effort windows learned from swing speed — half {w.half[0]}–{w.half[1]}, ¾ {w.tq[0]}–{w.tq[1]}, full {w.fs[0]}–{w.fs[1]}y.</div>
+                :<div style={{fontSize:11,color:"#1a7f37",marginBottom:8}}>Your scoring-wedge full window set to {w.fs[0]}–{w.fs[1]}y.</div>;})()}
               <div style={{display:"flex",gap:8}}>
                 <button onClick={applyImport} style={{...S.btn,flex:1,background:"#1a3a2e",color:"#86efac"}}>IMPORT — LEARN MY GAME</button>
                 <button onClick={()=>{setImp(null);setImpErr("");}} style={{...S.btn,background:"#f2f2f7",color:"#111"}}>Cancel</button>
