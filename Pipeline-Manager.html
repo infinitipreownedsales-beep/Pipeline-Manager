@@ -1752,23 +1752,22 @@ function executiveReport(res){
   let maxMo=parseFloat(s.loaner_max_months)||7, svc=parseInt(s.loaner_service_months,10)||3;
   function addMonths(m){ let x=new Date(today.getTime()); x.setMonth(x.getMonth()+Math.round(m)); return x.toISOString().slice(0,10); }
   let retireBy=addMonths(maxMo), retailWin=MONTHS[((today.getMonth()+svc)%12+12)%12];
-  let srecs=(res.serviceRecs&&res.serviceRecs.items)||[];
-  let lines=srecs.slice(0,15);
+  // Same measure and ranking as the on-screen Service Loaner Selection — one
+  // source of truth, so the printed report always matches the screen.
+  let sel=(res.selection&&res.selection.units)||[], p=(res.selection&&res.selection.policy)||{};
+  let lines=sel.slice(0,15);
+  let wd=(p.method==="flat")?("$"+Number(p.flat).toLocaleString()+" flat"):((p.rate||0).toFixed(2)+"%/mo of "+(p.base==="msrp"?"MSRP":"invoice"));
 
-  H.push("<div id='print-exec'><h2>SERVICE LOANER — EXECUTIVE REPORT — "+today.toISOString().slice(0,10)+"</h2></div>");
-  H.push("<div class='foot' style='margin-bottom:8px'>Recommended Service Loaner vehicles, ranked by best-case owner outcome after searching every duration &amp; timing. Full incentives and math sit behind each unit's breakdown on the Recommendation screen.</div>");
-  if(!lines.length){ H.push("<div class='empty'>No in-stock candidates — paste inventory with cost/MSRP and set incentives.</div>"); }
+  H.push("<div id='print-exec'><h2>Service Loaner Selection — "+today.toISOString().slice(0,10)+"</h2></div>");
+  H.push("<div class='foot' style='margin-bottom:8px'>Which unit to place, ranked by what the used department makes or loses. Store policy: write-down "+wd+", "+(p.months||3)+" months in service. Difference = expected retail − expected cost.</div>");
+  if(!lines.length){ H.push("<div class='empty'>No in-stock candidates — paste inventory with unit cost and set incentives.</div>"); }
   else H.push(tbl(
-    ["#","Vehicle","Stock / VIN","Recommendation","Best strategy","Est. used value","Best-case outcome","Why"],
-    ["num","","","","","num","num",""],
-    lines.map(function(it){ let e=it.p.econ, bs=it.strategy?it.strategy.best:null, outN=(it.effNet!=null?it.effNet:it.loanerNet);
-      let veh=(it.year||"")+" "+it.model+" "+esc(it.trim)+" "+esc(it.ext);
-      let recCol=it.tier==="provide"?"var(--good)":(it.tier==="accept"?"var(--warn)":"var(--muted)");
-      let plan=bs?(bs.months+"mo · "+(bs.pd>0?MONTHS[bs.placeMonth-1]:"now")+"→"+MONTHS[bs.retailMonth-1]+(bs.bonusOk?" ✓":"")):"—";
-      return [ it.rank, {html:veh}, {html:esc(it.stock)+" <span class='dim vintag'>…"+esc(it.vin6||"")+"</span>"},
-        {html:"<b style='color:"+recCol+"'>"+esc(it.rec)+"</b>"}, {html:"<span class='dim'>"+plan+"</span>"}, money(e.usedPrice),
-        {html:"<b style='color:"+(outN>=0?"var(--good)":"var(--bad)")+"'>"+outMoney(outN)+"</b>"},
-        {html:"<span class='dim'>"+esc(it.reason)+"</span>"} ]; })));
+    ["Rank","Unit","Expected cost","Expected retail","Difference"],
+    ["num","","num","num","num"],
+    lines.map(function(u){
+      let veh=(u.year||"")+" "+u.model+" "+esc(u.trim)+" · "+esc(u.uid);
+      return [ u.rank, {html:veh}, money0(u.expectedCost), money0(u.expectedRetail),
+        {html:"<b style='color:"+(u.difference>=0?"var(--good)":"var(--bad)")+"'>"+moneySign(u.difference)+"</b>"} ]; })));
 
   // Section 2 — recommended acquisitions
   let recs=res.acquisitionRecs||[];
@@ -1837,41 +1836,7 @@ function loanerRender(res){
   }
 
   // candidate board — best combos to put INTO the program
-  let anyModeled=false; MODELS.forEach(m=>(board[m]||[]).forEach(p=>{ if(p.modeled) anyModeled=true; }));
-  H.push("<div class='dc-sub' style='margin-top:16px'>Best units to put into the program <span class='dc-note'>ranked by preowned profit after ICV + write-down + bonus, and whether they clear the used window</span></div>");
-  H.push("<div class='demogrid'>");
-  MODELS.forEach(model=>{ let picks=board[model]||[];
-    H.push("<div class='democol'><div class='demohd'>"+model+"</div>");
-    if(!picks.length){ H.push("<div class='empty'>No candidate — need cost/MSRP on units in the pipeline.</div>"); }
-    picks.forEach((p,i)=>{ let e=p.econ, medal=["①","②","③","④","⑤"][i]||("#"+(i+1));
-      H.push("<div class='loancard democard"+(i===0?" top":"")+(e.upsideDown?" upside":"")+"'>"+
-        "<div class='demorank'>"+medal+"</div>"+
-        "<div class='demotrim'>"+esc(p.trim)+" <span class='demoei'>"+esc(p.ext)+"/"+esc(p.int)+"</span></div>"+
-        "<div class='money'><span class='net' style='color:"+(p.netValue>=0?"var(--good)":"var(--bad)")+"'>"+money(p.netValue)+"</span><span class='netlab'>preowned "+(p.netValue>=0?"profit":"LOSS")+"</span>"+
-          " "+srcBadge(p)+"</div>"+
-        (e.upsideDown?"<div class='lwarn'>⚠ upside-down — written-down cost is above street value; you'd re-buy it cheaper at auction</div>":"")+
-        "<div class='demowhy' style='margin:4px 0 6px'>"+dtsCell(p.usedDts)+" <span class='demometa'>used turn</span> "+
-          (e.bonusOk?"<span class='lbonus-ok'>✓ $"+Math.round(e.bonus).toLocaleString()+" bonus</span>":"<span class='lbonus-no'>✗ misses bonus</span>")+"</div>"+
-        "<div class='lchips'>"+
-          "<span class='lchip'>invoice "+money(e.cost)+"</span>"+
-          (e.rebate?"<span class='lchip'>rebate <b>-"+money(e.rebate).slice(1)+"</b></span><span class='lchip'>cheapest-new "+money(e.cheapestNew)+"</span>":"")+
-          "<span class='lchip'>ICV <b>-"+money(e.icvTotal).slice(1)+"</b></span>"+
-          "<span class='lchip'>write-down <b>-"+money(e.deprTotal).slice(1)+"</b></span>"+
-          (e.bonus?"<span class='lchip'>bonus <b>-"+money(e.bonus).slice(1)+"</b></span>":"")+
-          "<span class='lchip'>adj cost <b>"+money(e.adjustedCost)+"</b></span>"+
-          "<span class='lchip'>resale @ "+money(e.usedPrice)+(p.histResale?" <span class='dim'>("+money(p.histResale.low).slice(1)+"–"+money(p.histResale.high).slice(1)+")</span>":"")+"</span>"+
-        "</div>");
-      H.push("<details class='fbreak'><summary>▸ Financial breakdown</summary><div class='fbwrap'>"+fbRows(p)+"</div></details>");
-      if(p.units.length){ p.units.forEach(u=>{
-        H.push("<div class='demovin'><span class='vintag'>VIN …"+esc(u.vin_last6)+"</span>"+
-          "<span class='demound'>"+esc(u.year)+" "+esc(u.ext_int)+" · "+u.dis+"d"+(u.cost?" · cost "+money(u.cost):"")+"</span></div>"); });
-      } else H.push("<div class='demovin order'>none in stock — earmark one on the next order</div>");
-      H.push("</div>"); });
-    H.push("</div>"); });
-  H.push("</div>");
-  let anyHistory=MODELS.some(m=>(board[m]||[]).some(p=>p.usedSrc==="history"));
-  if(anyHistory) H.push("<div class='foot'><b>📊 history</b> picks price resale from your own 10-year used-car sales — the config's real median resale at ~"+(res.settings.loaner_service_months||3)+" months of age (see the <b>Loaner Depreciation</b> section below), with the comp count in parentheses. That's the street value you could re-buy the unit for, so it's what you should carry internally. The write-downs (ICV + monthly write-down + bonus) only help the cost <i>when the unit retires from the fleet</i>; preowned profit is what's left after that.</div>");
-  if(anyModeled) H.push("<div class='foot'>“modeled” picks (no history match — e.g. a brand-new nameplate) fall back to "+Math.round((res.settings.preowned_price_pct||0.8)*100)+"% of your <b>cheapest new price</b> (invoice − rebate) and used turn ≈ new days-to-sell — a deliberately conservative floor until history exists for that model.</div>");
+  H.push("<div class='foot' style='margin-top:14px'>Which unit to place is decided in the <b>Service Loaner Selection</b> section at the top — one ranked list, one number per unit. This section tracks units already in service and when to retire them.</div>");
   return H.join("");
 }
 
@@ -1976,8 +1941,11 @@ function serviceSelectionRender(res){
   let wd = (p.method==="flat") ? ("$"+Number(p.flat).toLocaleString()+" flat") : (p.rate.toFixed(2)+"% per month of "+(p.base==="msrp"?"MSRP":"invoice"));
   H.push("<div class='polhdr'>Store policy: write-down "+wd+", "+p.months+" months in service. The same settings apply to every unit; changing them re-ranks the list.</div>");
   let top=units[0], second=units[1];
-  let lead="Place the <b>"+esc(top.year+" "+top.model+" "+top.trim)+"</b> ("+esc(top.uid)+"). Difference "+diffCell(top.difference)+
-    (second?", "+diffCell(top.difference-second.difference)+" better than the next unit.":".");
+  let margin=second?(top.difference-second.difference):null;
+  let lead="Place the <b>"+esc(top.year+" "+top.model+" "+top.trim)+"</b> ("+esc(top.uid)+"). Difference "+diffCell(top.difference);
+  if(second) lead += margin>0 ? (", <span style='color:var(--good);font-weight:700'>$"+margin.toLocaleString()+"</span> better than the next unit.")
+                              : ", tied with the next unit.";
+  else lead += ".";
   if(need>1) lead+=" Service needs "+need+" — the top "+need+" rows are the picks.";
   H.push("<div class='lead'>"+lead+"</div>");
   H.push("<table class='seltbl'><thead><tr><th>Rank</th><th>Unit</th><th class='r'>Expected cost</th><th class='r'>Expected retail</th><th class='r'>Difference</th></tr></thead><tbody>");
