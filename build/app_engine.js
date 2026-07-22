@@ -504,6 +504,48 @@ function loanerTiming(res, u, monthsInService, model, year){
   return {options:opts, best:best, monthsInService:Math.round(monthsInService*10)/10,
     remaining:Math.round((maxMo-monthsInService)*10)/10};
 }
+// SERVICE LOANER RECOMMENDATION ENGINE — the hero. Answers "Service needs X
+// vehicles; which X should we sacrifice?" Every in-stock unit is scored on the
+// opportunity advantage of placing it into Service Loaner vs. keeping it new
+// retail: advantage = loanerNet − expected new-retail profit. Ranked best-first;
+// the top `need` are the answer, marked profitable ("Place") or a necessary
+// sacrifice, and units that earn more as retail read "Keep Retail".
+function serviceLoanerRecs(res){
+  let s=res.settings, need=Math.max(0,parseInt(s.service_need,10)||0);
+  let newGross=parseFloat(s.new_retail_gross||0)||0;
+  let items=[];
+  (res.loanerAll||[]).forEach(p=>{ (p.units||[]).forEach(u=>{
+    let loanerNet=p.econ.net, advantage=loanerNet-newGross;
+    let conf = (p.usedSrc==="measured")?"High"
+             : (p.usedSrc==="history")?((p.histResale&&p.histResale.conf>=0.7)?"High":((p.histResale&&p.histResale.conf>=0.4)?"Medium":"Low"))
+             : "Low";
+    items.push({p:p,u:u,model:p.model,trim:p.trim,ext:p.ext,int:p.int,stock:u.stock,vin:u.vin,vin6:u.vin_last6,
+      year:u.year||p.year||"",dis:u.dis,loanerNet:loanerNet,newGross:newGross,advantage:advantage,conf:conf}); }); });
+  items.sort((a,b)=>b.advantage-a.advantage);
+  let placedProfitable=0;
+  items.forEach((it,i)=>{ it.rank=i+1;
+    it.vsNext=(i+1<items.length)?Math.round(it.advantage-items[i+1].advantage):null;   // opportunity gap to next
+    if(it.rank<=need){ it.tier="provide";
+      it.rec=(it.advantage>0)?"Place Into Service Loaner":"Provide — lowest sacrifice";
+      if(it.advantage>0) placedProfitable++; }
+    else if(it.advantage>0){ it.tier="accept"; it.rec="Acceptable if additional vehicles are needed"; }
+    else { it.tier="keep"; it.rec="Keep Retail"; }
+    it.reason=serviceRecReason(it); });
+  return {need:need, newGross:newGross, items:items,
+    provided:Math.min(need,items.length), profitable:placedProfitable,
+    allNegative: items.length>0 && items.every(x=>x.advantage<=0)};
+}
+function serviceRecReason(it){
+  let net=it.loanerNet, adv=it.advantage, a=Math.abs(Math.round(adv));
+  if(it.tier==="provide"){
+    return (adv>0)
+      ? "Projected used value plus current factory programs (ICV/velocity) more than offset expected depreciation — nets "+deMoney(net)+" and beats keeping it new retail by $"+a.toLocaleString()+"."
+      : "Service needs the vehicle and this is the lowest-cost unit to sacrifice — loaner path nets "+deMoney(net)+", only $"+a.toLocaleString()+" under its retail opportunity.";
+  }
+  if(it.tier==="accept") return "Positive outcome ("+deMoney(net)+") but weaker than the higher-ranked units — use only if more vehicles are needed.";
+  return "Expected to earn more as a new retail unit — the loaner path nets "+deMoney(net)+", about $"+a.toLocaleString()+" below its retail opportunity.";
+}
+function deMoney(n){ n=Math.round(n||0); return (n<0?"-$":"+$")+Math.abs(n).toLocaleString(); }
 // Recommended acquisitions (Add 6): configs our own history says perform well
 // as loaners but which we're thin on today. Pure data — no hardcoded picks.
 function acquisitionRecs(res){
@@ -569,6 +611,7 @@ function runEngine(inv,sales,s,today){
   res.loanerAll=allCandidates(res);           // flat, score-ranked (for the exec report)
   res.loanerBoard=loanerCandidates(res);
   res.acquisitionRecs=acquisitionRecs(res);
+  res.serviceRecs=serviceLoanerRecs(res);
   res.loanerFleetPlan=loanerFleet(res);
   res.buildSeq=buildSequence(res);
   return res; }

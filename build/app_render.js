@@ -180,24 +180,23 @@ function executiveReport(res){
   let maxMo=parseFloat(s.loaner_max_months)||7, svc=parseInt(s.loaner_service_months,10)||3;
   function addMonths(m){ let x=new Date(today.getTime()); x.setMonth(x.getMonth()+Math.round(m)); return x.toISOString().slice(0,10); }
   let retireBy=addMonths(maxMo), retailWin=MONTHS[((today.getMonth()+svc)%12+12)%12];
-  // vehicle-level lines from in-stock candidates, ranked by projected net
-  let lines=[]; (res.loanerAll||[]).forEach(p=>(p.units||[]).forEach(u=>lines.push({p:p,u:u})));
-  lines.sort((a,b)=>b.p.econ.net-a.p.econ.net); lines=lines.slice(0,15);
+  let srecs=(res.serviceRecs&&res.serviceRecs.items)||[];
+  let lines=srecs.slice(0,15);
 
-  H.push("<div id='print-exec'><h2>EXECUTIVE LOANER REPORT — "+today.toISOString().slice(0,10)+"</h2></div>");
-  H.push("<div class='foot' style='margin-bottom:8px'>Top loaner opportunities in current inventory, ranked by projected net after ICV, write-down, velocity bonus, resale &amp; holding. Retire-by and retail window assume placement today. Mileage omitted — no odometer feed in the source data.</div>");
-  if(!lines.length){ H.push("<div class='empty'>No in-stock loaner candidates — paste inventory with cost/MSRP and set incentives.</div>"); }
+  H.push("<div id='print-exec'><h2>SERVICE LOANER — EXECUTIVE REPORT — "+today.toISOString().slice(0,10)+"</h2></div>");
+  H.push("<div class='foot' style='margin-bottom:8px'>Recommended Service Loaner vehicles from current inventory, ranked by opportunity advantage (loaner outcome vs. keeping the unit in new retail). Return window and retire-by assume placement today. Mileage omitted — no odometer feed in the source data.</div>");
+  if(!lines.length){ H.push("<div class='empty'>No in-stock candidates — paste inventory with cost/MSRP and set incentives.</div>"); }
   else H.push(tbl(
-    ["#","Stock","VIN","Vehicle","Days in inv","Rebate","ICV","Velocity","Retire by","Retail window","Est retail","Projected gross","Conf","Why it ranks"],
-    ["num","","vincol","","num","num","num","num","","","num","num","",""],
-    lines.map(function(x,i){ let p=x.p,u=x.u,e=p.econ;
-      let veh=(u.year||p.year||"")+" "+p.model+" "+esc(p.trim)+" "+esc((u.ext_int||"").split("/")[0]);
-      let conf=p.histResale?Math.round(p.histResale.conf*100)+"%":"<span class='dim'>—</span>";
-      return [ i+1, esc(u.stock), {html:"<span class='vintag'>"+esc(u.vin||"")+"</span>"}, {html:veh},
-        (u.dis!=null?u.dis:"—"), money(e.rebate), money(e.icvTotal), (e.bonus?money(e.bonus):"<span class='dim'>"+money(e.velocityAvail)+"*</span>"),
-        {html:"<span class='dim'>"+retireBy+"</span>"}, {html:"<b>"+retailWin+"</b>"},
-        money(e.usedPrice), {html:"<b style='color:"+(e.usedGross>=0?"var(--good)":"var(--bad)")+"'>"+money(e.usedGross)+"</b>"+(e.holding?" <span class='dim'>("+money(e.net)+" net)</span>":"")},
-        {html:conf}, {html:"<span class='dim'>"+esc(p.reason)+"</span>"} ]; })));
+    ["#","Stock","VIN","Vehicle","MSRP","Rebate","ICV","Velocity","Return by","Est. used value","Expected outcome","Conf","Recommendation","Reason"],
+    ["num","","vincol","","num","num","num","num","","num","num","","",""],
+    lines.map(function(it){ let p=it.p,e=p.econ;
+      let veh=(it.year||"")+" "+it.model+" "+esc(it.trim)+" "+esc(it.ext);
+      let recCol=it.tier==="provide"?"var(--good)":(it.tier==="accept"?"var(--warn)":"var(--muted)");
+      return [ it.rank, esc(it.stock), {html:"<span class='vintag'>"+esc(it.vin||"")+"</span>"}, {html:veh},
+        money(e.msrp), money(e.rebate), money(e.icvTotal), (e.bonus?money(e.bonus):"<span class='dim'>"+money(e.velocityAvail)+"*</span>"),
+        {html:"<span class='dim'>"+retireBy+"</span>"}, money(e.usedPrice),
+        {html:"<b style='color:"+(it.loanerNet>=0?"var(--good)":"var(--bad)")+"'>"+outMoney(it.loanerNet)+"</b>"},
+        {html:it.conf}, {html:"<b style='color:"+recCol+"'>"+esc(it.rec)+"</b>"}, {html:"<span class='dim'>"+esc(it.reason)+"</span>"} ]; })));
   H.push("<div class='foot' style='margin-top:4px'>* velocity bonus shown greyed = unit is projected to miss the eligibility window.</div>");
 
   // Section 2 — recommended acquisitions
@@ -334,11 +333,46 @@ function seasHeading(vals, nowM){ // where demand is trending over the next ~2 m
   if(fwd<-0.08) return "<span style='color:var(--warn)'>▼ demand easing</span>";
   return "<span style='color:var(--muted)'>▬ steady</span>"; }
 
+function outMoney(n){ n=Math.round(n||0); return (n<0?"-$":"+$")+Math.abs(n).toLocaleString(); }
+function heroRecommendation(res){
+  let r=res.serviceRecs; if(!r||!r.items.length) return "<div class='empty'>No in-stock candidates — paste inventory with cost/MSRP, then set the Service loaner need.</div>";
+  let H=[];
+  H.push("<div class='hero-head'>Service needs <b>"+r.need+"</b> vehicle"+(r.need===1?"":"s")+" — "+
+    (r.need>0?("here "+(r.need===1?"is the one":"are the "+r.need)+" to provide"):"set the need up top to get a recommendation")+"</div>");
+  if(r.need>0 && r.profitable<r.need){
+    H.push("<div class='hero-note'>"+(r.profitable>0?(r.profitable+" of "+r.need+" beat a new-retail sale"):("None currently beat a new-retail sale — opportunity cost "+money(r.newGross)+" each"))+
+      " — the rest are ranked as the <b>lowest-cost units to sacrifice</b>. Enter this month's ICV / velocity programs in ✎ Data to unlock more profitable placements.</div>");
+  } else {
+    H.push("<div class='hero-sub'>Ranked by <b>opportunity advantage</b> — the financial gain of placing each unit into Service Loaner versus keeping it in new retail. Open a card for the full breakdown.</div>");
+  }
+  let show=r.items.slice(0, Math.max(Math.min(r.items.length,r.need+3), Math.min(r.items.length,6)));
+  H.push("<div class='hero-grid'>");
+  show.forEach(it=>{
+    let edge=it.tier==="provide"?"var(--good)":(it.tier==="accept"?"var(--warn)":"var(--muted)");
+    let confCol=it.conf==="High"?"var(--good)":(it.conf==="Medium"?"var(--warn)":"var(--muted)");
+    H.push("<div class='hero-card tier-"+it.tier+"'><span class='hr-edge' style='background:"+edge+"'></span>");
+    H.push("<div class='hr-top'><span class='hr-rank'>#"+it.rank+"</span><span class='hr-badge'>"+esc(it.rec)+"</span></div>");
+    H.push("<div class='hr-veh'>"+esc((it.year||"")+" "+it.model+" "+it.trim)+" <span class='demoei'>"+esc(it.ext)+"/"+esc(it.int)+"</span></div>");
+    H.push("<div class='hr-stock'>Stock "+esc(it.stock)+" · VIN …"+esc(it.vin6||"")+(it.dis!=null?" · "+it.dis+"d in stock":"")+"</div>");
+    H.push("<div class='hr-out'><span class='lab'>Expected outcome</span><span class='amt' style='color:"+(it.loanerNet>=0?"var(--good)":"var(--bad)")+"'>"+outMoney(it.loanerNet)+"</span><span class='hr-conf'>Confidence: <b style='color:"+confCol+"'>"+it.conf+"</b></span></div>");
+    H.push("<div class='hr-adv'>vs. keeping it retail: <b style='color:"+(it.advantage>=0?"var(--good)":"var(--bad)")+"'>"+outMoney(it.advantage)+"</b>"+
+      (it.vsNext!=null&&it.tier==="provide"&&it.vsNext>0?" · +$"+it.vsNext.toLocaleString()+" over the next-best alternative":"")+"</div>");
+    H.push("<div class='hr-reason'>"+esc(it.reason)+"</div>");
+    H.push(financialBreakdown(it.p));
+    H.push("</div>");
+  });
+  H.push("</div>");
+  return H.join("");
+}
 function render(res){
   let rep={op:orderPriority(res),over:overstock(res),vins:wholesaleVins(res),demo:demoDashboard(res),fleet:fleetTargets(res)};
   let s=res.settings,tb=res.tb, H=[];
   let fc=retailForecast(res);   // computed once; reused in the Retail Forecast section
   let latest=tb.latest?(Math.floor(tb.latest/12)+"-"+String(tb.latest%12).padStart(2,"0")):"—";
+
+  // ★ SERVICE LOANER RECOMMENDATION — the hero: answers "Service needs X; which X?"
+  H.push(sec("★","Service Loaner Recommendation","which vehicles to provide when Service requests them — ranked by opportunity advantage"));
+  H.push(heroRecommendation(res));
 
   // KPI tiles — one per model: what to order now, colored by inventory health
   function hColor(h){ return h.indexOf("tight")>=0?"var(--bad)":(h.indexOf("heavy")>=0?"var(--warn)":(h.indexOf("cold")>=0?"var(--muted)":"var(--good)")); }
@@ -461,16 +495,16 @@ function render(res){
     loaners.push("<div class='foot'>On market = days-in-stock minus the demo period. Never wholesale-listed (miles), and not aged on the inflated days-in-stock.</div>");
   } else loaners.push("<div class='empty'>None flagged. Add returned loaners in ✎ Data (taken + returned dates) so their real market time is right.</div>");
 
-  H.push(sec(4,"Demo Center","execs' best picks · current demos · returned loaners — worked side by side"));
+  H.push(sec(4,"Executive Demo Program","owner / manager / employee demos — a SEPARATE program from Service Loaners"));
   H.push("<div class='democenter'><div class='dc-left'>"+board.join("")+"</div>"+
     "<div class='dc-right'>"+dash.join("")+"<div style='height:12px'></div>"+loaners.join("")+"</div></div>");
 
   // 5. LOANER / ICV PROGRAM
-  H.push(sec(5,"Loaner / ICV Program","which units to cycle through the courtesy fleet for the best preowned profit"));
+  H.push(sec(5,"Service Loaner Program","which units to sacrifice to the Service Loaner fleet for the best preowned profit"));
   H.push(loanerRender(res));
 
   // 5b. LOANER DEPRECIATION INTELLIGENCE — the engine behind the resale prices above
-  if(res.deprActive&&res.depr){ H.push(sec(9,"Loaner Depreciation","what a loaner really resells for — from your own 10-year history · powers the resale prices above")); H.push(depreciationRender(res)); }
+  if(res.deprActive&&res.depr){ H.push(sec(9,"Service Loaner Depreciation","what a Service Loaner really resells for — from your own 10-year history · powers the resale prices above")); H.push(depreciationRender(res)); }
 
   // 6. OVERSTOCK
   H.push(sec(6,"Overstock / Wholesale","over-target metal — order slower; wholesale only what won't sell"));
@@ -519,7 +553,7 @@ function render(res){
     H.push("<details class='exp' style='margin-top:14px'><summary>Data health — "+res.orphans.length+" configs sold but not on the order roster (ordering can't see them; many are discontinued/legacy — expected)</summary><div class='foot'>"+esc(top)+(res.orphans.length>16?" …":"")+"</div></details>"); }
 
   // 10. EXECUTIVE LOANER REPORT — printable worksheet for ownership
-  H.push(sec(10,"Executive Loaner Report","printer-friendly ranked worksheet — top candidates + acquisition targets · print this alone for the meeting"));
+  H.push(sec(10,"Executive Report — Service Loaners","printer-friendly ranked worksheet — recommended units + acquisition targets · print this alone for the meeting"));
   H.push(executiveReport(res));
 
   let root=document.getElementById("results");
@@ -606,11 +640,12 @@ function wireDepr(a, s){
 // Wrap the flat output into one <section class="dash"> per dashboard so print
 // (and anything else) can show/hide them individually.
 function groupSections(root){
-  const titleKey={"Order Priority":"order","6-Month Rolling Order Plan":"plan",
-    "Fleet Stock Target & Seasonality":"fleet","Demo Center":"democenter",
-    "Loaner / ICV Program":"loaner","Loaner Depreciation":"depr",
+  const titleKey={"Service Loaner Recommendation":"recommend",
+    "Order Priority":"order","6-Month Rolling Order Plan":"plan",
+    "Fleet Stock Target & Seasonality":"fleet","Executive Demo Program":"democenter",
+    "Service Loaner Program":"loaner","Service Loaner Depreciation":"depr",
     "Overstock / Wholesale":"overstock","Wholesale Now — VIN sheet":"vins",
-    "Retail Forecast":"forecast","Executive Loaner Report":"execreport"};
+    "Retail Forecast":"forecast","Executive Report — Service Loaners":"execreport"};
   let kids=[].slice.call(root.childNodes), groups=[], cur={key:"summary",title:"Summary",nodes:[]};
   kids.forEach(node=>{
     if(node.nodeType===1 && node.classList && node.classList.contains("sec")){
