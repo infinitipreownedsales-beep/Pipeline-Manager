@@ -393,11 +393,13 @@ function loanerEconomics(cost,msrp,model,usedDts,usedPrice,s,rebate,ctx){
   // wash). Rebate is a customer incentive on a NEW sale, so it's excluded here
   // and handled as opportunity cost instead.
   let factory=icvTotal+bonus+dealerCash;
-  // The manufacturer write-down lowers the cost basis the unit is RETAINED at
-  // when it leaves service (a real benefit to the preowned deal), so it enters
-  // owner net as an effective-cost reduction — which makes it an adjustable
-  // strategic lever the optimizer can sweep and suggest.
-  let ownerNet=(usedPrice||0)+factory-(cost-deprTotal)-recon-holding;
+  // OWNER net = real cash cycle for the whole store. Every dollar counted ONCE:
+  // resale (real market value, which already reflects depreciation) + factory
+  // cash − invoice − recon − holding. The manufacturer write-down is NOT added
+  // here: it is an internal book transfer (new-dept expense = used-dept
+  // basis reduction) that nets to zero across the store, so folding it in would
+  // double-count the depreciation already priced into the resale.
+  let ownerNet=(usedPrice||0)+factory-cost-recon-holding;
   return {cost:Math.round(cost),msrp:Math.round(msrp),rebate:Math.round(rebate),cheapestNew:Math.round(cheapestNew),
     icvTotal:Math.round(icvTotal),deprTotal:Math.round(deprTotal),bonus:Math.round(bonus),bonusOk:bonusOk,velocityAvail:Math.round(velo),
     dealerCash:Math.round(dealerCash),factory:Math.round(factory),ownerNet:Math.round(ownerNet),
@@ -610,29 +612,29 @@ function optimizeStrategy(res, p){
   let durAlt=grid.filter(g=>g.pd===best.pd&&g.months!==best.months).reduce((a,g)=>Math.max(a,up(g.ownerNet-best.ownerNet)),0);
   let seasonAlt=grid.filter(g=>g.months===best.months&&g.pd!==best.pd).reduce((a,g)=>Math.max(a,up(g.ownerNet-best.ownerNet)),0);
   let reconNow=parseFloat(s.loaner_recon||0)||0;
+  // levers ranked by their real effect on OWNER net (write-down is a book
+  // transfer, so it is NOT an owner-net lever — see writedownScan for its
+  // separate departmental effect).
   let sens=[
     {name:"Used retail value", driver:"resale", impact:Math.round(0.05*best.resale), note:"±5% market swing"},
     {name:"Velocity bonus", driver:"velocity", impact:Math.round(veloSwing), note:best.bonusOk?"currently earned":"currently missed"},
     {name:"Service duration", driver:"duration", impact:Math.round(durAlt), note:"best vs. other months"},
     {name:"Placement / retail season", driver:"season", impact:Math.round(seasonAlt), note:"month timing"},
     {name:"ICV allowance", driver:"icv", impact:1000, note:"±$1,000 program"},
-    {name:"Write-down rate", driver:"writedown", impact:Math.abs(evalCombo(best.pd,best.months,{depr:(s.loaner_depr_pct||1.5)+0.5}).ownerNet-best.ownerNet), note:"±0.5%/mo — retained-basis lever"},
   ].sort((a,b)=>b.impact-a.impact);
 
-  // write-down scenario sweep at the best strategy (for suggestion to ownership)
+  // write-down what-if: its ONLY effect is on the used-department's booked gross
+  // (a cost-basis transfer), never on owner net — shown separately and labeled.
   let baseDepr=parseFloat(s.loaner_depr_pct)||1.5;
-  let deprSlope=(best.econ.cost*best.econ.serviceSpan)/100;     // $ owner-net per +1%/mo
   let writedownScan=[1.0,1.25,1.5,1.75,2.0,2.5].map(function(dv){
-    return {pct:dv, ownerNet:evalCombo(best.pd,best.months,{depr:dv}).ownerNet}; });
+    return {pct:dv, usedGross:evalCombo(best.pd,best.months,{depr:dv}).econ.usedGross}; });
 
-  // break-even from the best strategy
+  // break-even from the best strategy (owner net)
   let gap=best.ownerNet;                                   // negative => loss to cover
   let need=Math.max(0,-gap), pctMsrp=msrp>0?(need/msrp*100):0;
-  let deprBE=(deprSlope>0)?(baseDepr+need/deprSlope):null;      // write-down %/mo that reaches break-even
   let levers=[
     {name:"Factory support (ICV + dealer cash + velocity)", need:Math.round(need), unit:"$", kind:"factory"},
     {name:"Used retail value", need:Math.round(need), unit:"$", extra:pctMsrp.toFixed(1)+"% stronger", kind:"resale"},
-    (deprBE!=null&&deprBE<=3.0)?{name:"Write-down rate", target:Math.round(deprBE*100)/100, unit:"%/mo", from:baseDepr, kind:"writedown"}:null,
     (reconNow>0&&reconNow>=need)?{name:"Reconditioning", need:Math.round(need), unit:"$-", kind:"recon"}:null
   ].filter(Boolean);
   let breakeven= gap>=0 ? {profitable:true, gap:0} : {profitable:false, gap:Math.round(need), levers:levers};
@@ -645,8 +647,7 @@ function optimizeStrategy(res, p){
   let solution;
   if(gap>=0) solution={ok:true, text:"Profitable as planned — place "+best.months+" months"+(best.pd>0?" in "+MONTHS[best.placeMonth-1]:" now")+"."};
   else if(levers.length){ let L=levers[0];
-    let how = L.kind==="writedown" ? ("write down at "+L.target+"%/mo (now "+L.from+"%)")
-            : L.kind==="resale" ? ("lift used value by $"+L.need.toLocaleString()+" ("+L.extra+")")
+    let how = L.kind==="resale" ? ("lift used value by $"+L.need.toLocaleString()+" ("+L.extra+")")
             : ("secure $"+L.need.toLocaleString()+" more "+L.name.toLowerCase());
     solution={ok:true, text:"To profit: "+how+" — or retail new for "+deMoney(newGross)+"."};
   } else solution={ok:false, text:"No realistic combination profits — retail new ("+deMoney(newGross)+")."};

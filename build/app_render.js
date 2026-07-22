@@ -148,30 +148,23 @@ function fbRow(lab,val,o){ o=o||{}; let disp;
   else if(o.total) disp="<span class='"+(val<0?"neg":"pos")+"'>"+money(val)+"</span>";
   else disp="<span>"+money(val)+"</span>";
   return "<div class='fbrow"+(o.sub?" sub":"")+(o.total?" total":"")+"'><span>"+lab+"</span>"+disp+"</div>"; }
-// inner rows of the financial breakdown (no wrapper) so it can nest in one panel
-function fbRows(p){ let e=p.econ, row=fbRow, H=[];
-  H.push(row("Invoice / acquisition cost", e.cost));
-  H.push(row("MSRP", e.msrp, {sub:true}));
-  if(e.rebate) H.push(row("Customer rebate (new sells at invoice − this)", e.rebate, {sub:true}));
-  H.push("<div class='fbdiv'>Cost basis while in service ("+e.serviceSpan+" mo)</div>");
-  H.push(row("ICV allowance (one-time)", e.icvTotal, {neg:true}));
-  H.push(row("Write-down / depreciation", e.deprTotal, {neg:true}));
-  if(e.bonus) H.push(row("Velocity bonus (earned)", e.bonus, {neg:true}));
-  else if(e.velocityAvail) H.push("<div class='fbrow sub'><span>Velocity bonus (misses window)</span><span class='dim'>"+money(e.velocityAvail)+" avail</span></div>");
-  H.push(row("= Adjusted cost basis", e.adjustedCost, {total:true}));
-  H.push("<div class='fbdiv'>Resale</div>");
-  H.push("<div class='fbrow'><span>Expected used retail "+srcBadge(p)+"</span><span class='pos'>+"+money(e.usedPrice).slice(1)+"</span></div>");
-  if(e.recon) H.push(row("Estimated reconditioning", e.recon, {neg:true}));
-  H.push(row("= Front-end gross (accounting)", e.usedGross, {total:true}));
-  // Owner economics — the number the check-writer cares about
-  H.push("<div class='fbdiv'>Owner economics — what hits the checkbook</div>");
-  H.push(row("Resale value (real market)", e.usedPrice));
-  if(e.factory) H.push(row("Factory support (ICV + velocity + dealer cash)", e.factory, {pos:true}));
-  H.push(row("Vehicle cost", e.cost, {neg:true}));
-  if(e.deprTotal) H.push(row("Manufacturer write-down (retained-basis reduction)", e.deprTotal, {pos:true}));
+// ONE clean cash statement — every dollar counted once, no stacked frameworks.
+// `e` defaults to the baseline econ but callers pass the BEST-strategy econ so
+// the breakdown matches the recommended outcome shown on the card.
+function fbRows(p, e){ e=e||p.econ; let row=fbRow, H=[];
+  H.push("<div class='fbdiv'>Money in</div>");
+  H.push("<div class='fbrow'><span>Expected resale "+srcBadge(p)+"</span><span class='pos'>+"+money(e.usedPrice).slice(1)+"</span></div>");
+  if(e.icvTotal) H.push(row("ICV allowance (one-time factory cash)", e.icvTotal, {pos:true}));
+  if(e.bonus) H.push(row("Velocity bonus (earned)", e.bonus, {pos:true}));
+  else if(e.velocityAvail) H.push("<div class='fbrow sub'><span>Velocity bonus (misses window)</span><span class='dim'>"+money(e.velocityAvail)+" forfeited</span></div>");
+  if(e.dealerCash) H.push(row("Dealer cash", e.dealerCash, {pos:true}));
+  H.push("<div class='fbdiv'>Money out</div>");
+  H.push(row("Vehicle cost (invoice)", e.cost, {neg:true}));
   if(e.recon) H.push(row("Reconditioning", e.recon, {neg:true}));
   if(e.holding) H.push(row("Holding ("+e.serviceSpan+"mo + used turn)", e.holding, {neg:true}));
   H.push(row("= Owner net profit", e.ownerNet, {total:true}));
+  // write-down shown as an accounting NOTE only — never added to owner net
+  H.push("<div class='fbrow sub' style='margin-top:6px'><span>Note: manufacturer write-down over "+e.serviceSpan+"mo ≈ "+money(e.deprTotal)+"</span><span class='dim'>internal book move (new→used dept) — depreciation is already in the resale, so it is NOT added again</span></div>");
   return H.join(""); }
 function srcBadge(p){
   if(p.usedSrc==="history"){ return "<span class='lhistory' title='resale estimated from your own 10-year history — "+(p.histResale?p.histResale.n:0)+" comparable sales'>📊 history ("+(p.histResale?p.histResale.n:0)+")</span>"; }
@@ -350,13 +343,13 @@ function detailPanel(it){
     let byMonth={}; st.grid.forEach(g=>{ if(!byMonth[g.months]||g.ownerNet>byMonth[g.months].ownerNet) byMonth[g.months]=g; });
     Object.keys(byMonth).map(Number).sort((a,b)=>a-b).forEach(m=>{ let g=byMonth[m];
       H.push("<div class='fbrow"+(g===st.best?" total":"")+"'><span>"+m+" mo → retail "+MONTHS[g.retailMonth-1]+(g.bonusOk?" ✓":"")+"</span><span class='"+(g.ownerNet>=0?"pos":"neg")+"'>"+outMoney(g.ownerNet)+"</span></div>"); });
-    H.push("<div class='fbdiv'>Write-down what-if (owner net at best strategy)</div>");
-    st.writedownScan.forEach(w=>H.push("<div class='fbrow"+(Math.abs(w.pct-st.baseDepr)<0.01?" total":"")+"'><span>"+w.pct.toFixed(2)+"%/mo"+(Math.abs(w.pct-st.baseDepr)<0.01?" (current)":"")+"</span><span class='"+(w.ownerNet>=0?"pos":"neg")+"'>"+outMoney(w.ownerNet)+"</span></div>"));
+    H.push("<div class='fbdiv'>Write-down what-if — used-dept booked gross <span class='dim'>(owner net above is unchanged — this only shifts loss new↔used dept)</span></div>");
+    st.writedownScan.forEach(w=>H.push("<div class='fbrow"+(Math.abs(w.pct-st.baseDepr)<0.01?" total":"")+"'><span>"+w.pct.toFixed(2)+"%/mo"+(Math.abs(w.pct-st.baseDepr)<0.01?" (current)":"")+"</span><span class='"+(w.usedGross>=0?"pos":"neg")+"'>"+outMoney(w.usedGross)+"</span></div>"));
     H.push("<div class='fbdiv'>Sensitivity — what moves the outcome most</div>");
     st.sensitivity.forEach(x=>H.push("<div class='fbrow sub'><span>"+esc(x.name)+" <span class='dim'>("+esc(x.note)+")</span></span><span>±$"+x.impact.toLocaleString()+"</span></div>"));
   }
-  H.push("<div class='fbdiv'>Full financial breakdown</div>");
-  H.push(fbRows(it.p));
+  H.push("<div class='fbdiv'>Full financial breakdown"+(st?" (best strategy)":"")+"</div>");
+  H.push(fbRows(it.p, st?st.best.econ:null));
   H.push("</div></details>");
   return H.join("");
 }
