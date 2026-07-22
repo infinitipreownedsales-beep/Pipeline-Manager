@@ -49,24 +49,28 @@ export function recoveryPlan(rem, lie, ctx) {
   const wedge = ctx.wedgeDist || 100;
   const relOf = k => { const c = bag.find(x => x.k === k); return c ? c.rel : 60; };
   const mostReliable = pool => pool.slice().sort((a, b) => b.rel - a.rel)[0];
-  const maxAdv = MAX_ADVANCE[lie] || 130;
+  // Location context (from the ball placed on the map): which side, and blocked?
+  const side = ctx.side || null;                    // "left" | "right" | "center"
+  const blocked = !!ctx.blocked;                    // trees/obstruction on the line
+  const escapeDir = side === "right" ? "left" : side === "left" ? "right" : "the open side";
+  // Blocked view means you can only chip sideways back into play — no forward layup.
+  const maxAdv = blocked ? 55 : (MAX_ADVANCE[lie] || 130);
   const opts = [];
 
   // ── Option 1: Safe punch-out — steadiest club, back to the short grass ──
   const punchPool = bag.filter(c => c.carry >= 105 && c.carry <= 165);
   const pClub = mostReliable(punchPool.length ? punchPool : bag) || bag[bag.length - 1];
   if (pClub) {
-    const adv = clamp(30, maxAdv, Math.round(pClub.carry * 0.6));   // low punch ≈ 60% carry
+    const adv = clamp(20, maxAdv, Math.round(pClub.carry * 0.6));   // low punch ≈ 60% carry
     const leaves = Math.max(8, rem - adv);
-    // small chance the punch doesn't fully find the fairway
     const ev = +(1 + 0.9 * expectedStrokes(leaves, "FW") + 0.1 * expectedStrokes(leaves, "ROUGH")).toFixed(2);
-    opts.push({ kind: "punch", label: "Punch out", club: pClub.k, leaves, ev,
-      reason: `Your steadiest club back to the short grass — ${leaves} left from a clean lie.` });
+    opts.push({ kind: "punch", label: blocked ? `Chip out ${escapeDir}` : `Punch out ${escapeDir}`, club: pClub.k, leaves, ev,
+      reason: `Steadiest club, ${escapeDir} into the open — ${leaves} left from a clean lie.` });
   }
 
   // ── Option 2: Strategic lay-up — leave your best scoring number ──
   const needed = rem - wedge;
-  if (needed >= 30 && needed <= maxAdv) {
+  if (!blocked && needed >= 30 && needed <= maxAdv) {
     const lClub = mostReliable(bag.filter(c => c.carry >= needed - 8 && c.carry <= needed + 25)) ||
                   bag.find(c => c.carry >= needed) || bag[bag.length - 1];
     if (lClub) {
@@ -95,8 +99,16 @@ export function recoveryPlan(rem, lie, ctx) {
 
   opts.sort((a, b) => a.ev - b.ev);
   const best = opts[0] || null;
-  const objective = lie === "SAND" || lie === "FBUNK" ? "Escape the sand"
-    : rem <= 40 ? "Get it out and up" : (best && best.kind === "layup") ? "Position for your best wedge"
-    : (best && best.kind === "hero") ? "Attack — the window's there" : "Recover — back in play";
-  return { mode: "recovery", objective, options: opts, best, hero };
+  // Name the objective FIRST — the plain-English goal for this exact spot, using
+  // the location context (side/blocked) when we have it, distance when we don't.
+  const sideNote = blocked ? ` — you're blocked ${side === "center" ? "" : side + " "}by trees`
+    : side && side !== "center" ? ` — ${side} of the fairway` : "";
+  let objective;
+  if (blocked) objective = "Get Back in Position";
+  else if (lie === "SAND" || lie === "FBUNK") objective = "Escape the Sand";
+  else if (rem <= 40) objective = "Get It Out and Up";
+  else if (best && best.kind === "layup") objective = `Attack from ${wedge} Yards`;
+  else if (best && best.kind === "hero") objective = "Take the Hero Line";
+  else objective = "Advance Safely";
+  return { mode: "recovery", objective, sideNote, side, blocked, options: opts, best, hero };
 }

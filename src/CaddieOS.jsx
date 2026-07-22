@@ -356,12 +356,36 @@ const smoothPath=pts=>{ if(pts.length<2) return "";
     d+=` C ${c1x.toFixed(1)} ${c1y.toFixed(1)} ${c2x.toFixed(1)} ${c2y.toFixed(1)} ${p2[0]} ${p2[1]}`;}
   return d;};
 
+// Normalized centerline x (0..1, left→right) at depth d (0..1, tee→green).
+const centerX=(path,d)=>{const p=Array.isArray(path)&&path.length>=2?path:[[0,.5],[1,.5]];
+  for(let i=0;i<p.length-1;i++){const[d0,x0]=p[i],[d1,x1]=p[i+1];
+    if(d<=d1||i===p.length-2){const t=Math.max(0,Math.min(1,(d-d0)/((d1-d0)||1)));return x0+(x1-x0)*t;}}
+  return p[p.length-1][1];};
+
+// holeContext(h, d, x) — from a ball placed at normalized (d,x) on hole h, read the
+// location the engine needs: which side of the fairway, and whether trees on that
+// side block the line forward. This is the missing link that lets Recovery Mode
+// know WHERE the ball is, not just how far it sits from the green.
+function holeContext(h,d,x){
+  const cx=centerX(h&&h.path,d);
+  const dx=x-cx;                                    // + = right of center, − = left
+  const side=dx<-0.09?"left":dx>0.09?"right":"center";
+  const off=Math.abs(dx)>0.14;                      // meaningfully off the short grass
+  let blocked=false;
+  const haz=Array.isArray(h&&h.hazards)?h.hazards:[];
+  if(off){const sd=side==="left"?"L":side==="right"?"R":null;
+    blocked=haz.some(z=>z.type==="trees"&&z.side===sd&&(z.from??0)<=d+0.03&&(z.to??1)>=d-0.03);}
+  return {side,blocked,off};
+}
+
 // HoleView — the automatic strategic overview. A clean schematic (not satellite):
 // the fairway BENDS along the hole's real centerline (h.path), hazards are drawn
 // per side and per section (h.hazards) and look like what they are — trees as
 // canopy, water as soft pools, sand as bunkers. The same geometry the engine can
 // read for angle-aware decisions. Falls back to hz text for un-mapped holes.
-const HoleView=({h,P})=>{
+// When onPlace is given, the map becomes tappable: a tap drops the ball marker and
+// reports normalized (d,x) back so the engine learns where the shot finished.
+const HoleView=({h,P,ball,onPlace})=>{
   const HZ=(h.hz||"").toUpperCase();
   const W=220,Ht=300,L=28,Rr=192,uw=Rr-L,teeY=254,greenY=48,span=teeY-greenY;
   const yAt=d=>teeY-Math.max(0,Math.min(1,d))*span;                 // d 0..1 (tee→green) → y
@@ -397,7 +421,13 @@ const HoleView=({h,P})=>{
     const n=Math.max(2,Math.round((to-from)*13));
     for(let k=0;k<=n;k++){const d=from+(to-from)*k/n;const x=cxAt(d)+s*off;const y=yAt(d);feats.push(blob(x,y,dzType(hz.type),hi+"_"+k));}});
   const gx=cxAt(1),gy=greenY,tx=cxAt(0),ty=teeY;
-  return (<svg viewBox={`0 0 ${W} ${Ht}`} style={{width:"100%",maxWidth:300,display:"block",margin:"0 auto"}}>
+  // Tap → normalized (d,x): invert yAt/xAt using the SVG's own coordinate box.
+  const handleTap=onPlace?e=>{const svg=e.currentTarget;const r=svg.getBoundingClientRect();
+    const px=(e.clientX-r.left)/r.width*W, py=(e.clientY-r.top)/r.height*Ht;
+    const x=Math.max(0,Math.min(1,(px-L)/uw)), d=Math.max(0,Math.min(1,(teeY-py)/span));
+    onPlace(d,x);}:undefined;
+  const bx=ball?xAt(ball.x):null, by=ball?yAt(ball.d):null;
+  return (<svg viewBox={`0 0 ${W} ${Ht}`} onClick={handleTap} style={{width:"100%",maxWidth:300,display:"block",margin:"0 auto",cursor:onPlace?"crosshair":"default"}}>
     <rect x={0} y={0} width={W} height={Ht} rx={18} fill="#eef1ea"/>
     {/* bending fairway corridor */}
     <path d={smoothPath(px)} fill="none" stroke="#cddbc9" strokeWidth={fwW+11} strokeLinecap="round" strokeLinejoin="round"/>
@@ -417,6 +447,9 @@ const HoleView=({h,P})=>{
     <circle cx={gx} cy={gy} r={16} fill="#6fae7c" stroke="#3c6a49" strokeWidth={2}/>
     <circle cx={gx} cy={gy} r={2.5} fill="#233b30"/>
     <text x={gx} y={gy-21} textAnchor="middle" fontSize={9} fill="#3c6a49" fontWeight={800}>GREEN</text>
+    {/* placed ball — where the shot finished */}
+    {ball&&<g><circle cx={bx} cy={by} r={7} fill="#fff" stroke="#a3402f" strokeWidth={2.5}/><circle cx={bx} cy={by} r={2.5} fill="#a3402f"/>
+      <text x={bx} y={by-11} textAnchor="middle" fontSize={8.5} fill="#a3402f" fontWeight={800}>ball</text></g>}
   </svg>);
 };
 
@@ -648,7 +681,7 @@ export default function CaddieOS(){
   const logShot=(gain,g,syn,dirOv,endLie,typeOv,penalty)=>{
     const shot={c:sel||"?",from:live.rem,gain,exp:E.chipCarry(sel||"CHIP"),g:g?1:0,p:syn?1:0,h:live.hole+1,lie,dir:dirOv!==undefined?dirOv:dir,
       end:endLie||null,type:typeOv||shotType(live.rem,E.chipCarry(sel||"CHIP")>=live.rem-6,g),tourn:tourn?1:0};
-    let l={...live,strokes:live.strokes+1,shots:[...(live.shots||[]),shot]};
+    let l={...live,strokes:live.strokes+1,shots:[...(live.shots||[]),shot],ballX:null,ballD:null};
     // P6 fix: a Water outcome must apply its penalty in the SAME state update.
     // Previously it called addPenalty() separately, which re-saved from stale state
     // and clobbered the shot — the button looked dead. One update, one save.
@@ -793,12 +826,22 @@ export default function CaddieOS(){
                 {[["Tee","FW"],["Fairway","FW"],["First cut","FIRST"],["Rough","ROUGH"],["Deep","DEEP"],["Bunker","FBUNK"],["Recovery","TREES"]].map(([lab,v])=>{const on=lieLabel===lab;
                   return <button key={lab} className="tapbtn" onClick={()=>{setLie(v);setLieLabel(lab);}} style={{border:"none",borderRadius:20,padding:"10px 14px",fontSize:13,fontWeight:600,cursor:"pointer",background:on?PINE:"#fff",color:on?PAPER:INK,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.06)"}}>{lab}</button>;})}
               </div>
+              {/* Ball placement — the location context Recovery Mode needs. Tap the map
+                  to say where the shot finished; the engine reads side + tree block. */}
+              {isRecoveryLie(lie)&&live.strokes>0&&Array.isArray(H.path)&&(()=>{
+                const loc=live.ballX!=null?holeContext(H,live.ballD,live.ballX):null;
+                const where=loc?(loc.blocked?`blocked ${loc.side} — trees on your line`:loc.side==="center"?"in the middle — clean angle":`${loc.side} of the fairway${loc.off?"":" — clean angle"}`):null;
+                return <div style={{marginBottom:18}}>
+                  <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>{live.ballX!=null?"Ball placed — tap to move it":"Tap the map — where did your ball finish?"}</div>
+                  <HoleView h={H} P={P} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} onPlace={(d,x)=>saveLive({...live,ballD:d,ballX:x})}/>
+                  {where&&<div style={{textAlign:"center",fontFamily:SERIF,fontSize:15,color:INK,marginTop:8}}>You're {where}.</div>}
+                </div>;})()}
               <div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:22}}>
                 {[["NONE","calm"],["INTO","into"],["DOWN","down"],["CROSS","cross"]].map(([k,l])=>(
                   <button key={k} onClick={()=>setWind(k)} style={{border:"none",borderRadius:14,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer",background:wind===k?INK:"transparent",color:wind===k?PAPER:MUTE}}>{l}</button>))}
               </div>
               <button className="tapbtn" onClick={()=>{buzz();const v=parseInt(qYards)||live.rem;
-                if(isRecoveryLie(lie)){const plan=recoveryPlan(v,lie,{bag:recoBag(),wedgeDist});saveLive({...live,rem:v});setSel(plan.best?plan.best.club:Object.keys(P.carries)[0]);}
+                if(isRecoveryLie(lie)){const loc=live.ballX!=null?holeContext(H,live.ballD,live.ballX):{};const plan=recoveryPlan(v,lie,{bag:recoBag(),wedgeDist,side:loc.side,blocked:loc.blocked});saveLive({...live,rem:v});setSel(plan.best?plan.best.club:Object.keys(P.carries)[0]);}
                 else {const ev=Math.round(v*windMul*lieFactor(lie));const pk=E.pick(ev,reliability);saveLive({...live,rem:v});setSel(pk.chip);}
                 setAsked(true);setShowAlt(false);}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:17,fontWeight:700,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4}}>Read it</button>
               {(()=>{const hs=(live.shots||[]).map((x,gi)=>({x,gi})).filter(o=>o.x.h===live.hole+1);if(!hs.length)return null;
@@ -825,7 +868,8 @@ export default function CaddieOS(){
 
             {phase==="whisper"&&isRecoveryLie(lie)&&(()=>{
               // RECOVERY MODE — objective switches to lowest expected strokes, not "reach green".
-              const plan=recoveryPlan(live.rem,lie,{bag:recoBag(),wedgeDist});
+              const loc=live.ballX!=null?holeContext(H,live.ballD,live.ballX):{};
+              const plan=recoveryPlan(live.rem,lie,{bag:recoBag(),wedgeDist,side:loc.side,blocked:loc.blocked});
               const opt=plan.options.find(o=>o.club===sel)||plan.best;
               const whyBest=plan.best&&plan.best.kind==="hero"?"the window's worth the risk here.":"punching or laying up beats the hero shot here.";
               return <div style={arrive}>
@@ -834,7 +878,9 @@ export default function CaddieOS(){
                   <button onClick={()=>{setAsked(false);setShowAlt(false);}} style={{border:"none",background:"transparent",color:MUTE,fontSize:13,cursor:"pointer"}}>↩ back</button>
                 </div>
                 <div style={{background:PINE,borderRadius:28,padding:"24px 22px",boxShadow:"0 10px 30px rgba(18,43,33,.18)"}}>
-                  <div style={{color:"#e7b7a6",fontSize:11,letterSpacing:2,textTransform:"uppercase",marginBottom:6,fontWeight:800}}>{plan.objective}</div>
+                  <div style={{color:"#e7b7a6",fontSize:11,letterSpacing:2,textTransform:"uppercase",marginBottom:2,fontWeight:800}}>Objective</div>
+                  <div style={{fontFamily:SERIF,fontSize:22,color:PAPER,marginBottom:plan.sideNote?2:8}}>{plan.objective}</div>
+                  {plan.sideNote&&<div style={{color:"#e7b7a6",fontSize:12,marginBottom:8,opacity:.9}}>{plan.sideNote.replace(/^\s*—\s*/,"")}</div>}
                   <div style={{fontFamily:SERIF,fontSize:36,color:GOLD,marginBottom:8}}>{opt?humanClub(famOf(opt.club),opt.club):"—"}</div>
                   <div style={{fontFamily:SERIF,fontSize:18,color:PAPER,lineHeight:1.45,opacity:.96}}>{opt?opt.reason:""}</div>
                 </div>

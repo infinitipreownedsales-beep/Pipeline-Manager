@@ -22,7 +22,7 @@ ok("best play is NOT a straight attack (no 8-iron to green)", plan.best.kind !==
 ok("best is punch-out or lay-up", ["punch", "layup"].includes(plan.best.kind));
 ok("hero shot is offered but flagged low-probability", plan.hero && plan.hero.prob <= 25);
 ok("hero shot has the worst expected value here", plan.hero.ev >= plan.best.ev);
-ok("objective switched away from 'reach green'", /recover|position|wedge|out/i.test(plan.objective));
+ok("objective switched away from 'reach green'", /recover|position|advance|attack|escape|hero|out|up/i.test(plan.objective));
 ok("recommendation carries a reason", typeof plan.best.reason === "string" && plan.best.reason.length > 0);
 
 // --- lay-up to the favorite number is preferred when reachable ---
@@ -42,6 +42,25 @@ ok("deep rough costs more than first cut", expectedStrokes(120, "DEEP") > expect
 // --- when nothing reaches, hero becomes a big advance, still risk-checked ---
 const far = recoveryPlan(240, "TREES", ctx);
 ok("very long trees shot: recover/lay-up beats hero", far.best.kind !== "hero");
+
+// --- LOCATION CONTEXT: blocked in the trees on the right ---
+// The reported scenario: 3W into the trees right, blocked. The play is a sideways
+// chip-out toward the OPEN (left) side, and the objective is to get back in position.
+const blockedRight = recoveryPlan(150, "TREES", { ...ctx, side: "right", blocked: true });
+console.log("\nblocked right @150:", "obj:", blockedRight.objective, "| best:", blockedRight.best.kind, blockedRight.best.label);
+ok("blocked → objective is 'Get Back in Position'", blockedRight.objective === "Get Back in Position");
+ok("blocked → best play is the punch/chip-out", blockedRight.best.kind === "punch");
+ok("blocked → chip escapes toward the open LEFT side", /left/.test(blockedRight.best.label));
+ok("blocked → no forward layup is offered", !blockedRight.options.some(o => o.kind === "layup"));
+ok("blocked → carries the side note", /right/.test(blockedRight.sideNote));
+
+// blocked on the LEFT escapes toward the right
+const blockedLeft = recoveryPlan(150, "TREES", { ...ctx, side: "left", blocked: true });
+ok("blocked left → chip escapes toward the open RIGHT side", /right/.test(blockedLeft.best.label));
+
+// clean angle (not blocked) still lets you advance/lay up
+const openTrees = recoveryPlan(180, "DEEP", { ...ctx, side: "right", blocked: false, wedgeDist: 105 });
+ok("open angle → forward lay-up is still on the table", openTrees.options.some(o => o.kind === "layup"));
 
 console.log("\n" + (fail ? fail + " FAILED ❌" : "ALL PASS ✅"));
 process.exit(fail ? 1 : 0);
