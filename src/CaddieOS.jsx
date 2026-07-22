@@ -459,6 +459,10 @@ export default function CaddieOS(){
   const [imp,setImp]=useState(null);        // staged import awaiting confirmation
   const [impErr,setImpErr]=useState("");
   const [dragOver,setDragOver]=useState(false);
+  const [impCourses,setImpCourses]=useState({}); // courses imported from Shot Scope reads
+  const [holeJson,setHoleJson]=useState("");     // paste box for a hole/course JSON
+  const [holeMsg,setHoleMsg]=useState("");
+  const courses={...COURSES,...impCourses};        // built-in + imported, used everywhere
   const undoShot=()=>{
     if(live.onGreen&&live.putts>0){saveLive({...live,putts:live.putts-1});return;}
     const hs=live.shots||[];let idx=-1;
@@ -475,7 +479,7 @@ export default function CaddieOS(){
   const convCycle=hi=>{const cv=[...live.convs];cv[hi]=cv[hi]===true?false:cv[hi]===false?null:true;saveLive({...live,convs:cv});};
   const playHoleNow=i=>{saveLive({...live,hole:i,strokes:0,rem:(live.teeAdj&&live.teeAdj[i])||CH[i].y,onGreen:false,putts:0,pen:0,i35At:null,teeAck:false});setViewHole(null);};
   const endSave=()=>{const idx=live.scores.map((sc,i)=>sc!==null?i:-1).filter(i=>i>=0);
-    if(idx.length){const rd={date:new Date().toLocaleDateString(),course:COURSES[live.course]?COURSES[live.course].name:"",holes:idx.length,total:idx.reduce((a,i)=>a+live.scores[i],0),plan:idx.reduce((a,i)=>a+CH[i].tgt,0),scores:live.scores.map(sc=>sc===null?0:sc),putts:live.puttsArr.reduce((a,b)=>a+(b||0),0),convMade:live.convs.filter(c=>c===true).length,convTried:live.convs.filter(c=>c!==null).length,benched:live.bench||[],shots:live.shots||[]};saveRounds([...rounds,rd]);}
+    if(idx.length){const rd={date:new Date().toLocaleDateString(),course:courses[live.course]?courses[live.course].name:"",holes:idx.length,total:idx.reduce((a,i)=>a+live.scores[i],0),plan:idx.reduce((a,i)=>a+CH[i].tgt,0),scores:live.scores.map(sc=>sc===null?0:sc),putts:live.puttsArr.reduce((a,b)=>a+(b||0),0),convMade:live.convs.filter(c=>c===true).length,convTried:live.convs.filter(c=>c!==null).length,benched:live.bench||[],shots:live.shots||[]};saveRounds([...rounds,rd]);}
     saveLive(null);store.set("caddie:live",null);setEndArm(false);setTab("trends");};
   const saveRounds=nr=>{setRounds(nr);store.set("caddie:rounds",nr);};
   const editHole=(ri,hi,d)=>{const nr=rounds.map((r,i)=>{if(i!==ri)return r;const sc=[...r.scores];sc[hi]=Math.max(1,(sc[hi]||CH[hi].tgt)+d);return {...r,scores:sc,total:sc.reduce((a,b)=>a+(b||0),0)};});saveRounds(nr);};
@@ -489,7 +493,26 @@ export default function CaddieOS(){
     const p=await store.get("caddie:profile"); if(p)setP({...DEF_PROFILE,...p,feels:{...DEF_PROFILE.feels,...(p.feels||{})}});
     const r=await store.get("caddie:rounds"); if(r)setRounds(r);
     const l=await store.get("caddie:live"); if(l)setLive(l);
+    const h=await store.get("caddie:holes"); if(h)setImpCourses(h);
     setLoaded(true);})();},[]);
+  // Import a hole or a whole course from a Shot Scope read (pasted/loaded JSON).
+  // Accepts a single hole object, an array of holes, or {name,holes:[...]}.
+  const importHoles=raw=>{
+    setHoleMsg("");
+    let j; try{ j=JSON.parse(raw); }catch(e){ setHoleMsg("That isn't valid JSON — check for a missing comma or bracket."); return; }
+    let name, holes;
+    if(Array.isArray(j)){ holes=j; }
+    else if(j&&Array.isArray(j.holes)){ holes=j.holes; name=j.name; }
+    else if(j&&j.par!=null&&j.y!=null){ holes=[j]; name=j.course; }
+    else { setHoleMsg("Expected a hole object, an array of holes, or {name, holes:[…]}."); return; }
+    holes=holes.filter(h=>h&&h.par!=null&&h.y!=null).map((h,i)=>({tgt:h.par+1,hz:h.hz||"",vibe:h.vibe||h.strategy||"",cue:h.cue||"",n:h.n||i+1,...h}));
+    if(!holes.length){ setHoleMsg("No valid holes found — each hole needs at least par and y (yardage)."); return; }
+    const key="ss_"+Date.now().toString(36);
+    const next={...impCourses,[key]:{name:name||("Imported course ("+holes.length+")"),holes,imported:true}};
+    setImpCourses(next); store.set("caddie:holes",next); setCourseSel(key); setHoleJson("");
+    setHoleMsg(`Imported ${holes.length} hole${holes.length>1?"s":""} — "${next[key].name}". Pick it on the CADDIE screen to play.`);
+  };
+  const deleteCourse=key=>{const n={...impCourses};delete n[key];setImpCourses(n);store.set("caddie:holes",n);if(courseSel===key)setCourseSel("bp");};
   const saveLive=l=>{setLive(l);store.set("caddie:live",l);};
 
   // --- Launch-monitor import: read file → parse → clean → stage for confirmation ---
@@ -523,7 +546,7 @@ export default function CaddieOS(){
     setImp(null); setImpErr("");
   };
 
-  const CH=(live&&COURSES[live.course]?COURSES[live.course]:COURSES[courseSel]).holes;
+  const CH=(live&&courses[live.course]?courses[live.course]:courses[courseSel]).holes;
   const flags=clubFlags((live&&live.shots)||[],["52",...Object.keys(P.carries)]);
   const E=engine(P,(live&&live.bench)||[],flags.adj);
   const chips=["52½","52¾","52FS",...Object.keys(P.carries).sort((a,b)=>P.carries[a]-P.carries[b]),"CHIP"];
@@ -590,7 +613,7 @@ export default function CaddieOS(){
     else {setLie("FW");setLieLabel("Fairway");}
   },[live?live.hole:-1,live?live.strokes:-1,live?live.onGreen:false,live&&live.bench?live.bench.join(","):""]);
 
-  const startRound=()=>saveLive({course:courseSel,hole:0,strokes:0,rem:CH[0].y,onGreen:false,putts:0,pen:0,i35At:null,teeAck:false,bench:[],shots:[],scores:Array(18).fill(null),puttsArr:Array(18).fill(null),convs:Array(18).fill(null)});
+  const startRound=()=>{const N=(courses[courseSel]||COURSES.bp).holes.length;saveLive({course:courseSel,hole:0,strokes:0,rem:CH[0].y,onGreen:false,putts:0,pen:0,i35At:null,teeAck:false,bench:[],shots:[],scores:Array(N).fill(null),puttsArr:Array(N).fill(null),convs:Array(N).fill(null)});};
   const addPenalty=()=>saveLive({...live,pen:(live.pen||0)+1,shots:[...(live.shots||[]),{pen:1,from:live.rem,c:"Penalty",h:live.hole+1}]});
   // P3: classify the shot from context so the golfer never labels it by hand.
   const shotType=(from,reach,g)=>live.strokes===0?"tee":g?"approach":from<=34?"pitch":reach?"approach":"positioning";
@@ -623,10 +646,10 @@ export default function CaddieOS(){
     const pa=[...live.puttsArr];pa[h]=live.putts+1;
     const cv=[...live.convs];cv[h]=conv;
     if(sc.every(x=>x!==null)){
-      const rd={date:new Date().toLocaleDateString(),course:COURSES[live.course]?COURSES[live.course].name:"",total:sc.reduce((a,b)=>a+b,0),plan:CH.reduce((a,x)=>a+x.tgt,0),scores:sc,putts:pa.reduce((a,b)=>a+(b||0),0),convMade:cv.filter(c=>c===true).length,convTried:cv.filter(c=>c!==null).length,benched:live.bench||[],shots:live.shots||[]};
+      const rd={date:new Date().toLocaleDateString(),course:courses[live.course]?courses[live.course].name:"",total:sc.reduce((a,b)=>a+b,0),plan:CH.reduce((a,x)=>a+x.tgt,0),scores:sc,putts:pa.reduce((a,b)=>a+(b||0),0),convMade:cv.filter(c=>c===true).length,convTried:cv.filter(c=>c!==null).length,benched:live.bench||[],shots:live.shots||[]};
       const nr=[...rounds,rd];setRounds(nr);store.set("caddie:rounds",nr);
       saveLive(null);store.set("caddie:live",null);setTab("trends");
-    } else {const nxt=(()=>{let n=(h+1)%18;while(sc[n]!==null&&n!==h)n=(n+1)%18;return n;})();
+    } else {const N=sc.length;const nxt=(()=>{let n=(h+1)%N;while(sc[n]!==null&&n!==h)n=(n+1)%N;return n;})();
       saveLive({...live,hole:nxt,strokes:0,rem:(live.teeAdj&&live.teeAdj[nxt])||CH[nxt].y,onGreen:false,putts:0,pen:0,i35At:null,teeAck:false,scores:sc,puttsArr:pa,convs:cv});}
   };
 
@@ -654,11 +677,11 @@ export default function CaddieOS(){
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
             <div style={{color:"#86efac",fontSize:9,letterSpacing:3,fontWeight:800}}>CADDIE OS</div>
-            <div style={{color:"white",fontSize:14,fontWeight:800}}>{P.name} · {(live&&COURSES[live.course]?COURSES[live.course]:COURSES[courseSel]).name} <button onClick={()=>setTourn(!tourn)} style={{marginLeft:6,border:"none",borderRadius:6,padding:"2px 8px",fontSize:9,fontWeight:800,cursor:"pointer",verticalAlign:"middle",background:tourn?"#fcd34d":"rgba(255,255,255,0.14)",color:tourn?"#1a3a2e":"#86efac"}}>{tourn?"TOURN ON":"TOURN"}</button></div>
+            <div style={{color:"white",fontSize:14,fontWeight:800}}>{P.name} · {(live&&courses[live.course]?courses[live.course]:courses[courseSel]).name} <button onClick={()=>setTourn(!tourn)} style={{marginLeft:6,border:"none",borderRadius:6,padding:"2px 8px",fontSize:9,fontWeight:800,cursor:"pointer",verticalAlign:"middle",background:tourn?"#fcd34d":"rgba(255,255,255,0.14)",color:tourn?"#1a3a2e":"#86efac"}}>{tourn?"TOURN ON":"TOURN"}</button></div>
           </div>
           {live&&<div style={{textAlign:"right"}}>
             <div style={{color:"white",fontSize:17,fontWeight:900}}>{runTot}<span style={{fontSize:11,fontWeight:700,color:dv>0?"#ffb3ad":dv<0?"#86efac":"#fcd34d"}}> {done>0?(dv>0?"+"+dv:dv)+" vs plan":""}</span></div>
-            <div style={{color:"#6b9e7a",fontSize:9,fontWeight:700}}>H{live.hole+1} · {done}/18 holed</div>
+            <div style={{color:"#6b9e7a",fontSize:9,fontWeight:700}}>H{live.hole+1} · {done}/{CH.length} holed</div>
           </div>}
         </div>
         {live&&<div style={{display:"flex",gap:3,overflowX:"auto",marginTop:8,paddingBottom:2}}>
@@ -677,7 +700,7 @@ export default function CaddieOS(){
           <div style={{fontFamily:SERIF,fontSize:30,color:INK,lineHeight:1.2,marginBottom:6}}>Ready when you are.</div>
           <div style={{color:MUTE,fontSize:15,marginBottom:20,fontFamily:SERIF}}>Tell me the number and your lie. I'll take care of the rest.</div>
           <div style={{display:"flex",gap:10,marginBottom:12}}>
-            {Object.entries(COURSES).map(([k,c])=>(
+            {Object.entries(courses).map(([k,c])=>(
               <button key={k} onClick={()=>setCourseSel(k)} style={{flex:1,border:"none",borderRadius:16,padding:"14px 10px",fontSize:14,fontWeight:700,cursor:"pointer",background:courseSel===k?PINE:"#fff",color:courseSel===k?PAPER:INK,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>{c.name}</button>))}
           </div>
           <button onClick={()=>{buzz();startRound();}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:18,fontWeight:700,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4}}>Start the round</button>
@@ -905,7 +928,7 @@ export default function CaddieOS(){
 
       {tab==="course"&&<div style={{padding:12}}>
         {!live&&<div style={{display:"flex",gap:8,marginBottom:10}}>
-          {Object.entries(COURSES).map(([k,c])=>(
+          {Object.entries(courses).map(([k,c])=>(
             <button key={k} onClick={()=>{setCourseSel(k);setCourseHole(0);}} style={{...S.btn,flex:1,padding:"9px 0",fontSize:13,background:courseSel===k?"#1a3a2e":"white",color:courseSel===k?"#86efac":"#3a3a3c",boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>{c.name}</button>))}
         </div>}
         <div style={{display:"grid",gridTemplateColumns:"repeat(9,1fr)",gap:3,marginBottom:10}}>
@@ -1111,6 +1134,24 @@ export default function CaddieOS(){
                 <button onClick={()=>{setImp(null);setImpErr("");}} style={{...S.btn,background:"#f2f2f7",color:"#111"}}>Cancel</button>
               </div>
             </>);})()}
+        </div>
+
+        <div style={S.card}>
+          <div style={S.h}>Course & hole maps</div>
+          <div style={{...S.sub,fontSize:12,marginBottom:8}}>Play any course by importing its holes. Upload a Shot Scope screenshot in your Claude chat and ask for a "CaddieOS hole JSON" — paste the result here. Each hole needs at least <b>par</b> and <b>y</b> (yards); it can also carry hazards, a forced-carry, dogleg, and a strategy.</div>
+          <textarea value={holeJson} onChange={e=>setHoleJson(e.target.value)} placeholder='{"name":"Pine Valley #6","holes":[{"n":6,"par":5,"y":520,"hz":"Water RIGHT · dogleg RIGHT · bunkers at green","dzR":"water","carry":210,"carryLabel":"the creek","strategy":"Driver, then lay up to 100."}]}' style={{...S.inp,width:"100%",minHeight:70,fontFamily:"monospace",fontSize:12,fontWeight:400}}/>
+          <div style={{display:"flex",gap:8,marginTop:8}}>
+            <button className="tapbtn" onClick={()=>importHoles(holeJson)} style={{...S.btn,flex:1,background:"#1a3a2e",color:"#86efac"}}>Import holes</button>
+            <button className="tapbtn" onClick={()=>setHoleJson(JSON.stringify({name:"My course",holes:[{n:1,par:4,y:410,hz:"Water LEFT · bunker right of green",dzL:"water",carry:0,corner:250,cornerLabel:"corner",strategy:"Driver up the right, wedge in."}]},null,0))} style={{...S.btn,background:"white",color:"#1a3a2e",border:"2px solid #1a3a2e"}}>Template</button>
+          </div>
+          {holeMsg&&<div style={{fontSize:12,fontWeight:700,color:/Imported/.test(holeMsg)?"#1a7f37":"#c2410c",marginTop:8}}>{holeMsg}</div>}
+          {Object.keys(impCourses).length>0&&<div style={{marginTop:10,borderTop:"1px solid #f2f2f7",paddingTop:8}}>
+            <div style={{...S.h,marginBottom:6}}>Imported courses</div>
+            {Object.entries(impCourses).map(([k,c])=>(<div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 0"}}>
+              <span style={{fontSize:13,fontWeight:700,color:"#111"}}>{c.name} · {c.holes.length} holes</span>
+              <button className="tapbtn" onClick={()=>deleteCourse(k)} style={{border:"none",background:"#fff1f0",color:"#ff453a",borderRadius:8,padding:"5px 10px",fontSize:11,fontWeight:800,cursor:"pointer"}}>Remove</button>
+            </div>))}
+          </div>}
         </div>
 
         <div style={S.card}>
