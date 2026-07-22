@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { whisper, humanClub, teeWhisper, puttWhisper, benchWhisper, clubConfidence } from "./whisper.js";
+import { MAPPED } from "./holes/index.js";
 
 // CADDIE OS v10 — DYNAMIC ROUND ENGINE
 // Every shot logs the club actually used (tap to change, layups tappable).
@@ -60,6 +61,7 @@ const PF_HOLES=[
 const COURSES={
  bp:{name:"Bay Pointe CC",holes:BP_HOLES},
  pf:{name:"Patrick Farms GC",holes:PF_HOLES},
+ ...MAPPED,   // real holes mapped from Shot Scope, one file per hole in ./holes
 };
 
 // CADDIE PLANNER — generates the hole plan from the PLAYER's live data
