@@ -1171,6 +1171,35 @@ function buildSequence(res){ let s=res.settings, plan=loanerOrderPlan(res), out=
     out[model]={allocation:alloc,fleet_reserved:reserved,eff_alloc:effAlloc,retail_build:buildTotal,groups:groups,total_units:totalUnits}; });
   return {intake:plan.intake,serviceMonths:plan.serviceMonths,fleetUnits:plan.fleetUnits,perModel:out}; }
 function loanerMatchUnit(stock,inv){ for(let i=0;i<inv.length;i++){ if(stock&&inv[i].stock.indexOf(stock)===0) return inv[i]; } return null; }
+// Timing optimizer (Enh 3): given a unit already N months in service, project
+// the net at several retail windows (now / +30 / +60 / at mandatory retirement)
+// combining manufacturer clock, depreciation (age curve), used-car seasonality,
+// velocity eligibility and holding cost — and recommend the best window.
+function loanerTiming(res, u, monthsInService, model, year){
+  let s=res.settings, D=(typeof window!=="undefined")?window.DEPR:null;
+  if(!D||!D.active||!D.a||!u||!(u.cost>0)) return null;
+  let today=res.tb.today, maxMo=parseFloat(s.loaner_max_months)||7;
+  let trim=u.trim||"", ext=u.ext||"", cost=u.cost, msrp=u.msrp||u.cost;
+  let deltas=[0,1,2, Math.max(0, Math.round(maxMo-monthsInService))];
+  let seen={}, opts=[];
+  deltas.forEach(dm=>{ if(monthsInService+dm>maxMo+0.5) return; if(seen[dm]) return; seen[dm]=1;
+    let retailAge=Math.max(0,Math.round(monthsInService+dm));
+    let retailMonthIdx=((today.getMonth()+dm)%12+12)%12+1;
+    let pr=D.a.predictor(model,trim||null,null,ext||null,retailMonthIdx,retailAge);   // resale w/ season + age
+    if(!pr||!pr.ok) return;
+    let ctx={year:year||0,month:today.getMonth()+1,retailMonth:retailMonthIdx,monthsInService:monthsInService,retailInMonths:dm};
+    let econ=loanerEconomics(cost,msrp,model,pr.dts,pr.price,s,undefined,ctx);
+    opts.push({delta:dm,label:dm===0?"Retail now":(dm===1?"Wait ~30 days":(dm===2?"Wait ~60 days":"Hold to retirement")),
+      retailMonth:MONTHS[retailMonthIdx-1],age:retailAge,resale:pr.price,net:econ.net,gross:econ.usedGross,
+      bonusOk:econ.bonusOk,conf:pr.confidence}); });
+  if(!opts.length) return null;
+  let best=opts.reduce((a,b)=>b.net>a.net?b:a,opts[0]), now=opts[0];
+  let lift=best.net-now.net;
+  best.why = best.delta===0 ? "best today — waiting loses value faster than demand improves"
+    : "+$"+Math.round(lift).toLocaleString()+" vs. retailing now"+(best.bonusOk?"":" (past bonus window)");
+  return {options:opts, best:best, monthsInService:Math.round(monthsInService*10)/10,
+    remaining:Math.round((maxMo-monthsInService)*10)/10};
+}
 function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], releasing=0;
   (s.loaner_units||[]).forEach(e=>{ let stock=String(e.stock||"").trim(); if(!stock) return;
     let start=new Date(e.start), hasStart=!isNaN(start.getTime());
@@ -1184,9 +1213,11 @@ function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], rele
     if(!eligible) status="🅗 HOLD · "+Math.max(0,Math.ceil((s.loaner_min_months-months)*DPM))+"d to ICV";
     else if(nearCap||nearTime){ status="🔴 RELEASE NOW"; releasing++; }
     else status="🟢 READY";
+    let timing=(u&&hasStart)?loanerTiming(res,u,months,model,uyear):null;
     rows.push({stock:stock,model:model,vehicle:u?u.desc:"",ext_int:u?(u.ext+"/"+u.int):"",
       months:Math.round(months*10)/10,miles:Math.round(miles),icv_secured:eligible?Math.round(icv):0,icv:Math.round(icv),
-      eligible:eligible,status:status,release_by:releaseAt?releaseAt.toISOString().slice(0,10):"",note:String(e.note||"").trim()}); });
+      eligible:eligible,status:status,release_by:releaseAt?releaseAt.toISOString().slice(0,10):"",note:String(e.note||"").trim(),
+      timing:timing}); });
   rows.sort((a,b)=>b.months-a.months);
   let inService=rows.length, afterRelease=inService-releasing, toAdd=Math.max(0,s.loaner_fleet_target-afterRelease);
   return {target:s.loaner_fleet_target,in_service:inService,releasing_now:releasing,to_add:toAdd,rows:rows}; }
@@ -1386,6 +1417,19 @@ function srcBadge(p){
   if(p.usedSrc==="measured"){ return "<span class='lmeasured' title='measured from your preowned/auction data'>measured</span>"; }
   return "<span class='lmodeled' title='modeled: 80% of cheapest-new (no history for this config)'>modeled</span>";
 }
+function timingLeftCell(r){
+  let left=r.timing?r.timing.remaining:null;
+  if(left==null) return "<span class='dim'>—</span>";
+  let col=left<=1?"var(--bad)":(left<=2?"var(--warn)":"var(--muted)");
+  return "<span style='color:"+col+"'>"+left+"mo</span>";
+}
+function timingCell(r){
+  if(!r.timing){ return "<span class='dim' title='needs cost + matching history to project'>—</span>"; }
+  let t=r.timing, b=t.best;
+  let opts=t.options.map(o=>o.label+": "+money(o.net)+" net"+(o===b?"  ◀ best":"")+(o.bonusOk?"":" (no bonus)")).join("\n");
+  let col=b.delta===0?"var(--good)":"var(--teal)";
+  return "<span title=\""+esc(opts)+"\"><b style='color:"+col+"'>"+esc(b.label)+"</b> <span class='dim'>· "+money(b.net)+" net · "+esc(b.why)+"</span></span>";
+}
 function loanerRender(res){
   let board=res.loanerBoard||{}, plan=res.loanerFleetPlan||{rows:[],in_service:0,target:0,releasing_now:0,to_add:0};
   let H=[];
@@ -1412,15 +1456,17 @@ function loanerRender(res){
     H.push("</div>");
   }
 
-  // current in-service fleet + cascading release
+  // current in-service fleet + cascading release + timing optimizer
   if(plan.rows.length){
-    H.push("<div class='dc-sub'>In-service fleet <span class='dc-note'>cascading release — 🔴 pull now, 🟢 eligible, 🅗 hold for ICV</span></div>");
-    H.push(tbl(["Stock","Model","Vehicle","Ext/Int","In svc","Miles","ICV (once)","Release by","Status","Note"],
-      ["","","","","num","num","num","","",""],
-      plan.rows.map(r=>[esc(r.stock),r.model,{html:"<span class='dim'>"+esc(r.vehicle)+"</span>"},esc(r.ext_int),
-        r.months+"mo",r.miles.toLocaleString(),{html:r.icv_secured?("<span style='color:var(--teal)'>"+money(r.icv_secured)+"</span>"):("<span class='dim' title='booked but not secured until it clears the min-months floor'>"+money(r.icv)+" pending</span>")},
+    let anyTiming=plan.rows.some(r=>r.timing);
+    H.push("<div class='dc-sub'>In-service fleet <span class='dc-note'>cascading release — 🔴 pull now, 🟢 eligible, 🅗 hold for ICV"+(anyTiming?" · <b style='color:var(--teal)'>Best window</b> = manufacturer clock + depreciation + used-car seasonality":"")+"</span></div>");
+    H.push(tbl(["Stock","Model","Ext/Int","In svc","Left","Miles","ICV (once)","Release by","Status","Best retail window"],
+      ["","","","num","num","num","num","","",""],
+      plan.rows.map(r=>[esc(r.stock),r.model,esc(r.ext_int),
+        r.months+"mo",{html:timingLeftCell(r)},r.miles.toLocaleString(),{html:r.icv_secured?("<span style='color:var(--teal)'>"+money(r.icv_secured)+"</span>"):("<span class='dim' title='booked but not secured until it clears the min-months floor'>"+money(r.icv)+" pending</span>")},
         {html:"<span class='dim'>"+esc(r.release_by)+"</span>"},
-        {html:"<b>"+esc(r.status)+"</b>"},{html:r.note?esc(r.note):"<span class='dim'>—</span>"}])));
+        {html:"<b>"+esc(r.status)+"</b>"},{html:timingCell(r)}])));
+    if(anyTiming) H.push("<div class='foot'>Best retail window weighs the manufacturer's mandatory-retirement clock, your history's depreciation-by-age, monthly used-car seasonality, velocity-bonus eligibility and holding cost, then picks the window with the highest projected net. Hover a recommendation to see every window compared.</div>");
   } else {
     H.push("<div class='empty'>No loaners in service yet. Add your current fleet in ✎ Data → Loaner / ICV program, then this shows each unit's age, miles, ICV earned and when to release it.</div>");
   }

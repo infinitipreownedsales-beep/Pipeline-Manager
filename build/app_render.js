@@ -174,6 +174,19 @@ function srcBadge(p){
   if(p.usedSrc==="measured"){ return "<span class='lmeasured' title='measured from your preowned/auction data'>measured</span>"; }
   return "<span class='lmodeled' title='modeled: 80% of cheapest-new (no history for this config)'>modeled</span>";
 }
+function timingLeftCell(r){
+  let left=r.timing?r.timing.remaining:null;
+  if(left==null) return "<span class='dim'>—</span>";
+  let col=left<=1?"var(--bad)":(left<=2?"var(--warn)":"var(--muted)");
+  return "<span style='color:"+col+"'>"+left+"mo</span>";
+}
+function timingCell(r){
+  if(!r.timing){ return "<span class='dim' title='needs cost + matching history to project'>—</span>"; }
+  let t=r.timing, b=t.best;
+  let opts=t.options.map(o=>o.label+": "+money(o.net)+" net"+(o===b?"  ◀ best":"")+(o.bonusOk?"":" (no bonus)")).join("\n");
+  let col=b.delta===0?"var(--good)":"var(--teal)";
+  return "<span title=\""+esc(opts)+"\"><b style='color:"+col+"'>"+esc(b.label)+"</b> <span class='dim'>· "+money(b.net)+" net · "+esc(b.why)+"</span></span>";
+}
 function loanerRender(res){
   let board=res.loanerBoard||{}, plan=res.loanerFleetPlan||{rows:[],in_service:0,target:0,releasing_now:0,to_add:0};
   let H=[];
@@ -200,15 +213,17 @@ function loanerRender(res){
     H.push("</div>");
   }
 
-  // current in-service fleet + cascading release
+  // current in-service fleet + cascading release + timing optimizer
   if(plan.rows.length){
-    H.push("<div class='dc-sub'>In-service fleet <span class='dc-note'>cascading release — 🔴 pull now, 🟢 eligible, 🅗 hold for ICV</span></div>");
-    H.push(tbl(["Stock","Model","Vehicle","Ext/Int","In svc","Miles","ICV (once)","Release by","Status","Note"],
-      ["","","","","num","num","num","","",""],
-      plan.rows.map(r=>[esc(r.stock),r.model,{html:"<span class='dim'>"+esc(r.vehicle)+"</span>"},esc(r.ext_int),
-        r.months+"mo",r.miles.toLocaleString(),{html:r.icv_secured?("<span style='color:var(--teal)'>"+money(r.icv_secured)+"</span>"):("<span class='dim' title='booked but not secured until it clears the min-months floor'>"+money(r.icv)+" pending</span>")},
+    let anyTiming=plan.rows.some(r=>r.timing);
+    H.push("<div class='dc-sub'>In-service fleet <span class='dc-note'>cascading release — 🔴 pull now, 🟢 eligible, 🅗 hold for ICV"+(anyTiming?" · <b style='color:var(--teal)'>Best window</b> = manufacturer clock + depreciation + used-car seasonality":"")+"</span></div>");
+    H.push(tbl(["Stock","Model","Ext/Int","In svc","Left","Miles","ICV (once)","Release by","Status","Best retail window"],
+      ["","","","num","num","num","num","","",""],
+      plan.rows.map(r=>[esc(r.stock),r.model,esc(r.ext_int),
+        r.months+"mo",{html:timingLeftCell(r)},r.miles.toLocaleString(),{html:r.icv_secured?("<span style='color:var(--teal)'>"+money(r.icv_secured)+"</span>"):("<span class='dim' title='booked but not secured until it clears the min-months floor'>"+money(r.icv)+" pending</span>")},
         {html:"<span class='dim'>"+esc(r.release_by)+"</span>"},
-        {html:"<b>"+esc(r.status)+"</b>"},{html:r.note?esc(r.note):"<span class='dim'>—</span>"}])));
+        {html:"<b>"+esc(r.status)+"</b>"},{html:timingCell(r)}])));
+    if(anyTiming) H.push("<div class='foot'>Best retail window weighs the manufacturer's mandatory-retirement clock, your history's depreciation-by-age, monthly used-car seasonality, velocity-bonus eligibility and holding cost, then picks the window with the highest projected net. Hover a recommendation to see every window compared.</div>");
   } else {
     H.push("<div class='empty'>No loaners in service yet. Add your current fleet in ✎ Data → Loaner / ICV program, then this shows each unit's age, miles, ICV earned and when to release it.</div>");
   }
