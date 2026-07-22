@@ -657,6 +657,71 @@ function optimizeStrategy(res, p){
     retailNew:{profit:Math.round(newGross), gain:retailNewGain, better:retailNewGain>0},
     improved:Math.round(best.ownerNet-baseline.ownerNet)};
 }
+// ===================== SERVICE LOANER SELECTION =====================
+// A pure selection tool. The loaner program is mandatory; the only question is
+// WHICH unit to place. One number per unit — what the used-car department makes
+// or loses retailing it out of service:
+//   Expected cost   = invoice − ICV − velocity bonus − write-down + reconditioning
+//   Expected retail = projected retail at the sale month
+//   Difference      = Expected retail − Expected cost
+function _writedownAmt(cost, msrp, policy, months){
+  if(policy.method==="flat") return parseFloat(policy.flat)||0;         // flat total
+  let base=(String(policy.base).toLowerCase()==="msrp")?msrp:cost;
+  return base*((parseFloat(policy.rate)||0)/100)*months;
+}
+function _retailAt(res, ui, months){
+  let s=res.settings, curMonth=res.tb.today.getMonth()+1, saleMonthIdx=((curMonth-1+months)%12)+1;
+  let D=(typeof window!=="undefined")?window.DEPR:null;
+  if(D&&D.active&&D.a&&window.LoanerIntel){ let r=D.a.predictor(ui.model,ui.trim||null,null,ui.ext||null,saleMonthIdx,months);
+    if(r&&r.ok) return {price:r.price, n:r.n, month:saleMonthIdx}; }
+  let reb=modelRebate(s,ui.model,ui.year,curMonth);
+  return {price:Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8)), n:0, month:saleMonthIdx};
+}
+function unitDifference(res, ui, months, policy){
+  let s=res.settings, curMonth=res.tb.today.getMonth()+1, year=ui.year||res.tb.today.getFullYear();
+  let ret=_retailAt(res, ui, months);
+  let icv=incentive(s,ui.model,year,curMonth,"icv");
+  let veloAmt=incentive(s,ui.model,year,ret.month,"velocity_bonus");
+  let turnMo=45/DPM, saleAge=months+turnMo, miles=(parseFloat(s.loaner_miles_per_month)||0)*months;
+  let eligible=(saleAge<=(parseFloat(s.loaner_max_months)||7))&&(miles<(parseFloat(s.loaner_mile_cap)||1e9));
+  let velo=eligible?veloAmt:0;
+  let wd=_writedownAmt(ui.cost, ui.msrp, policy, months);
+  let recon=parseFloat(s.loaner_recon||0)||0;
+  let expectedCost=ui.cost-icv-velo-wd+recon;
+  return {invoice:Math.round(ui.cost), icv:Math.round(icv), velocity:Math.round(velo), velocityAvail:Math.round(veloAmt),
+    eligible:eligible, writedown:Math.round(wd), recon:Math.round(recon),
+    expectedCost:Math.round(expectedCost), expectedRetail:Math.round(ret.price),
+    difference:Math.round(ret.price-expectedCost), compN:ret.n};
+}
+function _currentPolicy(s){
+  return {method:(s.writedown_method==="flat")?"flat":"pct", rate:parseFloat(s.loaner_depr_pct)||1.5,
+    flat:parseFloat(s.writedown_flat)||0, base:(String(s.loaner_depr_base).toLowerCase()==="msrp")?"msrp":"cost",
+    months:Math.max(1,parseInt(s.loaner_service_months,10)||3)}; }
+function serviceSelection(res, policyOverride){
+  let s=res.settings, policy=policyOverride||_currentPolicy(s), months=policy.months;
+  let units=[];
+  (res.loanerAll||[]).forEach(p=>{ (p.units||[]).forEach(u=>{
+    let uid=(u.stock&&u.stock!=="—")?u.stock:("VIN "+(u.vin_last6||"?"));
+    let ui={model:p.model, trim:p.trim, ext:p.ext, int:p.int, year:u.year||p.year||res.tb.today.getFullYear(),
+      stock:u.stock, vin6:u.vin_last6, uid:uid, cost:(u.cost>0?u.cost:p.econ.cost), msrp:(u.msrp>0?u.msrp:p.econ.msrp)};
+    if(!(ui.cost>0)) return;
+    let d=unitDifference(res, ui, months, policy);
+    let byMonth=[3,4,5,6,7].map(m=>({months:m, difference:unitDifference(res, ui, m, policy).difference}));
+    units.push(Object.assign(ui, d, {byMonth:byMonth})); }); });
+  units.sort((a,b)=>b.difference-a.difference);
+  units.forEach((u,i)=>u.rank=i+1);
+  return {policy:policy, months:months, units:units};
+}
+function policyExplorer(res){
+  let s=res.settings, cur=serviceSelection(res), curTop=cur.units[0]?cur.units[0].stock:null;
+  function scen(policy,label,kind){ let sel=serviceSelection(res, policy);
+    return {label:label, kind:kind, changesTop:!!(sel.units[0]&&sel.units[0].stock!==curTop),
+      order:sel.units.map(u=>({rank:u.rank, stock:u.uid, name:(u.year+" "+u.model+" "+u.trim), difference:u.difference}))}; }
+  let base=cur.policy, pct=[1.0,1.25,1.5,1.75,2.0,2.5].map(r=>scen({method:"pct",rate:r,flat:0,base:base.base,months:base.months}, r.toFixed(2)+"% per month", "pct"));
+  let flatList=(s.writedown_flat_list&&s.writedown_flat_list.length)?s.writedown_flat_list:[1000,2000,3000,4000];
+  let flat=flatList.map(f=>scen({method:"flat",flat:f,base:base.base,months:base.months}, "$"+Number(f).toLocaleString()+" flat", "flat"));
+  return {currentTop:curTop, months:base.months, scenarios:pct.concat(flat)};
+}
 // Recommended acquisitions (Add 6): configs our own history says perform well
 // as loaners but which we're thin on today. Pure data — no hardcoded picks.
 function acquisitionRecs(res){
@@ -723,6 +788,8 @@ function runEngine(inv,sales,s,today){
   res.loanerBoard=loanerCandidates(res);
   res.acquisitionRecs=acquisitionRecs(res);
   res.serviceRecs=serviceLoanerRecs(res);
+  res.selection=serviceSelection(res);
+  res.policyExplorer=policyExplorer(res);
   res.loanerFleetPlan=loanerFleet(res);
   res.buildSeq=buildSequence(res);
   return res; }

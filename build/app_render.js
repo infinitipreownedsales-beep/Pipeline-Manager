@@ -385,15 +385,78 @@ function heroRecommendation(res){
   H.push("</div>");
   return H.join("");
 }
+/* ===================== SERVICE LOANER SELECTION (email/print-friendly) ===================== */
+function money0(n){ n=Math.round(n||0); return "$"+Math.abs(n).toLocaleString(); }
+function moneySign(n){ n=Math.round(n||0); return (n<0?"-$":"+$")+Math.abs(n).toLocaleString(); }
+function diffCell(n){ let c=n>=0?"var(--good)":"var(--bad)"; return "<span style='color:"+c+";font-weight:700'>"+moneySign(n)+"</span>"; }
+function stkRow(label,val,cls){
+  let disp;
+  if(cls==="tot"||cls==="") disp="$"+Math.abs(Math.round(val)).toLocaleString();
+  else disp=(val<0?"− $":"+ $")+Math.abs(Math.round(val)).toLocaleString();
+  return "<tr class='"+cls+"'><td>"+label+"</td><td class='r'>"+disp+"</td></tr>"; }
+function serviceSelectionRender(res){
+  let sel=res.selection, s=res.settings, H=[];
+  if(!sel||!sel.units.length) return "<div class='empty'>No candidate units in stock — paste inventory with unit cost, then set incentives in Data.</div>";
+  let units=sel.units, p=sel.policy, need=Math.max(1,parseInt(s.service_need,10)||1);
+  let wd = (p.method==="flat") ? ("$"+Number(p.flat).toLocaleString()+" flat") : (p.rate.toFixed(2)+"% per month of "+(p.base==="msrp"?"MSRP":"invoice"));
+  H.push("<div class='polhdr'>Store policy: write-down "+wd+", "+p.months+" months in service. The same settings apply to every unit; changing them re-ranks the list.</div>");
+  let top=units[0], second=units[1];
+  let lead="Place the <b>"+esc(top.year+" "+top.model+" "+top.trim)+"</b> ("+esc(top.uid)+"). Difference "+diffCell(top.difference)+
+    (second?", "+diffCell(top.difference-second.difference)+" better than the next unit.":".");
+  if(need>1) lead+=" Service needs "+need+" — the top "+need+" rows are the picks.";
+  H.push("<div class='lead'>"+lead+"</div>");
+  H.push("<table class='seltbl'><thead><tr><th>Rank</th><th>Unit</th><th class='r'>Expected cost</th><th class='r'>Expected retail</th><th class='r'>Difference</th></tr></thead><tbody>");
+  units.forEach(u=>{ H.push("<tr class='"+(u.rank<=need?"toprow":"")+"'><td>"+u.rank+"</td>"+
+    "<td>"+esc(u.year+" "+u.model+" "+u.trim)+" · "+esc(u.uid)+"</td>"+
+    "<td class='r'>"+money0(u.expectedCost)+"</td><td class='r'>"+money0(u.expectedRetail)+"</td>"+
+    "<td class='r'>"+diffCell(u.difference)+"</td></tr>"); });
+  H.push("</tbody></table>");
+
+  H.push("<div class='l1hdr'>Unit detail</div>");
+  units.forEach(u=>{
+    H.push("<details class='unit'><summary>"+u.rank+". "+esc(u.year+" "+u.model+" "+u.trim)+" · "+esc(u.uid)+" &mdash; Difference "+diffCell(u.difference)+"</summary>");
+    H.push("<div class='u3'>"+
+      "<div class='u3c'><div class='u3l'>Expected cost</div><div class='u3v'>"+money0(u.expectedCost)+"</div></div>"+
+      "<div class='u3c'><div class='u3l'>Expected retail</div><div class='u3v'>"+money0(u.expectedRetail)+"</div></div>"+
+      "<div class='u3c'><div class='u3l'>Difference</div><div class='u3v'>"+diffCell(u.difference)+"</div></div></div>");
+    H.push("<table class='stk'><tbody>");
+    H.push(stkRow("Invoice", u.invoice, ""));
+    H.push(stkRow("ICV allowance", -u.icv, "sub"));
+    H.push(stkRow("Velocity bonus"+(u.eligible?"":" (not earned)"), -(u.eligible?u.velocity:0), "sub"));
+    H.push(stkRow("Write-down"+(p.method==="flat"?" (flat)":" ("+p.rate.toFixed(2)+"% × "+p.months+" mo)"), -u.writedown, "sub"));
+    H.push(stkRow("Reconditioning", u.recon, "sub"));
+    H.push(stkRow("Expected cost", u.expectedCost, "tot"));
+    H.push("</tbody></table>");
+    H.push("<div class='basis'>Retail based on "+(u.compN>0?(u.compN+" historical "+esc(u.model+" "+u.trim)+" sales"):"the modeled fallback (no matching history yet)")+".</div>");
+    H.push("<table class='mos'><thead><tr><th>Months in service</th>"+u.byMonth.map(bm=>"<th class='r'>"+bm.months+"</th>").join("")+"</tr></thead><tbody><tr><td>Difference</td>"+
+      u.byMonth.map(bm=>"<td class='r"+(bm.months===p.months?" cur":"")+"'>"+diffCell(bm.difference)+"</td>").join("")+"</tr></tbody></table>");
+    H.push("</details>");
+  });
+  H.push(policyExplorerRender(res));
+  return H.join("");
+}
+function policyExplorerRender(res){
+  let pe=res.policyExplorer; if(!pe||!pe.scenarios.length) return "";
+  let H=["<details class='explorer'><summary>Policy explorer &mdash; what a write-down change would do</summary>"];
+  H.push("<div class='basis'>Each scenario re-ranks every unit under a store-wide write-down change ("+pe.months+" months in service). Scenarios that change which unit ranks first are flagged.</div>");
+  pe.scenarios.forEach(sc=>{
+    H.push("<div class='scen'><div class='scenh'>"+esc(sc.label)+(sc.changesTop?" <span class='flag'>changes top pick</span>":"")+"</div>");
+    H.push("<table class='seltbl'><thead><tr><th>Rank</th><th>Unit</th><th class='r'>Difference</th></tr></thead><tbody>");
+    sc.order.slice(0,8).forEach(o=>H.push("<tr class='"+(o.rank===1?"toprow":"")+"'><td>"+o.rank+"</td><td>"+esc(o.name+" · "+o.stock)+"</td><td class='r'>"+diffCell(o.difference)+"</td></tr>"));
+    H.push("</tbody></table></div>");
+  });
+  H.push("</details>");
+  return H.join("");
+}
 function render(res){
   let rep={op:orderPriority(res),over:overstock(res),vins:wholesaleVins(res),demo:demoDashboard(res),fleet:fleetTargets(res)};
   let s=res.settings,tb=res.tb, H=[];
   let fc=retailForecast(res);   // computed once; reused in the Retail Forecast section
   let latest=tb.latest?(Math.floor(tb.latest/12)+"-"+String(tb.latest%12).padStart(2,"0")):"—";
 
-  // ★ SERVICE LOANER RECOMMENDATION — the hero: answers "Service needs X; which X?"
-  H.push(sec("★","Service Loaner Recommendation","which vehicles to provide when Service requests them — ranked by opportunity advantage"));
-  H.push(heroRecommendation(res));
+  // SERVICE LOANER SELECTION — which unit to place into the mandatory program
+  H.push(sec("1","Service Loaner Selection","which unit to place, ranked by what the used department makes or loses"));
+  H.push(serviceSelectionRender(res));
 
   // KPI tiles — one per model: what to order now, colored by inventory health
   function hColor(h){ return h.indexOf("tight")>=0?"var(--bad)":(h.indexOf("heavy")>=0?"var(--warn)":(h.indexOf("cold")>=0?"var(--muted)":"var(--good)")); }
@@ -661,7 +724,7 @@ function wireDepr(a, s){
 // Wrap the flat output into one <section class="dash"> per dashboard so print
 // (and anything else) can show/hide them individually.
 function groupSections(root){
-  const titleKey={"Service Loaner Recommendation":"recommend",
+  const titleKey={"Service Loaner Selection":"selection",
     "Order Priority":"order","6-Month Rolling Order Plan":"plan",
     "Fleet Stock Target & Seasonality":"fleet","Executive Demo Program":"democenter",
     "Service Loaner Program":"loaner","Service Loaner Depreciation":"depr",

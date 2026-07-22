@@ -260,6 +260,39 @@
   .hr-out .lab{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
   .hr-conf{font-size:11.5px;color:var(--ink2)}
   .hr-adv{font-size:12px;color:var(--muted);margin-bottom:6px}
+  /* Service Loaner Selection — plain, email/print friendly */
+  .polhdr{font-size:13.5px;color:var(--ink2);background:var(--panel2);border:1px solid var(--line2);border-radius:8px;padding:9px 12px;margin-bottom:10px}
+  .lead{font-size:16px;line-height:1.5;color:var(--ink);margin-bottom:12px}
+  table.seltbl{width:100%;border-collapse:collapse;font-size:14px;margin-bottom:6px}
+  table.seltbl th{text-align:left;font-weight:600;color:var(--muted);font-size:12px;padding:7px 10px;border-bottom:1px solid var(--line2);text-transform:none;letter-spacing:0;background:transparent}
+  table.seltbl th.r,table.seltbl td.r{text-align:right}
+  table.seltbl td{padding:8px 10px;border-bottom:1px solid var(--line)}
+  table.seltbl tr.toprow td{background:rgba(52,211,153,.07);font-weight:700}
+  .l1hdr{font-size:14px;font-weight:700;color:var(--ink2);margin:16px 0 6px}
+  details.unit{border:1px solid var(--line2);border-radius:8px;margin-bottom:6px;background:var(--panel2)}
+  details.unit>summary{cursor:pointer;padding:9px 12px;font-size:13.5px;list-style:none}
+  details.unit>summary::-webkit-details-marker{display:none}
+  details.unit[open]>summary{border-bottom:1px solid var(--line)}
+  .u3{display:flex;gap:20px;padding:12px 12px 4px;flex-wrap:wrap}
+  .u3c{min-width:120px}
+  .u3l{font-size:12px;color:var(--muted)} .u3v{font-size:22px;font-weight:800;margin-top:2px}
+  table.stk{width:auto;min-width:320px;border-collapse:collapse;font-size:13.5px;margin:6px 12px 4px}
+  table.stk td{padding:4px 12px 4px 0} table.stk td.r{text-align:right;min-width:110px}
+  table.stk tr.sub td:first-child{padding-left:16px;color:var(--muted)}
+  table.stk tr.tot td{border-top:1px solid var(--line2);font-weight:700;padding-top:6px}
+  .basis{font-size:12.5px;color:var(--muted);padding:2px 12px 10px}
+  table.mos{border-collapse:collapse;font-size:13px;margin:0 12px 12px}
+  table.mos th{color:var(--muted);font-weight:600;font-size:12px;padding:4px 12px;text-align:left;text-transform:none;letter-spacing:0;background:transparent}
+  table.mos th.r,table.mos td.r{text-align:right}
+  table.mos td{padding:4px 12px;border-top:1px solid var(--line)}
+  table.mos td.cur{background:rgba(76,141,255,.10);font-weight:700}
+  details.explorer{border:1px solid var(--line2);border-radius:8px;margin-top:16px;background:var(--panel2)}
+  details.explorer>summary{cursor:pointer;padding:10px 12px;font-size:14px;font-weight:700;list-style:none}
+  details.explorer>summary::-webkit-details-marker{display:none}
+  .scen{padding:6px 12px 10px;border-top:1px solid var(--line)}
+  .scenh{font-size:13.5px;font-weight:700;margin:6px 0 4px}
+  .flag{font-size:11px;font-weight:700;color:var(--warn);border:1px solid var(--warn);border-radius:5px;padding:1px 6px;margin-left:6px}
+  @media print{ details.unit,details.explorer{break-inside:avoid} .toprow td{background:#eee!important} }
   .hr-plan{font-size:12.5px;color:var(--ink2);margin-bottom:6px}
   .hr-plan .pos{color:var(--good)}
   .hr-fix{font-size:12.5px;color:var(--ink);background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.28);
@@ -317,7 +350,7 @@
     <div class="sub">Recomputes everything from your two exports · every run · offline</div>
   </div>
   <div class="ctrls">
-    <div class="fld need-fld"><label>🔑 Service loaner need</label><input type="number" id="serviceNeed" value="3" min="0" style="width:74px" title="How many vehicles Service is requesting. The optimizer returns the best that many to provide."></div>
+    <div class="fld need-fld"><label>Service loaner need</label><input type="number" id="serviceNeed" value="3" min="0" style="width:74px" title="How many vehicles Service is requesting. The list highlights the best that many to place."></div>
     <div class="fld"><label>Order month</label><select id="ordmonth"></select></div>
     <div class="fld"><label>Order basis</label><select id="mode" title="What inventory this order is measured against">
       <option value="CPO">🏭 CPO — factory order (future arrival)</option>
@@ -405,7 +438,9 @@
         <div class="fld"><label>Rebate QX80</label><input type="number" id="reb80" value="0" title="current customer rebate — new sells at invoice minus this"></div>
         <div class="fld"><label>Rebate QX60</label><input type="number" id="reb60" value="0" title="current customer rebate — new sells at invoice minus this"></div>
         <div class="fld"><label>Rebate QX65</label><input type="number" id="reb65" value="0" title="current customer rebate — new sells at invoice minus this"></div>
+        <div class="fld"><label>Write-down method</label><select id="lwdmethod"><option value="pct">Percent per month</option><option value="flat">Flat dollars</option></select></div>
         <div class="fld"><label>Write-down %/mo</label><input type="number" id="ldepr" value="1.25" step="0.05"></div>
+        <div class="fld"><label>Flat write-down $</label><input type="number" id="lwdflat" value="0" title="used when method = flat dollars"></div>
         <div class="fld"><label>% taken off</label><select id="lbase"><option value="cost">Invoice cost</option><option value="msrp">MSRP</option></select></div>
         <div class="fld"><label>Min mo (ICV)</label><input type="number" id="lmin" value="3"></div>
         <div class="fld"><label>Max mo (bonus)</label><input type="number" id="lmax" value="7"></div>
@@ -1401,6 +1436,71 @@ function optimizeStrategy(res, p){
     retailNew:{profit:Math.round(newGross), gain:retailNewGain, better:retailNewGain>0},
     improved:Math.round(best.ownerNet-baseline.ownerNet)};
 }
+// ===================== SERVICE LOANER SELECTION =====================
+// A pure selection tool. The loaner program is mandatory; the only question is
+// WHICH unit to place. One number per unit — what the used-car department makes
+// or loses retailing it out of service:
+//   Expected cost   = invoice − ICV − velocity bonus − write-down + reconditioning
+//   Expected retail = projected retail at the sale month
+//   Difference      = Expected retail − Expected cost
+function _writedownAmt(cost, msrp, policy, months){
+  if(policy.method==="flat") return parseFloat(policy.flat)||0;         // flat total
+  let base=(String(policy.base).toLowerCase()==="msrp")?msrp:cost;
+  return base*((parseFloat(policy.rate)||0)/100)*months;
+}
+function _retailAt(res, ui, months){
+  let s=res.settings, curMonth=res.tb.today.getMonth()+1, saleMonthIdx=((curMonth-1+months)%12)+1;
+  let D=(typeof window!=="undefined")?window.DEPR:null;
+  if(D&&D.active&&D.a&&window.LoanerIntel){ let r=D.a.predictor(ui.model,ui.trim||null,null,ui.ext||null,saleMonthIdx,months);
+    if(r&&r.ok) return {price:r.price, n:r.n, month:saleMonthIdx}; }
+  let reb=modelRebate(s,ui.model,ui.year,curMonth);
+  return {price:Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8)), n:0, month:saleMonthIdx};
+}
+function unitDifference(res, ui, months, policy){
+  let s=res.settings, curMonth=res.tb.today.getMonth()+1, year=ui.year||res.tb.today.getFullYear();
+  let ret=_retailAt(res, ui, months);
+  let icv=incentive(s,ui.model,year,curMonth,"icv");
+  let veloAmt=incentive(s,ui.model,year,ret.month,"velocity_bonus");
+  let turnMo=45/DPM, saleAge=months+turnMo, miles=(parseFloat(s.loaner_miles_per_month)||0)*months;
+  let eligible=(saleAge<=(parseFloat(s.loaner_max_months)||7))&&(miles<(parseFloat(s.loaner_mile_cap)||1e9));
+  let velo=eligible?veloAmt:0;
+  let wd=_writedownAmt(ui.cost, ui.msrp, policy, months);
+  let recon=parseFloat(s.loaner_recon||0)||0;
+  let expectedCost=ui.cost-icv-velo-wd+recon;
+  return {invoice:Math.round(ui.cost), icv:Math.round(icv), velocity:Math.round(velo), velocityAvail:Math.round(veloAmt),
+    eligible:eligible, writedown:Math.round(wd), recon:Math.round(recon),
+    expectedCost:Math.round(expectedCost), expectedRetail:Math.round(ret.price),
+    difference:Math.round(ret.price-expectedCost), compN:ret.n};
+}
+function _currentPolicy(s){
+  return {method:(s.writedown_method==="flat")?"flat":"pct", rate:parseFloat(s.loaner_depr_pct)||1.5,
+    flat:parseFloat(s.writedown_flat)||0, base:(String(s.loaner_depr_base).toLowerCase()==="msrp")?"msrp":"cost",
+    months:Math.max(1,parseInt(s.loaner_service_months,10)||3)}; }
+function serviceSelection(res, policyOverride){
+  let s=res.settings, policy=policyOverride||_currentPolicy(s), months=policy.months;
+  let units=[];
+  (res.loanerAll||[]).forEach(p=>{ (p.units||[]).forEach(u=>{
+    let uid=(u.stock&&u.stock!=="—")?u.stock:("VIN "+(u.vin_last6||"?"));
+    let ui={model:p.model, trim:p.trim, ext:p.ext, int:p.int, year:u.year||p.year||res.tb.today.getFullYear(),
+      stock:u.stock, vin6:u.vin_last6, uid:uid, cost:(u.cost>0?u.cost:p.econ.cost), msrp:(u.msrp>0?u.msrp:p.econ.msrp)};
+    if(!(ui.cost>0)) return;
+    let d=unitDifference(res, ui, months, policy);
+    let byMonth=[3,4,5,6,7].map(m=>({months:m, difference:unitDifference(res, ui, m, policy).difference}));
+    units.push(Object.assign(ui, d, {byMonth:byMonth})); }); });
+  units.sort((a,b)=>b.difference-a.difference);
+  units.forEach((u,i)=>u.rank=i+1);
+  return {policy:policy, months:months, units:units};
+}
+function policyExplorer(res){
+  let s=res.settings, cur=serviceSelection(res), curTop=cur.units[0]?cur.units[0].stock:null;
+  function scen(policy,label,kind){ let sel=serviceSelection(res, policy);
+    return {label:label, kind:kind, changesTop:!!(sel.units[0]&&sel.units[0].stock!==curTop),
+      order:sel.units.map(u=>({rank:u.rank, stock:u.uid, name:(u.year+" "+u.model+" "+u.trim), difference:u.difference}))}; }
+  let base=cur.policy, pct=[1.0,1.25,1.5,1.75,2.0,2.5].map(r=>scen({method:"pct",rate:r,flat:0,base:base.base,months:base.months}, r.toFixed(2)+"% per month", "pct"));
+  let flatList=(s.writedown_flat_list&&s.writedown_flat_list.length)?s.writedown_flat_list:[1000,2000,3000,4000];
+  let flat=flatList.map(f=>scen({method:"flat",flat:f,base:base.base,months:base.months}, "$"+Number(f).toLocaleString()+" flat", "flat"));
+  return {currentTop:curTop, months:base.months, scenarios:pct.concat(flat)};
+}
 // Recommended acquisitions (Add 6): configs our own history says perform well
 // as loaners but which we're thin on today. Pure data — no hardcoded picks.
 function acquisitionRecs(res){
@@ -1467,6 +1567,8 @@ function runEngine(inv,sales,s,today){
   res.loanerBoard=loanerCandidates(res);
   res.acquisitionRecs=acquisitionRecs(res);
   res.serviceRecs=serviceLoanerRecs(res);
+  res.selection=serviceSelection(res);
+  res.policyExplorer=policyExplorer(res);
   res.loanerFleetPlan=loanerFleet(res);
   res.buildSeq=buildSequence(res);
   return res; }
@@ -1858,15 +1960,78 @@ function heroRecommendation(res){
   H.push("</div>");
   return H.join("");
 }
+/* ===================== SERVICE LOANER SELECTION (email/print-friendly) ===================== */
+function money0(n){ n=Math.round(n||0); return "$"+Math.abs(n).toLocaleString(); }
+function moneySign(n){ n=Math.round(n||0); return (n<0?"-$":"+$")+Math.abs(n).toLocaleString(); }
+function diffCell(n){ let c=n>=0?"var(--good)":"var(--bad)"; return "<span style='color:"+c+";font-weight:700'>"+moneySign(n)+"</span>"; }
+function stkRow(label,val,cls){
+  let disp;
+  if(cls==="tot"||cls==="") disp="$"+Math.abs(Math.round(val)).toLocaleString();
+  else disp=(val<0?"− $":"+ $")+Math.abs(Math.round(val)).toLocaleString();
+  return "<tr class='"+cls+"'><td>"+label+"</td><td class='r'>"+disp+"</td></tr>"; }
+function serviceSelectionRender(res){
+  let sel=res.selection, s=res.settings, H=[];
+  if(!sel||!sel.units.length) return "<div class='empty'>No candidate units in stock — paste inventory with unit cost, then set incentives in Data.</div>";
+  let units=sel.units, p=sel.policy, need=Math.max(1,parseInt(s.service_need,10)||1);
+  let wd = (p.method==="flat") ? ("$"+Number(p.flat).toLocaleString()+" flat") : (p.rate.toFixed(2)+"% per month of "+(p.base==="msrp"?"MSRP":"invoice"));
+  H.push("<div class='polhdr'>Store policy: write-down "+wd+", "+p.months+" months in service. The same settings apply to every unit; changing them re-ranks the list.</div>");
+  let top=units[0], second=units[1];
+  let lead="Place the <b>"+esc(top.year+" "+top.model+" "+top.trim)+"</b> ("+esc(top.uid)+"). Difference "+diffCell(top.difference)+
+    (second?", "+diffCell(top.difference-second.difference)+" better than the next unit.":".");
+  if(need>1) lead+=" Service needs "+need+" — the top "+need+" rows are the picks.";
+  H.push("<div class='lead'>"+lead+"</div>");
+  H.push("<table class='seltbl'><thead><tr><th>Rank</th><th>Unit</th><th class='r'>Expected cost</th><th class='r'>Expected retail</th><th class='r'>Difference</th></tr></thead><tbody>");
+  units.forEach(u=>{ H.push("<tr class='"+(u.rank<=need?"toprow":"")+"'><td>"+u.rank+"</td>"+
+    "<td>"+esc(u.year+" "+u.model+" "+u.trim)+" · "+esc(u.uid)+"</td>"+
+    "<td class='r'>"+money0(u.expectedCost)+"</td><td class='r'>"+money0(u.expectedRetail)+"</td>"+
+    "<td class='r'>"+diffCell(u.difference)+"</td></tr>"); });
+  H.push("</tbody></table>");
+
+  H.push("<div class='l1hdr'>Unit detail</div>");
+  units.forEach(u=>{
+    H.push("<details class='unit'><summary>"+u.rank+". "+esc(u.year+" "+u.model+" "+u.trim)+" · "+esc(u.uid)+" &mdash; Difference "+diffCell(u.difference)+"</summary>");
+    H.push("<div class='u3'>"+
+      "<div class='u3c'><div class='u3l'>Expected cost</div><div class='u3v'>"+money0(u.expectedCost)+"</div></div>"+
+      "<div class='u3c'><div class='u3l'>Expected retail</div><div class='u3v'>"+money0(u.expectedRetail)+"</div></div>"+
+      "<div class='u3c'><div class='u3l'>Difference</div><div class='u3v'>"+diffCell(u.difference)+"</div></div></div>");
+    H.push("<table class='stk'><tbody>");
+    H.push(stkRow("Invoice", u.invoice, ""));
+    H.push(stkRow("ICV allowance", -u.icv, "sub"));
+    H.push(stkRow("Velocity bonus"+(u.eligible?"":" (not earned)"), -(u.eligible?u.velocity:0), "sub"));
+    H.push(stkRow("Write-down"+(p.method==="flat"?" (flat)":" ("+p.rate.toFixed(2)+"% × "+p.months+" mo)"), -u.writedown, "sub"));
+    H.push(stkRow("Reconditioning", u.recon, "sub"));
+    H.push(stkRow("Expected cost", u.expectedCost, "tot"));
+    H.push("</tbody></table>");
+    H.push("<div class='basis'>Retail based on "+(u.compN>0?(u.compN+" historical "+esc(u.model+" "+u.trim)+" sales"):"the modeled fallback (no matching history yet)")+".</div>");
+    H.push("<table class='mos'><thead><tr><th>Months in service</th>"+u.byMonth.map(bm=>"<th class='r'>"+bm.months+"</th>").join("")+"</tr></thead><tbody><tr><td>Difference</td>"+
+      u.byMonth.map(bm=>"<td class='r"+(bm.months===p.months?" cur":"")+"'>"+diffCell(bm.difference)+"</td>").join("")+"</tr></tbody></table>");
+    H.push("</details>");
+  });
+  H.push(policyExplorerRender(res));
+  return H.join("");
+}
+function policyExplorerRender(res){
+  let pe=res.policyExplorer; if(!pe||!pe.scenarios.length) return "";
+  let H=["<details class='explorer'><summary>Policy explorer &mdash; what a write-down change would do</summary>"];
+  H.push("<div class='basis'>Each scenario re-ranks every unit under a store-wide write-down change ("+pe.months+" months in service). Scenarios that change which unit ranks first are flagged.</div>");
+  pe.scenarios.forEach(sc=>{
+    H.push("<div class='scen'><div class='scenh'>"+esc(sc.label)+(sc.changesTop?" <span class='flag'>changes top pick</span>":"")+"</div>");
+    H.push("<table class='seltbl'><thead><tr><th>Rank</th><th>Unit</th><th class='r'>Difference</th></tr></thead><tbody>");
+    sc.order.slice(0,8).forEach(o=>H.push("<tr class='"+(o.rank===1?"toprow":"")+"'><td>"+o.rank+"</td><td>"+esc(o.name+" · "+o.stock)+"</td><td class='r'>"+diffCell(o.difference)+"</td></tr>"));
+    H.push("</tbody></table></div>");
+  });
+  H.push("</details>");
+  return H.join("");
+}
 function render(res){
   let rep={op:orderPriority(res),over:overstock(res),vins:wholesaleVins(res),demo:demoDashboard(res),fleet:fleetTargets(res)};
   let s=res.settings,tb=res.tb, H=[];
   let fc=retailForecast(res);   // computed once; reused in the Retail Forecast section
   let latest=tb.latest?(Math.floor(tb.latest/12)+"-"+String(tb.latest%12).padStart(2,"0")):"—";
 
-  // ★ SERVICE LOANER RECOMMENDATION — the hero: answers "Service needs X; which X?"
-  H.push(sec("★","Service Loaner Recommendation","which vehicles to provide when Service requests them — ranked by opportunity advantage"));
-  H.push(heroRecommendation(res));
+  // SERVICE LOANER SELECTION — which unit to place into the mandatory program
+  H.push(sec("1","Service Loaner Selection","which unit to place, ranked by what the used department makes or loses"));
+  H.push(serviceSelectionRender(res));
 
   // KPI tiles — one per model: what to order now, colored by inventory health
   function hColor(h){ return h.indexOf("tight")>=0?"var(--bad)":(h.indexOf("heavy")>=0?"var(--warn)":(h.indexOf("cold")>=0?"var(--muted)":"var(--good)")); }
@@ -2134,7 +2299,7 @@ function wireDepr(a, s){
 // Wrap the flat output into one <section class="dash"> per dashboard so print
 // (and anything else) can show/hide them individually.
 function groupSections(root){
-  const titleKey={"Service Loaner Recommendation":"recommend",
+  const titleKey={"Service Loaner Selection":"selection",
     "Order Priority":"order","6-Month Rolling Order Plan":"plan",
     "Fleet Stock Target & Seasonality":"fleet","Executive Demo Program":"democenter",
     "Service Loaner Program":"loaner","Service Loaner Depreciation":"depr",
@@ -2200,10 +2365,11 @@ function getSettings(){
     rebates:{QX80:numVal("reb80",0),QX60:numVal("reb60",0),QX65:numVal("reb65",0)},
     preowned_price_pct:numVal("lret",0.80), order_unit_decay:numVal("ldecay",1.0),
     loaner_hold_per_day:numVal("lhold",0), incentives:readIncentives(),
+    writedown_method:(document.getElementById("lwdmethod")||{}).value||"pct", writedown_flat:numVal("lwdflat",0),
     service_need:numVal("serviceNeed",3), new_retail_gross:numVal("lnewgross",1500),
     loaner_units:readFleet(), preowned_sales:readPreowned() }; }
 function numVal(id,def){ let el=document.getElementById(id); if(!el) return def; let v=parseFloat(el.value); return isNaN(v)?def:v; }
-const LOANCFG_IDS=["lfleet","licv80","licv60","licv65","reb80","reb60","reb65","ldepr","lbase","lmin","lmax","lsvc","lcap","lbonus","lmpm","lrecon","lret","ldecay","lhold","lnewgross"];
+const LOANCFG_IDS=["lfleet","licv80","licv60","licv65","reb80","reb60","reb65","ldepr","lwdmethod","lwdflat","lbase","lmin","lmax","lsvc","lcap","lbonus","lmpm","lrecon","lret","ldecay","lhold","lnewgross"];
 function persistLoanCfg(){ try{ let o={}; LOANCFG_IDS.forEach(id=>o[id]=document.getElementById(id).value); localStorage.setItem("pm_loancfg",JSON.stringify(o)); }catch(e){} }
 function restoreLoanCfg(){ try{ let o=JSON.parse(localStorage.getItem("pm_loancfg")||"null"); if(!o) return;
   LOANCFG_IDS.forEach(id=>{ if(o[id]!==undefined&&document.getElementById(id)) document.getElementById(id).value=o[id]; }); }catch(e){} }
