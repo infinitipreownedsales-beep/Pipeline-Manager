@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { whisper, humanClub, teeWhisper, puttWhisper, benchWhisper, clubConfidence } from "./whisper.js";
 import { MAPPED } from "./holes/index.js";
+import { recoveryPlan, isRecoveryLie } from "./recovery.js";
 
 // CADDIE OS v10 — DYNAMIC ROUND ENGINE
 // Every shot logs the club actually used (tap to change, layups tappable).
@@ -610,6 +611,9 @@ export default function CaddieOS(){
     if(sidePct!=null&&sidePct>=72) score-=8;           // a strong one-way miss is less trustworthy
     return Math.max(0,Math.min(100,Math.round(score)));
   };
+  // Recovery-mode inputs: the bag (carry + confidence) and the player's money number.
+  const wedgeDist=(P.w52&&P.w52.fs)?Math.round((P.w52.fs[0]+P.w52.fs[1])/2):100;
+  const recoBag=()=>Object.keys(P.carries).map(k=>({k,carry:E.eff(k),rel:reliability(k)}));
   const H=live?CH[live.hole]:null;
   // Live distances to key marks (carry hazard / dogleg corner) from the ball's spot.
   const holeMarks=(()=>{if(!H||!live)return [];const covered=H.y-live.rem;const m=[];
@@ -793,7 +797,10 @@ export default function CaddieOS(){
                 {[["NONE","calm"],["INTO","into"],["DOWN","down"],["CROSS","cross"]].map(([k,l])=>(
                   <button key={k} onClick={()=>setWind(k)} style={{border:"none",borderRadius:14,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer",background:wind===k?INK:"transparent",color:wind===k?PAPER:MUTE}}>{l}</button>))}
               </div>
-              <button className="tapbtn" onClick={()=>{buzz();const v=parseInt(qYards)||live.rem;const ev=Math.round(v*windMul*lieFactor(lie));const pk=E.pick(ev,reliability);saveLive({...live,rem:v});setSel(pk.chip);setAsked(true);setShowAlt(false);}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:17,fontWeight:700,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4}}>Read it</button>
+              <button className="tapbtn" onClick={()=>{buzz();const v=parseInt(qYards)||live.rem;
+                if(isRecoveryLie(lie)){const plan=recoveryPlan(v,lie,{bag:recoBag(),wedgeDist});saveLive({...live,rem:v});setSel(plan.best?plan.best.club:Object.keys(P.carries)[0]);}
+                else {const ev=Math.round(v*windMul*lieFactor(lie));const pk=E.pick(ev,reliability);saveLive({...live,rem:v});setSel(pk.chip);}
+                setAsked(true);setShowAlt(false);}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:17,fontWeight:700,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4}}>Read it</button>
               {(()=>{const hs=(live.shots||[]).map((x,gi)=>({x,gi})).filter(o=>o.x.h===live.hole+1);if(!hs.length)return null;
                 return <div style={{marginTop:20,background:"#fff",borderRadius:16,padding:12,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
                   <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8}}>Shots this hole — tap to review or fix</div>
@@ -816,7 +823,36 @@ export default function CaddieOS(){
                 </div>;})()}
             </div>}
 
-            {phase==="whisper"&&(()=>{
+            {phase==="whisper"&&isRecoveryLie(lie)&&(()=>{
+              // RECOVERY MODE — objective switches to lowest expected strokes, not "reach green".
+              const plan=recoveryPlan(live.rem,lie,{bag:recoBag(),wedgeDist});
+              const opt=plan.options.find(o=>o.club===sel)||plan.best;
+              const whyBest=plan.best&&plan.best.kind==="hero"?"the window's worth the risk here.":"punching or laying up beats the hero shot here.";
+              return <div style={arrive}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+                  <div style={{color:MUTE,fontSize:14}}><span style={{color:"#a3402f",fontWeight:800}}>RECOVERY</span> · {live.rem}y · {lieLabel.toLowerCase()}</div>
+                  <button onClick={()=>{setAsked(false);setShowAlt(false);}} style={{border:"none",background:"transparent",color:MUTE,fontSize:13,cursor:"pointer"}}>↩ back</button>
+                </div>
+                <div style={{background:PINE,borderRadius:28,padding:"24px 22px",boxShadow:"0 10px 30px rgba(18,43,33,.18)"}}>
+                  <div style={{color:"#e7b7a6",fontSize:11,letterSpacing:2,textTransform:"uppercase",marginBottom:6,fontWeight:800}}>{plan.objective}</div>
+                  <div style={{fontFamily:SERIF,fontSize:36,color:GOLD,marginBottom:8}}>{opt?humanClub(famOf(opt.club),opt.club):"—"}</div>
+                  <div style={{fontFamily:SERIF,fontSize:18,color:PAPER,lineHeight:1.45,opacity:.96}}>{opt?opt.reason:""}</div>
+                </div>
+                <div style={{marginTop:14}}>
+                  {plan.options.map((o,i)=>{const on=o.club===sel&&opt&&o.kind===opt.kind;const isBest=plan.best&&o.kind===plan.best.kind;
+                    return <button key={i} className="tapbtn" onClick={()=>setSel(o.club)} style={{display:"block",width:"100%",textAlign:"left",border:on?"2px solid #1a3a2e":"2px solid #e7e2d8",background:on?"#eef1ea":"#fff",borderRadius:14,padding:"11px 13px",marginBottom:8,cursor:"pointer"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                        <span style={{fontSize:15,fontWeight:800,color:INK}}>{on?"✓ ":""}{o.label} · {o.club}{o.kind==="hero"?` · ${o.prob}% comes off`:""}</span>
+                        <span style={{fontSize:13,fontWeight:800,color:isBest?"#1a7f37":MUTE,whiteSpace:"nowrap"}}>exp {o.ev}{isBest?" ✓":""}</span>
+                      </div>
+                      <div style={{fontSize:12,color:MUTE,marginTop:2}}>{o.reason}</div>
+                    </button>;})}
+                </div>
+                <div style={{color:MUTE,fontSize:12,fontStyle:"italic",fontFamily:SERIF,margin:"2px 4px 0"}}>Why — lowest expected score to the hole; {whyBest}</div>
+                <button className="tapbtn" onClick={()=>{buzz();setAwaitResult(true);}} style={{width:"100%",border:"none",borderRadius:18,padding:"20px",fontSize:19,fontWeight:800,cursor:"pointer",background:GOLD,color:PINE,letterSpacing:1,marginTop:14}}>HIT IT</button>
+              </div>;})()}
+
+            {phase==="whisper"&&!isRecoveryLie(lie)&&(()=>{
               const fam=famOf(sel||"7i");
               const sideC=(()=>{const c=cstat(fam);if(c&&c.side)return{dir:c.side.dir,pct:c.side.pct};const b=dirBias(fam);if(b)return{dir:b[0],pct:parseInt(b.slice(1))};return null;})();
               const carrySel=E.chipCarry(sel||"CHIP");
