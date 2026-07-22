@@ -40,12 +40,43 @@ function getSettings(){
     loaner_miles_per_month:numVal("lmpm",1200), loaner_recon:numVal("lrecon",0),
     rebates:{QX80:numVal("reb80",0),QX60:numVal("reb60",0),QX65:numVal("reb65",0)},
     preowned_price_pct:numVal("lret",0.80), order_unit_decay:numVal("ldecay",1.0),
+    loaner_hold_per_day:numVal("lhold",0), incentives:readIncentives(),
     loaner_units:readFleet(), preowned_sales:readPreowned() }; }
 function numVal(id,def){ let el=document.getElementById(id); if(!el) return def; let v=parseFloat(el.value); return isNaN(v)?def:v; }
-const LOANCFG_IDS=["lfleet","licv80","licv60","licv65","reb80","reb60","reb65","ldepr","lbase","lmin","lmax","lsvc","lcap","lbonus","lmpm","lrecon","lret","ldecay"];
+const LOANCFG_IDS=["lfleet","licv80","licv60","licv65","reb80","reb60","reb65","ldepr","lbase","lmin","lmax","lsvc","lcap","lbonus","lmpm","lrecon","lret","ldecay","lhold"];
 function persistLoanCfg(){ try{ let o={}; LOANCFG_IDS.forEach(id=>o[id]=document.getElementById(id).value); localStorage.setItem("pm_loancfg",JSON.stringify(o)); }catch(e){} }
 function restoreLoanCfg(){ try{ let o=JSON.parse(localStorage.getItem("pm_loancfg")||"null"); if(!o) return;
   LOANCFG_IDS.forEach(id=>{ if(o[id]!==undefined&&document.getElementById(id)) document.getElementById(id).value=o[id]; }); }catch(e){} }
+
+/* ---- centralized incentive table (Enh 1+2: by model / year / month) ---- */
+function rawInc(){ let out=[];
+  document.querySelectorAll("#incRows .increw").forEach(row=>{
+    if(row.classList.contains("thead")) return;
+    out.push({year:row.querySelector(".i-year").value.trim(), model:row.querySelector(".i-model").value,
+      month:row.querySelector(".i-month").value, rebate:row.querySelector(".i-reb").value.trim(),
+      icv:row.querySelector(".i-icv").value.trim(), dealer_cash:row.querySelector(".i-dc").value.trim(),
+      velocity_bonus:row.querySelector(".i-velo").value.trim()}); });
+  return out; }
+function addIncentiveRow(d){ d=d||{};
+  let row=document.createElement("div"); row.className="increw";
+  let mopts="<option value='0'>Any</option>"+MONTHS.map((m,i)=>"<option value='"+(i+1)+"'"+((d.month==i+1)?" selected":"")+">"+m+"</option>").join("");
+  let modopts=MODELS.map(m=>"<option"+((d.model===m)?" selected":"")+">"+m+"</option>").join("");
+  row.innerHTML =
+    "<input type='number' class='i-year' placeholder='2026' value='"+(d.year!=null?attrq(d.year):"")+"'>"+
+    "<select class='i-model'>"+modopts+"</select>"+
+    "<select class='i-month'>"+mopts+"</select>"+
+    "<input type='number' class='i-reb' placeholder='rebate' value='"+(d.rebate!=null?attrq(d.rebate):"")+"'>"+
+    "<input type='number' class='i-icv' placeholder='ICV' value='"+(d.icv!=null?attrq(d.icv):"")+"'>"+
+    "<input type='number' class='i-dc' placeholder='dealer cash' value='"+(d.dealer_cash!=null?attrq(d.dealer_cash):"")+"'>"+
+    "<input type='number' class='i-velo' placeholder='velocity' value='"+(d.velocity_bonus!=null?attrq(d.velocity_bonus):"")+"'>"+
+    "<button class='del' title='remove program'>✕</button>";
+  row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistInc(); });
+  row.querySelectorAll("input,select").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistInc(); }));
+  document.getElementById("incRows").appendChild(row); return row; }
+function readIncentives(){ let out=[]; rawInc().forEach(r=>{ if(r.model) out.push({year:parseInt(r.year,10)||0,model:r.model,
+  month:parseInt(r.month,10)||0,rebate:r.rebate,icv:r.icv,dealer_cash:r.dealer_cash,velocity_bonus:r.velocity_bonus}); }); return out; }
+function persistInc(){ try{ localStorage.setItem("pm_inc",JSON.stringify(rawInc())); }catch(e){} }
+function restoreInc(){ try{ JSON.parse(localStorage.getItem("pm_inc")||"[]").forEach(addIncentiveRow); }catch(e){} }
 
 /* ---- in-service loaner fleet (editable) ---- */
 function rawFleet(){ let out=[];
@@ -415,6 +446,8 @@ window.addEventListener("DOMContentLoaded",function(){
   restoreAdds();
   document.getElementById("addFleet").addEventListener("click",function(){ addFleetRow(); persistFleet(); });
   restoreFleet();
+  document.getElementById("addInc").addEventListener("click",function(){ addIncentiveRow(); persistInc(); });
+  restoreInc();
   restorePreowned(); restoreLoanCfg();
   document.getElementById("pre").addEventListener("change",function(){ liveRecompute(); persistPreowned(); });
   LOANCFG_IDS.forEach(id=>document.getElementById(id).addEventListener("change",function(){ liveRecompute(); persistLoanCfg(); }));

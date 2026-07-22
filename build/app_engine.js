@@ -318,7 +318,27 @@ function trimNewDts(metrics,model,code){ let v=[]; Object.values(metrics).forEac
   return v.length?v.reduce((a,b)=>a+b,0)/v.length:null; }
 function modelAvgDts(metrics,model){ let v=[]; Object.values(metrics).forEach(m=>{ if(m.model===model&&m.dts!==null&&m.total>0) v.push(m.dts); });
   return v.length?v.reduce((a,b)=>a+b,0)/v.length:null; }
-function modelRebate(s,model){ return parseFloat((s.rebates||{})[model]||0)||0; }
+/* Centralized incentive lookup (Enh 1+2): programs vary by model, model YEAR,
+   and calendar MONTH. Rows live in s.incentives = [{year,model,month,rebate,icv,
+   dealer_cash,velocity_bonus}] where year 0 = any year and month 0 = any month.
+   Most-specific row wins; when nothing matches we fall back to the legacy flat
+   per-model fields, so an empty table reproduces today's behavior exactly. */
+function incentive(s,model,year,month,field){
+  let rows=s.incentives||[], best=null, bestScore=-1;
+  year=parseInt(year,10)||0; month=parseInt(month,10)||0;
+  for(let r of rows){ if(String(r.model||"").trim().toUpperCase()!==model) continue;
+    let ry=parseInt(r.year,10)||0, rm=parseInt(r.month,10)||0;
+    if(ry&&year&&ry!==year) continue; if(rm&&month&&rm!==month) continue;
+    let score=(ry?2:0)+(rm?1:0);               // prefer year- and month-specific rows
+    if(score>bestScore){ bestScore=score; best=r; } }
+  if(best&&best[field]!==undefined&&best[field]!==""&&best[field]!==null) return parseFloat(best[field])||0;
+  // legacy fallback
+  if(field==="rebate") return parseFloat((s.rebates||{})[model]||0)||0;
+  if(field==="icv") return parseFloat((s.loaner_icv||{})[model]||0)||0;
+  if(field==="velocity_bonus") return parseFloat(s.loaner_velocity_bonus||0)||0;
+  return 0;
+}
+function modelRebate(s,model,year,month){ return incentive(s,model,year,month,"rebate"); }
 function computePreowned(s,metrics,inv){
   let rm=repMaps(inv), measured={};
   function modeledPrice(tk){ let model=tk.split("|")[0]; let cn=Math.max(0,(rm.costTrim[tk]||0)-modelRebate(s,model)); return cn*s.preowned_price_pct; }
@@ -346,18 +366,32 @@ function deprResale(model,trim,ext,ageMonths){
   var r=window.LoanerIntel.predictResale(D.a,model,trim,ext,ageMonths);
   return (r&&r.ok)?{price:r.price,low:r.price_low,high:r.price_high,dts:r.dts,n:r.n,conf:r.confidence}:null;
 }
-function loanerEconomics(cost,msrp,model,usedDts,usedPrice,s,rebate){
-  rebate=parseFloat(rebate||0)||0;
-  let icv=parseFloat((s.loaner_icv||{})[model]||0)||0, svc=Math.max(0,parseInt(s.loaner_service_months,10)||0);
+function loanerEconomics(cost,msrp,model,usedDts,usedPrice,s,rebate,ctx){
+  ctx=ctx||{}; let year=ctx.year||0, month=ctx.month||0;
+  // incentive-table driven (falls back to flat fields when the table is empty)
+  rebate=(rebate!==undefined&&rebate!==null)?parseFloat(rebate||0)||0:incentive(s,model,year,month,"rebate");
+  let icv=incentive(s,model,year,month,"icv");
+  let svc=Math.max(0,parseInt(s.loaner_service_months,10)||0);
+  let already=Math.max(0,parseFloat(ctx.monthsInService||0));       // for in-service units (Enh 3)
+  let remainingSvc=(ctx.retailInMonths!=null)?Math.max(0,ctx.retailInMonths):svc;
+  let serviceSpan=already+remainingSvc;                             // total months in fleet at sale
   let icvTotal=icv, baseVal=(String(s.loaner_depr_base).toLowerCase()==="msrp")?msrp:cost;  // ICV is one-time
-  let deprTotal=baseVal*(s.loaner_depr_pct/100)*svc;
-  let usedMonths=(usedDts||0)/DPM, saleMonth=svc+usedMonths, miles=s.loaner_miles_per_month*svc;
-  let bonusOk=(saleMonth<=s.loaner_max_months)&&(miles<s.loaner_mile_cap), bonus=bonusOk?parseFloat(s.loaner_velocity_bonus):0;
-  let cheapestNew=Math.max(0,cost-rebate), adj=cost-icvTotal-deprTotal-bonus, gross=(usedPrice||0)-adj-parseFloat(s.loaner_recon||0);
+  let deprTotal=baseVal*(s.loaner_depr_pct/100)*serviceSpan;
+  let usedMonths=(usedDts||0)/DPM, saleMonth=serviceSpan+usedMonths, miles=s.loaner_miles_per_month*serviceSpan;
+  // velocity bonus is a monthly program: use the projected RETAIL month if given
+  let retailMonth=ctx.retailMonth||month, velo=incentive(s,model,year,retailMonth,"velocity_bonus");
+  let bonusOk=(saleMonth<=s.loaner_max_months)&&(miles<s.loaner_mile_cap), bonus=bonusOk?velo:0;
+  let recon=parseFloat(s.loaner_recon||0)||0;
+  let daysHeld=serviceSpan*DPM+(usedDts||0), holdPerDay=parseFloat(s.loaner_hold_per_day||0)||0, holding=holdPerDay*daysHeld;
+  let cheapestNew=Math.max(0,cost-rebate), adj=cost-icvTotal-deprTotal-bonus;
+  let gross=(usedPrice||0)-adj-recon;                              // front-end gross
+  let net=gross-holding;                                            // after holding cost
   return {cost:Math.round(cost),msrp:Math.round(msrp),rebate:Math.round(rebate),cheapestNew:Math.round(cheapestNew),
-    icvTotal:Math.round(icvTotal),deprTotal:Math.round(deprTotal),bonus:Math.round(bonus),bonusOk:bonusOk,
+    icvTotal:Math.round(icvTotal),deprTotal:Math.round(deprTotal),bonus:Math.round(bonus),bonusOk:bonusOk,velocityAvail:Math.round(velo),
+    recon:Math.round(recon),holding:Math.round(holding),mileageAdj:0,net:Math.round(net),
     adjustedCost:Math.round(adj),usedPrice:Math.round(usedPrice||0),usedGross:Math.round(gross),upsideDown:gross<0,
-    saleMonth:Math.round(saleMonth*10)/10,milesAtSale:Math.round(miles),serviceMonths:svc}; }
+    saleMonth:Math.round(saleMonth*10)/10,milesAtSale:Math.round(miles),serviceMonths:svc,
+    monthsInService:Math.round(already*10)/10,retailInMonths:Math.round(remainingSvc*10)/10,serviceSpan:Math.round(serviceSpan*10)/10}; }
 function loanerScore(econ,pstat,metric){
   let gb=Math.max(-60,Math.min(40,econ.usedGross/500));
   let vel=Math.max(0,(60-(pstat.usedDts||60))/60)*20, bb=econ.bonusOk?10:0;
@@ -380,15 +414,22 @@ function allCandidates(res){ let s=res.settings, rm=repMaps(res.inv), pre=res.pr
     if(l.suppressed&&!inStock) return;
     let code=l.key.split("|")[1], tk=model+"|"+code, pstat=pre[tk]; if(!pstat) return;
     let cm=repCostMsrp(l.key,model,code,rm), cost=cm[0], msrp=cm[1]; if(cost<=0&&msrp<=0) return;
-    let metric=res.metrics[l.key]||null, rebate=modelRebate(s,model);
-    // resale-price precedence: explicit measured sales > 10-yr history curve > 80% modeled floor
+    let metric=res.metrics[l.key]||null;
+    // candidate model year (freshest in-stock unit, else current) + program month → incentive context
+    let candYear=0; if(pos&&pos.onlotUnits){ let ys=pos.onlotUnits.map(u=>parseInt(u.myear||u.my||0,10)).filter(y=>y); if(ys.length) candYear=Math.max.apply(null,ys); }
+    if(!candYear) candYear=res.tb.today.getFullYear();
     let svc=Math.max(1,parseInt(s.loaner_service_months,10)||3);
+    let ordM=parseInt(s.order_month,10)||(res.tb.today.getMonth()+1);
+    let retailMonth=((ordM-1+Math.round(svc))%12+12)%12+1;
+    let ctx={year:candYear,month:ordM,retailMonth:retailMonth};
+    let rebate=modelRebate(s,model,candYear,ordM);
+    // resale-price precedence: explicit measured sales > 10-yr history curve > 80% modeled floor
     let hist=pstat.modeled?deprResale(model,l.trim,l.ext,svc):null;
     let usedPrice, usedSrc, usedDts=pstat.usedDts;
     if(!pstat.modeled){ usedPrice=pstat.usedPrice; usedSrc="measured"; }
     else if(hist){ usedPrice=hist.price; usedSrc="history"; if(hist.dts!=null) usedDts=hist.dts; }
     else { usedPrice=Math.max(0,cost-rebate)*s.preowned_price_pct; usedSrc="modeled"; }
-    let econ=loanerEconomics(cost,msrp,model,usedDts,usedPrice,s,rebate);
+    let econ=loanerEconomics(cost,msrp,model,usedDts,usedPrice,s,rebate,ctx);
     // synthetic pstat carrying the chosen source, so score/reason reflect history
     let ps={usedDts:usedDts,modeled:(usedSrc==="modeled"),count:pstat.count,src:usedSrc,histN:hist?hist.n:null,histConf:hist?hist.conf:null};
     let fresh=pos?pos.onlotUnits.slice().sort((a,b)=>a.dis-b.dis):[];
@@ -396,7 +437,7 @@ function allCandidates(res){ let s=res.settings, rm=repMaps(res.inv), pre=res.pr
       vin_last6:(u.serial||u.stock)?(u.serial||u.stock).slice(-6):"—",dis:Math.round(u.dis),msrp:u.msrp,cost:u.cost,
       year:u.myear||u.my||"",ext_int:u.ext+"/"+u.int}));
     let score=loanerScore(econ,ps,metric)+(units.length?4:0);
-    out.push({model:model,trim:l.trim,ext:l.ext,int:l.int,key:l.key,usedDts:usedDts,usedPrice:econ.usedPrice,
+    out.push({model:model,trim:l.trim,ext:l.ext,int:l.int,key:l.key,year:candYear,usedDts:usedDts,usedPrice:econ.usedPrice,
       modeled:ps.modeled,usedSrc:usedSrc,histResale:hist,score:Math.round(score*10)/10,netValue:econ.usedGross,econ:econ,newDts:l.dts,
       onlot:l.onlot,inStock:units.length>0,units:units,reason:loanerCandReason(econ,ps,l)}); });
   out.sort((a,b)=>b.score-a.score); return out; }
@@ -440,7 +481,8 @@ function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], rele
     let months=hasStart?((today-start)/86400000/DPM):0, miles=loanerNum(e.miles);
     if(miles===null) miles=s.loaner_miles_per_month*months;
     let u=loanerMatchUnit(stock,res.inv), model=u?u.model:String(e.model||"").trim().toUpperCase();
-    let icv=parseFloat((s.loaner_icv||{})[model]||0)||0;
+    let uyear=u?parseInt(u.myear||u.my||0,10):0;
+    let icv=incentive(s,model,uyear,today.getMonth()+1,"icv");
     let releaseAt=hasStart?new Date(start.getTime()+Math.round(s.loaner_max_months*DPM)*86400000):null;
     let eligible=months>=s.loaner_min_months, nearCap=miles>=s.loaner_mile_cap*0.9, nearTime=months>=s.loaner_max_months-1, status;
     if(!eligible) status="🅗 HOLD · "+Math.max(0,Math.ceil((s.loaner_min_months-months)*DPM))+"d to ICV";
