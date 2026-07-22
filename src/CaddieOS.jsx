@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { whisper, humanClub, teeWhisper, puttWhisper, benchWhisper } from "./whisper.js";
+import { whisper, humanClub, teeWhisper, puttWhisper, benchWhisper, clubConfidence } from "./whisper.js";
 
 // CADDIE OS v10 — DYNAMIC ROUND ENGINE
 // Every shot logs the club actually used (tap to change, layups tappable).
@@ -553,16 +553,14 @@ export default function CaddieOS(){
   // reliability(fam) 0..100 — how much to trust this club, from the player's own
   // dispersion (±yds), consistency (confidence), miss-direction bias, and hot/cold.
   // Drives club SELECTION, not just the words: a wild club loses ties to a steady one.
+  // Per-club rolling confidence from OUTCOMES (recency + tournament weighted), the
+  // fixed hot/cold engine. Reused for club selection, chip badges, and the bench prompt.
+  const shotsOf=fm=>allShots.filter(s=>famOf(s.c)===fm);
+  const confOf=fm=>clubConfidence(shotsOf(fm),cstat(fm));
   const reliability=fm=>{
-    const cs=cstat(fm),d=disp(fm),c=conf(fm);
-    const sd=d?d.sd:(cs&&cs.sd!=null?cs.sd:null);
-    let score=70;
-    if(sd!=null) score=Math.max(0,100-sd*4.5);        // ±22y -> ~0, tight -> ~100
-    if(c!=null) score=Math.round(score*0.5+c*0.5);     // blend in confidence
-    if(flags.cold.includes(fm)) score-=30;
-    if(flags.hot.includes(fm)) score+=8;
-    const sidePct=cs&&cs.side?cs.side.pct:null;
-    if(sidePct!=null&&sidePct>=72) score-=12;          // a strong one-way miss is less trustworthy
+    let score=confOf(fm).score;
+    const cs=cstat(fm),sidePct=cs&&cs.side?cs.side.pct:null;
+    if(sidePct!=null&&sidePct>=72) score-=8;           // a strong one-way miss is less trustworthy
     return Math.max(0,Math.min(100,Math.round(score)));
   };
   const H=live?CH[live.hole]:null;
@@ -598,7 +596,7 @@ export default function CaddieOS(){
   const shotType=(from,reach,g)=>live.strokes===0?"tee":g?"approach":from<=34?"pitch":reach?"approach":"positioning";
   const logShot=(gain,g,syn,dirOv,endLie,typeOv,penalty)=>{
     const shot={c:sel||"?",from:live.rem,gain,exp:E.chipCarry(sel||"CHIP"),g:g?1:0,p:syn?1:0,h:live.hole+1,lie,dir:dirOv!==undefined?dirOv:dir,
-      end:endLie||null,type:typeOv||shotType(live.rem,E.chipCarry(sel||"CHIP")>=live.rem-6,g)};
+      end:endLie||null,type:typeOv||shotType(live.rem,E.chipCarry(sel||"CHIP")>=live.rem-6,g),tourn:tourn?1:0};
     let l={...live,strokes:live.strokes+1,shots:[...(live.shots||[]),shot]};
     // P6 fix: a Water outcome must apply its penalty in the SAME state update.
     // Previously it called addPenalty() separately, which re-saved from stale state
@@ -646,7 +644,8 @@ export default function CaddieOS(){
   const runPlan=live?CH.slice(0,live.hole).reduce((a,h)=>a+h.tgt,0):0;
   const dv=runTot-runPlan;
   const totalPlan=CH.reduce((a,h)=>a+h.tgt,0);
-  const coldAlert=live?flags.cold.filter(f=>!live.bench.includes(f)&&!((live.dismiss||[]).includes(f))):[];
+  // Cold clubs from the confidence engine (not the old clean-lie filter that hid failures).
+  const coldAlert=live?["52",...Object.keys(P.carries)].filter(f=>confOf(f).state==="cold"&&!live.bench.includes(f)&&!((live.dismiss||[]).includes(f))):[];
   const inspecting=live&&viewHole!==null&&viewHole!==live.hole;
 
   return (
@@ -721,12 +720,13 @@ export default function CaddieOS(){
           return <div style={{padding:"16px 16px 28px"}}>
 
             {phase==="question"&&<div style={arrive}>
-              {(()=>{const c=flags.cold.find(f=>!live.bench.includes(f)&&!((live.dismiss||[]).includes(f)));if(!c)return null;
-                return <div style={{background:"#fff",borderRadius:16,padding:14,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
-                  <div style={{fontFamily:SERIF,fontSize:16,color:INK,marginBottom:10}}>{benchWhisper(c)}</div>
+              {(()=>{const c=coldAlert[0];if(!c)return null;const cc=confOf(c);
+                return <div style={{background:"#fff",borderRadius:16,padding:14,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,.06)",border:"1px solid #efe7d8"}}>
+                  <div style={{fontFamily:SERIF,fontSize:16,color:INK,marginBottom:6}}>{benchWhisper(c)}</div>
+                  {cc.reasons.length>0&&<div style={{color:MUTE,fontSize:12,marginBottom:10,lineHeight:1.5}}>Recent {c}: {cc.reasons.map((r,i)=>(i+1)+") "+r).join("  ")} — confidence {cc.score}/100.</div>}
                   <div style={{display:"flex",gap:10}}>
-                    <button onClick={()=>saveLive({...live,bench:[...live.bench,c]})} style={{flex:1,border:"none",borderRadius:12,padding:"12px",background:PINE,color:PAPER,fontWeight:700,cursor:"pointer"}}>Yes, route around it</button>
-                    <button onClick={()=>saveLive({...live,dismiss:[...(live.dismiss||[]),c]})} style={{flex:1,border:"none",borderRadius:12,padding:"12px",background:"#f1efe9",color:INK,fontWeight:700,cursor:"pointer"}}>No, it's fine</button>
+                    <button className="tapbtn" onClick={()=>saveLive({...live,bench:[...live.bench,c]})} style={{flex:1,border:"none",borderRadius:12,padding:"12px",background:PINE,color:PAPER,fontWeight:700,cursor:"pointer"}}>Yes, route around it</button>
+                    <button className="tapbtn" onClick={()=>saveLive({...live,dismiss:[...(live.dismiss||[]),c]})} style={{flex:1,border:"none",borderRadius:12,padding:"12px",background:"#f1efe9",color:INK,fontWeight:700,cursor:"pointer"}}>No, it's fine</button>
                   </div>
                 </div>;})()}
               <div style={{textAlign:"center",color:MUTE,fontSize:11,letterSpacing:2,textTransform:"uppercase",marginBottom:live.strokes===0?8:12}}>Shot {live.strokes+1}{live.strokes===0?" · tee shot":""}</div>
@@ -776,7 +776,8 @@ export default function CaddieOS(){
               const reach=carrySel>=effRem-6;              // wind-aware: can this club get home?
               const leaves=Math.max(0,live.rem-carrySel);  // yards left uses the real distance
               const shaky=fam!=="chip"&&reliability(fam)<55; // this club is unreliable for the player
-              const W=whisper({fam,chip:sel,eff:E.eff(fam),stat:disp(fam),conf:conf(fam),hot:flags.hot.includes(fam),cold:flags.cold.includes(fam),adj:flags.adj[fam]||null,side:sideC,feel:(P.feels&&P.feels[fam])||null,hole:{dzL:H.dzL,dzR:H.dzR},i35:live.rem<=34,reach,leaves,shaky,wind});
+              const cc=confOf(fam);
+              const W=whisper({fam,chip:sel,eff:E.eff(fam),stat:disp(fam),conf:cc.score,hot:cc.state==="hot",cold:cc.state==="cold",adj:flags.adj[fam]||null,side:sideC,feel:(P.feels&&P.feels[fam])||null,hole:{dzL:H.dzL,dzR:H.dzR},i35:live.rem<=34,reach,leaves,shaky,wind});
               return <div style={arrive}>
                 {(()=>{const stype=live.strokes===0?"tee shot":live.rem<=34?"pitch":reach?"approach":"positioning shot";return (
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
@@ -789,7 +790,9 @@ export default function CaddieOS(){
                 </div>
                 {(()=>{ // P5: one plain-language reason this club came up, from the player's own data.
                   const d=disp(fam),cs=cstat(fam);
-                  const reason = lie==="TREES" ? "Blocked — this is a get-it-back-in-play shot, not a hero swing."
+                  const reason = cc.state==="cold" ? `Heads up — ${fam} has been cold (${cc.reasons.slice(-2).join(", ")}); it's only here because nothing else covers the number.`
+                    : cc.state==="hot" ? `${fam} is hot right now — you've been flushing it.`
+                    : lie==="TREES" ? "Blocked — this is a get-it-back-in-play shot, not a hero swing."
                     : lieExtra>=3 ? `Your ${lieName[lie]||"lie"} plays about ${lieExtra} yards longer, so it's clubbed up.`
                     : flags.adj[fam] ? "You've been carrying it short lately, so it's adjusted down."
                     : shaky ? "It's the most reliable club in your bag that still covers the number."

@@ -1,4 +1,4 @@
-import { whisper, humanClub, teeWhisper, puttWhisper, benchWhisper } from "./whisper.js";
+import { whisper, humanClub, teeWhisper, puttWhisper, benchWhisper, clubConfidence, outcomeScore } from "./whisper.js";
 
 let fail = 0;
 const ok = (name, cond) => { console.log((cond ? "PASS" : "FAIL") + " — " + name); if (!cond) fail++; };
@@ -74,6 +74,34 @@ ok("bench whisper asks to route around", /route around/.test(benchWhisper("9i"))
 const allLines = [...spray.lines, ...missR.lines, ...wet.lines];
 ok("lines are capitalized", allLines.every(l => /^[A-Z0-9]/.test(l)));
 ok("lines are sentence-length (<= 22 words each)", allLines.every(l => l.split(/\s+/).length <= 22));
+
+// --- CLUB CONFIDENCE: the reported 3-wood scenario ---
+// 3W: tee -> left rough, then two chunks that stay in the rough, then a 7i hits green.
+const w3 = c => ({ c: "3W", ...c });
+const scenario3W = [
+  w3({ dir: "L", end: "rough", exp: 190, gain: 190 }),   // tee shot into left rough
+  w3({ dir: null, end: "rough", exp: 190, gain: 180 }),  // chunk, stays in rough
+  w3({ dir: null, end: "rough", exp: 190, gain: 180 }),  // chunk again
+];
+const cc3 = clubConfidence(scenario3W, { sd: 20 });
+ok("3W goes COLD after repeated rough outcomes", cc3.state === "cold");
+ok("3W failure streak detected (>=2)", cc3.streak >= 2);
+ok("3W confidence reasons list the recent shots", cc3.reasons.length === 3 && /rough/.test(cc3.reasons.join(" ")));
+
+const cc7 = clubConfidence([{ c: "7i", g: 1, exp: 150 }, { c: "7i", end: "green", exp: 150 }], { sd: 5 });
+ok("7i that hits greens is hot/steady, not cold", cc7.state !== "cold" && cc7.score >= 60);
+
+// recovery: a cold club warms after good shots (never permanently cold)
+const recover = clubConfidence([...scenario3W, w3({ end: "fairway", exp: 190, gain: 190 }), w3({ end: "green", exp: 190, gain: 190 })], { sd: 20 });
+ok("cold club recovers after good outcomes", recover.state !== "cold" && recover.score > cc3.score);
+
+// tournament shots weigh more than practice-ish shots
+const casual = clubConfidence([w3({ end: "green" }), w3({ end: "green" }), w3({ end: "rough" })], null);
+const tourn = clubConfidence([w3({ end: "green" }), w3({ end: "green" }), w3({ end: "rough", tourn: true })], null);
+ok("a tournament failure bites harder than a casual one", tourn.score <= casual.score);
+
+// bad lies from a previous club still count (the old clean-lie filter would drop these)
+ok("rough-lie outcomes are scored (not filtered out)", outcomeScore({ end: "rough", exp: 190, gain: 180 }) != null && outcomeScore({ end: "rough" }) < 0.5);
 
 console.log("\n" + (fail ? fail + " FAILED ❌" : "ALL PASS ✅"));
 process.exit(fail ? 1 : 0);

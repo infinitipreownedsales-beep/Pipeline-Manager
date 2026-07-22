@@ -139,6 +139,83 @@ export function benchWhisper(fam) {
   return `Your ${shortRef(fam)} hasn't shown up today. Want me to route around it?`;
 }
 
+// ===================== CLUB CONFIDENCE ENGINE =====================
+// Judges a club's current form from OUTCOMES (where the ball ended + direction),
+// not from a stock distance the on-course flow can't capture. This is the fix for
+// hot/cold: a 3-wood that keeps ending in the rough cools even though every one of
+// those shots was hit from a bad lie (which the old clean-lie stat filter excluded).
+const TROUBLE = new Set(["rough", "deep", "bunker", "trees", "water"]);
+
+// 0..1 quality of a single shot for the club that hit it. null = not a struck shot.
+export function outcomeScore(s) {
+  if (!s || s.pen) return null;
+  if (s.g || s.end === "green") return 1;
+  if (s.end === "fairway") return 0.85;
+  if (s.end === "first") return 0.65;
+  if (s.end === "rough") return 0.4;
+  if (s.end === "deep") return 0.25;
+  if (s.end === "bunker") return 0.2;
+  if (s.end === "trees") return 0.15;
+  if (s.end === "water") return 0;
+  // No ending lie recorded: fall back to distance deviation if we have it.
+  if (s.exp != null && s.gain != null) { const e = s.gain - s.exp; return e <= -15 ? 0.25 : Math.abs(e) <= 8 ? 0.85 : 0.55; }
+  return 0.6;
+}
+function isPoor(s) {
+  if (!s || s.pen) return false;
+  if (s.end && TROUBLE.has(s.end)) return true;
+  if (s.g || s.end === "green" || s.end === "fairway") return false;
+  if (s.exp != null && s.gain != null) return (s.gain - s.exp) <= -15;
+  return false;
+}
+function describeShot(s) {
+  if (s.pen) return "penalty";
+  const dir = s.dir === "L" ? "left" : s.dir === "R" ? "right"
+    : (s.exp != null && s.gain != null && s.gain < s.exp - 6) ? "short"
+    : (s.exp != null && s.gain != null && s.gain > s.exp + 6) ? "long" : "on line";
+  const end = s.g ? "green" : (s.end || "");
+  return end ? `${dir}, ${end}` : dir;
+}
+const clampN = (lo, hi, v) => Math.max(lo, Math.min(hi, v));
+
+/**
+ * clubConfidence(clubShots, stat) -> { score 0-100, state, streak, reasons[], n }
+ * clubShots: this club's shots, chronological (oldest→newest). stat: the practice
+ * clubStats entry (or null). Recent shots and tournament shots are weighted heavier.
+ */
+export function clubConfidence(clubShots, stat) {
+  const mine = (clubShots || []).filter(s => s && !s.pen);
+  // Base from practice dispersion — a supplement, not the driver, once rounds exist.
+  let base = 58;
+  if (stat && stat.sd != null) base = clampN(30, 92, Math.round(96 - stat.sd * 3));
+  if (!mine.length) return { score: base, state: base < 40 ? "cold" : base >= 70 ? "hot" : "steady", streak: 0, reasons: [], n: 0 };
+
+  // Recency- and tournament-weighted average outcome (on-course performance).
+  const N = mine.length; let wsum = 0, w = 0;
+  mine.forEach((s, i) => {
+    const q = outcomeScore(s); if (q == null) return;
+    const rw = Math.pow(0.8, N - 1 - i);   // recent shots dominate
+    const tw = s.tourn ? 1.6 : 1;          // tournament shots weigh more
+    wsum += q * rw * tw; w += rw * tw;
+  });
+  const onCourse = w ? (wsum / w) * 100 : null;
+  let score = onCourse == null ? base : Math.round(base * 0.3 + onCourse * 0.7);   // on-course primary
+
+  // Consecutive poor outcomes -> cool hard (the 2-3-in-a-row failure pattern).
+  let streak = 0;
+  for (let i = mine.length - 1; i >= 0; i--) { if (isPoor(mine[i])) streak++; else break; }
+  if (streak >= 2) score -= Math.min(48, (streak - 1) * 22 + 12);
+  // Consecutive good outcomes -> warm back up (never permanently cold).
+  let good = 0;
+  for (let i = mine.length - 1; i >= 0; i--) { const q = outcomeScore(mine[i]); if (q != null && q >= 0.8) good++; else break; }
+  if (good >= 2) score += Math.min(16, good * 5);
+
+  score = clampN(0, 100, Math.round(score));
+  const state = score < 40 ? "cold" : score >= 70 ? "hot" : "steady";
+  const reasons = mine.slice(-3).map(describeShot);
+  return { score, state, streak, reasons, n: mine.length };
+}
+
 // ---- small helpers ---------------------------------------------------------
 function cap(t) { t = String(t || ""); return t.charAt(0).toUpperCase() + t.slice(1); }
 function wordCount(lines) { return lines.join(" ").trim().split(/\s+/).filter(Boolean).length; }
