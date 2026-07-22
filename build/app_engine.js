@@ -504,6 +504,32 @@ function loanerTiming(res, u, monthsInService, model, year){
   return {options:opts, best:best, monthsInService:Math.round(monthsInService*10)/10,
     remaining:Math.round((maxMo-monthsInService)*10)/10};
 }
+// Recommended acquisitions (Add 6): configs our own history says perform well
+// as loaners but which we're thin on today. Pure data — no hardcoded picks.
+function acquisitionRecs(res){
+  if(!res.deprActive||!res.depr||!res.depr.trim) return [];
+  let firstWord=t=>String(t||"").trim().toUpperCase().split(/\s+/)[0];
+  // current coverage by model + trim head
+  let cov={}; res.lines.forEach(l=>{ let k=l.model+"|"+firstWord(l.trim); cov[k]=(cov[k]||0)+(l.onlot||0); });
+  let recs=[];
+  Object.keys(res.depr.trim).forEach(model=>{ res.depr.trim[model].forEach(t=>{
+    if(t.n<8||t.gross==null) return;                      // need real history + a gross read
+    let head=firstWord(t.trim), onlot=cov[model+"|"+head]||0;
+    let turn=t.dts||45, speed=Math.max(0,(60-turn)/60);   // 0..1 fast
+    let score=t.gross*(0.6+0.4*speed)-onlot*250;          // reward gross+speed, penalize we already own it
+    recs.push({model:model,trim:t.trim,gross:t.gross,dts:turn,n:t.n,price:t.price,in_stock:onlot,score:Math.round(score)}); }); });
+  recs.sort((a,b)=>b.score-a.score);
+  // one per model+trim-head, keep the strongest, cap at 5
+  let seen={}, out=[];
+  for(let r of recs){ let k=r.model+"|"+firstWord(r.trim); if(seen[k]) continue; seen[k]=1;
+    let year=res.tb.today.getFullYear()+(res.tb.today.getMonth()>=8?1:0);
+    // freshest model year we actually stock for this model, if any
+    res.inv.forEach(u=>{ if(u.model===r.model){ let y=parseInt(u.myear||u.my||0,10); if(y&&y>year-2) year=Math.max(year,y); } });
+    r.year=year;
+    r.why=(r.in_stock?("thin in stock ("+r.in_stock+") — "):"not in stock — ")+"history: $"+Math.round(r.gross).toLocaleString()+" median gross on "+r.n+" sales, "+Math.round(r.dts)+"-day turn";
+    out.push(r); if(out.length>=5) break; }
+  return out;
+}
 function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], releasing=0;
   (s.loaner_units||[]).forEach(e=>{ let stock=String(e.stock||"").trim(); if(!stock) return;
     let start=new Date(e.start), hasStart=!isNaN(start.getTime());
@@ -540,7 +566,9 @@ function runEngine(inv,sales,s,today){
   res.depr=(typeof window!=="undefined"&&window.DEPR)?window.DEPR.a:null;
   res.deprActive=!!(typeof window!=="undefined"&&window.DEPR&&window.DEPR.active);
   res.preowned=computePreowned(s,metrics,inv);
+  res.loanerAll=allCandidates(res);           // flat, score-ranked (for the exec report)
   res.loanerBoard=loanerCandidates(res);
+  res.acquisitionRecs=acquisitionRecs(res);
   res.loanerFleetPlan=loanerFleet(res);
   res.buildSeq=buildSequence(res);
   return res; }
