@@ -162,11 +162,16 @@ function financialBreakdown(p){ let e=p.econ;
   H.push("<div class='fbdiv'>Resale</div>");
   H.push("<div class='fbrow'><span>Expected used retail "+srcBadge(p)+"</span><span class='pos'>+"+money(e.usedPrice).slice(1)+"</span></div>");
   if(e.recon) H.push(row("Estimated reconditioning", e.recon, {neg:true}));
-  H.push(row("= Front-end gross", e.usedGross, {total:true}));
-  if(e.holding||e.mileageAdj){ H.push("<div class='fbdiv'>To projected net</div>");
-    if(e.holding) H.push(row("Holding cost ("+e.serviceSpan+"mo + used turn)", e.holding, {neg:true}));
-    H.push("<div class='fbrow sub'><span>Mileage adjustment</span><span class='dim'>n/a — no odometer feed</span></div>");
-    H.push(row("= Projected net profit", e.net, {total:true})); }
+  H.push(row("= Front-end gross (accounting)", e.usedGross, {total:true}));
+  // Owner economics — the number the check-writer cares about
+  H.push("<div class='fbdiv'>Owner economics — what hits the checkbook</div>");
+  H.push(row("Resale value (real market)", e.usedPrice));
+  if(e.factory) H.push(row("Factory support (ICV + velocity + dealer cash)", e.factory, {pos:true}));
+  H.push(row("Vehicle cost", e.cost, {neg:true}));
+  if(e.recon) H.push(row("Reconditioning", e.recon, {neg:true}));
+  if(e.holding) H.push(row("Holding ("+e.serviceSpan+"mo + used turn)", e.holding, {neg:true}));
+  H.push(row("= Owner net profit", e.ownerNet, {total:true}));
+  H.push("<div class='fbrow sub'><span>Accounting write-down ("+money(e.deprTotal).slice(1)+")</span><span class='dim'>cost-basis reclass — excluded from owner net; real loss is already in resale</span></div>");
   H.push("</div></details>");
   return H.join(""); }
 function srcBadge(p){
@@ -334,6 +339,32 @@ function seasHeading(vals, nowM){ // where demand is trending over the next ~2 m
   return "<span style='color:var(--muted)'>▬ steady</span>"; }
 
 function outMoney(n){ n=Math.round(n||0); return (n<0?"-$":"+$")+Math.abs(n).toLocaleString(); }
+function strategyBlock(it){
+  let st=it.strategy; if(!st) return "";
+  let H=["<div class='strat'>"];
+  let bs=st.best, be=st.breakeven;
+  H.push("<div class='strat-row'><span class='strat-k'>Best strategy</span><span><b>"+bs.months+" months</b>"+(bs.pd>0?", place in "+MONTHS[bs.placeMonth-1]:", place now")+" → retail "+MONTHS[bs.retailMonth-1]+(bs.bonusOk?" <span class='pos'>✓ bonus</span>":"")+"</span></div>");
+  if(be && !be.profitable){
+    let paths=be.levers.slice(0,2).map(l=>l.name.split(" (")[0]+" +$"+l.need.toLocaleString()+(l.extra?" ("+l.extra+")":"")).join(", or ");
+    H.push("<div class='strat-row'><span class='strat-k'>Break-even</span><span>+$"+be.gap.toLocaleString()+" — "+esc(paths)+"</span></div>");
+  } else {
+    H.push("<div class='strat-row'><span class='strat-k'>Break-even</span><span class='pos'>already profitable</span></div>");
+  }
+  let s0=st.sensitivity[0], s1=st.sensitivity[1];
+  H.push("<div class='strat-row'><span class='strat-k'>Biggest lever</span><span><b>"+esc(s0.name)+"</b> (±$"+s0.impact.toLocaleString()+")"+(s1?" · then "+esc(s1.name):"")+"</span></div>");
+  if(st.retailNew.better) H.push("<div class='strat-row'><span class='strat-k'>Alternative</span><span>Retail this unit new — about <b class='pos'>+$"+st.retailNew.gain.toLocaleString()+"</b> better</span></div>");
+  H.push("</div>");
+  // expandable scenario search
+  H.push("<details class='fbreak'><summary>▸ Scenario search — "+st.grid.length+" combinations tested</summary><div class='fbwrap'>");
+  H.push("<div class='fbdiv'>Owner net by service duration (best timing)</div>");
+  let byMonth={}; st.grid.forEach(g=>{ if(!byMonth[g.months]||g.ownerNet>byMonth[g.months].ownerNet) byMonth[g.months]=g; });
+  Object.keys(byMonth).map(Number).sort((a,b)=>a-b).forEach(m=>{ let g=byMonth[m];
+    H.push("<div class='fbrow"+(g===st.best?" total":"")+"'><span>"+m+" mo → retail "+MONTHS[g.retailMonth-1]+(g.bonusOk?" ✓":"")+"</span><span class='"+(g.ownerNet>=0?"pos":"neg")+"'>"+outMoney(g.ownerNet)+"</span></div>"); });
+  H.push("<div class='fbdiv'>Sensitivity — what moves the outcome most</div>");
+  st.sensitivity.forEach(x=>H.push("<div class='fbrow sub'><span>"+esc(x.name)+" <span class='dim'>("+esc(x.note)+")</span></span><span>±$"+x.impact.toLocaleString()+"</span></div>"));
+  H.push("</div></details>");
+  return H.join("");
+}
 function heroRecommendation(res){
   let r=res.serviceRecs; if(!r||!r.items.length) return "<div class='empty'>No in-stock candidates — paste inventory with cost/MSRP, then set the Service loaner need.</div>";
   let H=[];
@@ -354,10 +385,14 @@ function heroRecommendation(res){
     H.push("<div class='hr-top'><span class='hr-rank'>#"+it.rank+"</span><span class='hr-badge'>"+esc(it.rec)+"</span></div>");
     H.push("<div class='hr-veh'>"+esc((it.year||"")+" "+it.model+" "+it.trim)+" <span class='demoei'>"+esc(it.ext)+"/"+esc(it.int)+"</span></div>");
     H.push("<div class='hr-stock'>Stock "+esc(it.stock)+" · VIN …"+esc(it.vin6||"")+(it.dis!=null?" · "+it.dis+"d in stock":"")+"</div>");
-    H.push("<div class='hr-out'><span class='lab'>Expected outcome</span><span class='amt' style='color:"+(it.loanerNet>=0?"var(--good)":"var(--bad)")+"'>"+outMoney(it.loanerNet)+"</span><span class='hr-conf'>Confidence: <b style='color:"+confCol+"'>"+it.conf+"</b></span></div>");
-    H.push("<div class='hr-adv'>vs. keeping it retail: <b style='color:"+(it.advantage>=0?"var(--good)":"var(--bad)")+"'>"+outMoney(it.advantage)+"</b>"+
-      (it.vsNext!=null&&it.tier==="provide"&&it.vsNext>0?" · +$"+it.vsNext.toLocaleString()+" over the next-best alternative":"")+"</div>");
+    let outN=(it.effNet!=null?it.effNet:it.loanerNet), advN=(it.effAdv!=null?it.effAdv:it.advantage);
+    let improved=(it.strategy&&it.bestNet!=null)?Math.round(it.bestNet-it.loanerNet):0;
+    H.push("<div class='hr-out'><span class='lab'>Best-case outcome</span><span class='amt' style='color:"+(outN>=0?"var(--good)":"var(--bad)")+"'>"+outMoney(outN)+"</span><span class='hr-conf'>Confidence: <b style='color:"+confCol+"'>"+it.conf+"</b></span></div>");
+    H.push("<div class='hr-adv'>vs. keeping it retail: <b style='color:"+(advN>=0?"var(--good)":"var(--bad)")+"'>"+outMoney(advN)+"</b>"+
+      (improved>0?" · <span class='dim'>optimizer added +$"+improved.toLocaleString()+" vs today's plan</span>":"")+
+      (it.vsNext!=null&&it.tier==="provide"&&it.vsNext>0?" · +$"+it.vsNext.toLocaleString()+" over next-best":"")+"</div>");
     H.push("<div class='hr-reason'>"+esc(it.reason)+"</div>");
+    H.push(strategyBlock(it));
     H.push(financialBreakdown(it.p));
     H.push("</div>");
   });

@@ -384,12 +384,21 @@ function loanerEconomics(cost,msrp,model,usedDts,usedPrice,s,rebate,ctx){
   let recon=parseFloat(s.loaner_recon||0)||0;
   let daysHeld=serviceSpan*DPM+(usedDts||0), holdPerDay=parseFloat(s.loaner_hold_per_day||0)||0, holding=holdPerDay*daysHeld;
   let cheapestNew=Math.max(0,cost-rebate), adj=cost-icvTotal-deprTotal-bonus;
-  let gross=(usedPrice||0)-adj-recon;                              // front-end gross
-  let net=gross-holding;                                            // after holding cost
+  let gross=(usedPrice||0)-adj-recon;                              // accounting front-end gross
+  let net=gross-holding;                                            // after holding cost (accounting)
+  let dealerCash=incentive(s,model,year,retailMonth,"dealer_cash");
+  // OWNER economic net — what actually hits the checkbook. Real market
+  // depreciation already lives in the history-based resale, so the accounting
+  // write-down is NOT re-subtracted (it's a cost-basis reclass, economically a
+  // wash). Rebate is a customer incentive on a NEW sale, so it's excluded here
+  // and handled as opportunity cost instead.
+  let factory=icvTotal+bonus+dealerCash;
+  let ownerNet=(usedPrice||0)+factory-cost-recon-holding;
   return {cost:Math.round(cost),msrp:Math.round(msrp),rebate:Math.round(rebate),cheapestNew:Math.round(cheapestNew),
     icvTotal:Math.round(icvTotal),deprTotal:Math.round(deprTotal),bonus:Math.round(bonus),bonusOk:bonusOk,velocityAvail:Math.round(velo),
+    dealerCash:Math.round(dealerCash),factory:Math.round(factory),ownerNet:Math.round(ownerNet),
     recon:Math.round(recon),holding:Math.round(holding),mileageAdj:0,net:Math.round(net),
-    adjustedCost:Math.round(adj),usedPrice:Math.round(usedPrice||0),usedGross:Math.round(gross),upsideDown:gross<0,
+    adjustedCost:Math.round(adj),usedPrice:Math.round(usedPrice||0),usedGross:Math.round(gross),upsideDown:ownerNet<0,
     saleMonth:Math.round(saleMonth*10)/10,milesAtSale:Math.round(miles),serviceMonths:svc,
     monthsInService:Math.round(already*10)/10,retailInMonths:Math.round(remainingSvc*10)/10,serviceSpan:Math.round(serviceSpan*10)/10}; }
 function loanerScore(econ,pstat,metric){
@@ -515,37 +524,114 @@ function serviceLoanerRecs(res){
   let newGross=parseFloat(s.new_retail_gross||0)||0;
   let items=[];
   (res.loanerAll||[]).forEach(p=>{ (p.units||[]).forEach(u=>{
-    let loanerNet=p.econ.net, advantage=loanerNet-newGross;
+    let loanerNet=p.econ.ownerNet, advantage=loanerNet-newGross;    // owner economics, not accounting
     let conf = (p.usedSrc==="measured")?"High"
              : (p.usedSrc==="history")?((p.histResale&&p.histResale.conf>=0.7)?"High":((p.histResale&&p.histResale.conf>=0.4)?"Medium":"Low"))
              : "Low";
     items.push({p:p,u:u,model:p.model,trim:p.trim,ext:p.ext,int:p.int,stock:u.stock,vin:u.vin,vin6:u.vin_last6,
       year:u.year||p.year||"",dis:u.dis,loanerNet:loanerNet,newGross:newGross,advantage:advantage,conf:conf}); }); });
   items.sort((a,b)=>b.advantage-a.advantage);
+  // Optimization mode: search each top candidate's best strategy, then rank the
+  // display slice by the OPTIMIZED (best-case) advantage, not today's assumption.
+  let K=Math.min(items.length, Math.max(need+6,10));
+  for(let i=0;i<K;i++){ let it=items[i]; it.strategy=optimizeStrategy(res,it.p);
+    it.bestNet=it.strategy.best.ownerNet; it.bestAdvantage=it.bestNet-newGross; }
+  let head=items.slice(0,K).sort((a,b)=>b.bestAdvantage-a.bestAdvantage);
+  items=head.concat(items.slice(K));
   let placedProfitable=0;
   items.forEach((it,i)=>{ it.rank=i+1;
-    it.vsNext=(i+1<items.length)?Math.round(it.advantage-items[i+1].advantage):null;   // opportunity gap to next
-    if(it.rank<=need){ it.tier="provide";
-      it.rec=(it.advantage>0)?"Place Into Service Loaner":"Provide — lowest sacrifice";
-      if(it.advantage>0) placedProfitable++; }
-    else if(it.advantage>0){ it.tier="accept"; it.rec="Acceptable if additional vehicles are needed"; }
+    let adv=(it.bestAdvantage!=null?it.bestAdvantage:it.advantage), net=(it.bestNet!=null?it.bestNet:it.loanerNet);
+    it.effNet=net; it.effAdv=adv;
+    it.vsNext=(i+1<items.length)?Math.round(adv-((items[i+1].bestAdvantage!=null?items[i+1].bestAdvantage:items[i+1].advantage))):null;
+    if(it.rank<=need){ it.tier="provide"; it.rec=(adv>0)?"Place Into Service Loaner":"Provide — lowest sacrifice"; if(adv>0) placedProfitable++; }
+    else if(adv>0){ it.tier="accept"; it.rec="Acceptable if additional vehicles are needed"; }
     else { it.tier="keep"; it.rec="Keep Retail"; }
     it.reason=serviceRecReason(it); });
   return {need:need, newGross:newGross, items:items,
     provided:Math.min(need,items.length), profitable:placedProfitable,
-    allNegative: items.length>0 && items.every(x=>x.advantage<=0)};
+    allNegative: items.length>0 && items.every(x=>(x.bestAdvantage!=null?x.bestAdvantage:x.advantage)<=0)};
 }
 function serviceRecReason(it){
-  let net=it.loanerNet, adv=it.advantage, a=Math.abs(Math.round(adv));
-  if(it.tier==="provide"){
-    return (adv>0)
-      ? "Projected used value plus current factory programs (ICV/velocity) more than offset expected depreciation — nets "+deMoney(net)+" and beats keeping it new retail by $"+a.toLocaleString()+"."
-      : "Service needs the vehicle and this is the lowest-cost unit to sacrifice — loaner path nets "+deMoney(net)+", only $"+a.toLocaleString()+" under its retail opportunity.";
-  }
-  if(it.tier==="accept") return "Positive outcome ("+deMoney(net)+") but weaker than the higher-ranked units — use only if more vehicles are needed.";
-  return "Expected to earn more as a new retail unit — the loaner path nets "+deMoney(net)+", about $"+a.toLocaleString()+" below its retail opportunity.";
+  let net=(it.bestNet!=null?it.bestNet:it.loanerNet), adv=(it.bestAdvantage!=null?it.bestAdvantage:it.advantage), a=Math.abs(Math.round(adv));
+  let st=it.strategy, bs=st?st.best:null, be=st&&st.breakeven&&!st.breakeven.profitable?st.breakeven:null;
+  let plan=bs?(bs.months+" months"+(bs.pd>0?", place in "+MONTHS[bs.placeMonth-1]:" (place now)")):"place now";
+  if(it.tier==="provide" && adv>0)
+    return "Best strategy: "+plan+" → nets "+deMoney(net)+", beating a new-retail sale by $"+a.toLocaleString()+". Factory programs and seasonal timing offset the depreciation.";
+  if(it.tier==="provide")
+    return "Service needs the vehicle; lowest-cost unit to sacrifice — best strategy ("+plan+") nets "+deMoney(net)+(be?", and it turns profitable with about $"+be.gap.toLocaleString()+" more factory support or used value.":".");
+  if(it.tier==="accept") return "Best-case outcome "+deMoney(net)+" ("+plan+") — positive but weaker than higher-ranked units; use only if more vehicles are needed.";
+  return "Earns more as a new retail unit — even the best strategy ("+plan+") nets "+deMoney(net)+", about $"+a.toLocaleString()+" below its retail opportunity.";
 }
 function deMoney(n){ n=Math.round(n||0); return (n<0?"-$":"+$")+Math.abs(n).toLocaleString(); }
+
+// OPTIMIZATION MODE — think like the owner. For one candidate, search the
+// feasible space (service duration 3..7mo × placement now/+1/+2mo, each with its
+// own incentive-month and retail-season) and return the highest owner-net
+// strategy, plus the break-even gap, the sensitivity ranking (which lever moves
+// the outcome most), and the retail-new alternative. Reuses loanerEconomics and
+// the history predictor — no new model.
+function optimizeStrategy(res, p){
+  let s=res.settings, D=(typeof window!=="undefined")?window.DEPR:null;
+  let today=res.tb.today, curMonth=today.getMonth()+1, curYear=p.year||today.getFullYear();
+  let cost=p.econ.cost, msrp=p.econ.msrp, model=p.model, trim=p.trim, ext=p.ext;
+  let hasHist=!!(D&&D.active&&D.a&&window.LoanerIntel);
+  let maxMo=Math.round(parseFloat(s.loaner_max_months)||7);
+  let minMo=Math.min(maxMo, Math.max(3, Math.round(parseFloat(s.loaner_min_months)||3)));
+  function resaleAt(ageMonths, retailMonthIdx){
+    if(hasHist){ let r=D.a.predictor(model,trim||null,null,ext||null,retailMonthIdx,ageMonths); if(r&&r.ok) return {price:r.price,dts:r.dts,conf:r.confidence}; }
+    let base=p.usedPrice||Math.max(0,cost)*0.8;
+    return {price:Math.round(base*(1-(s.loaner_depr_pct/100)*ageMonths)), dts:45, conf:0};
+  }
+  function evalCombo(pd,d,ov){ ov=ov||{};
+    let placeMonth=((curMonth-1+pd)%12)+1, retailMonthIdx=((curMonth-1+pd+d)%12)+1;
+    let r=resaleAt(d, retailMonthIdx), resale=(ov.resale!=null)?ov.resale:r.price;
+    let ctx={year:curYear, month:placeMonth, retailMonth:retailMonthIdx, monthsInService:0, retailInMonths:d};
+    let sd=s; if(ov.depr!=null||ov.recon!=null) sd=Object.assign({},s,ov.depr!=null?{loaner_depr_pct:ov.depr}:{},ov.recon!=null?{loaner_recon:ov.recon}:{});
+    let econ=loanerEconomics(cost,msrp,model,r.dts,resale,sd,undefined,ctx);
+    let net=econ.ownerNet+(ov.factory||0);
+    return {pd:pd,months:d,placeMonth:placeMonth,retailMonth:retailMonthIdx,ownerNet:net,resale:resale,bonusOk:econ.bonusOk,conf:r.conf,econ:econ};
+  }
+  let grid=[];
+  for(let pd=0;pd<=2;pd++) for(let d=minMo;d<=maxMo;d++) grid.push(evalCombo(pd,d));
+  // best net wins; on a tie prefer the SHORTER service and SOONER placement —
+  // never tie a car up longer than it needs to earn the same return
+  grid.sort((a,b)=> (b.ownerNet-a.ownerNet) || (a.months-b.months) || (a.pd-b.pd));
+  let best=grid[0];
+  let baseSvc=Math.min(maxMo,Math.max(minMo,Math.round(parseFloat(s.loaner_service_months)||3)));
+  let baseline=grid.find(g=>g.pd===0&&g.months===baseSvc)||grid[grid.length-1];
+
+  // sensitivity: realistic swing per lever at the best strategy, ranked by |Δ owner net|
+  let veloSwing=best.econ.velocityAvail||0;
+  let up=v=>Math.abs(v);
+  let durAlt=grid.filter(g=>g.pd===best.pd&&g.months!==best.months).reduce((a,g)=>Math.max(a,up(g.ownerNet-best.ownerNet)),0);
+  let seasonAlt=grid.filter(g=>g.months===best.months&&g.pd!==best.pd).reduce((a,g)=>Math.max(a,up(g.ownerNet-best.ownerNet)),0);
+  let reconNow=parseFloat(s.loaner_recon||0)||0;
+  let sens=[
+    {name:"Used retail value", driver:"resale", impact:Math.round(0.05*best.resale), note:"±5% market swing"},
+    {name:"Velocity bonus", driver:"velocity", impact:Math.round(veloSwing), note:best.bonusOk?"currently earned":"currently missed"},
+    {name:"Service duration", driver:"duration", impact:Math.round(durAlt), note:"best vs. other months"},
+    {name:"Placement / retail season", driver:"season", impact:Math.round(seasonAlt), note:"month timing"},
+    {name:"ICV allowance", driver:"icv", impact:1000, note:"±$1,000 program"},
+    {name:"Depreciation write-down %", driver:"writedown", impact:Math.abs(evalCombo(best.pd,best.months,{depr:(s.loaner_depr_pct||1.5)+0.5}).ownerNet-best.ownerNet), note:"±0.5%/mo — real loss is in resale"},
+  ].sort((a,b)=>b.impact-a.impact);
+
+  // break-even from the best strategy
+  let gap=best.ownerNet;                                   // negative => loss to cover
+  let need=Math.max(0,-gap), pctMsrp=msrp>0?(need/msrp*100):0;
+  let breakeven= gap>=0 ? {profitable:true} : {profitable:false, gap:Math.round(need), levers:[
+    {name:"Factory support (ICV + dealer cash + velocity)", need:Math.round(need), unit:"$"},
+    {name:"Used retail value", need:Math.round(need), unit:"$", extra:pctMsrp.toFixed(1)+"% less depreciation"},
+    (reconNow>0?{name:"Reconditioning", need:Math.round(Math.min(need,reconNow)), unit:"$-", extra:(reconNow<need?"not enough alone":"")}:null)
+  ].filter(Boolean)};
+
+  // alternative: retail this unit new
+  let newGross=parseFloat(s.new_retail_gross||0)||0;
+  let retailNewGain=Math.round(newGross-best.ownerNet);
+
+  return {best:best, baseline:baseline, grid:grid.slice(0,15), sensitivity:sens, breakeven:breakeven,
+    retailNew:{profit:Math.round(newGross), gain:retailNewGain, better:retailNewGain>0},
+    improved:Math.round(best.ownerNet-baseline.ownerNet)};
+}
 // Recommended acquisitions (Add 6): configs our own history says perform well
 // as loaners but which we're thin on today. Pure data — no hardcoded picks.
 function acquisitionRecs(res){
