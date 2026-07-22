@@ -508,7 +508,7 @@ export default function CaddieOS(){
     holes=holes.filter(h=>h&&h.par!=null&&h.y!=null).map((h,i)=>({tgt:h.par+1,hz:h.hz||"",vibe:h.vibe||h.strategy||"",cue:h.cue||"",n:h.n||i+1,...h}));
     if(!holes.length){ setHoleMsg("No valid holes found — each hole needs at least par and y (yardage)."); return; }
     const key="ss_"+Date.now().toString(36);
-    const next={...impCourses,[key]:{name:name||("Imported course ("+holes.length+")"),holes,imported:true}};
+    const next={...impCourses,[key]:{name:name||("Imported course ("+holes.length+")"),holes,imported:true,ref:"flag"}};
     setImpCourses(next); store.set("caddie:holes",next); setCourseSel(key); setHoleJson("");
     setHoleMsg(`Imported ${holes.length} hole${holes.length>1?"s":""} — "${next[key].name}". Pick it on the CADDIE screen to play.`);
   };
@@ -760,7 +760,7 @@ export default function CaddieOS(){
                 <input inputMode="numeric" value={qYards!==""?qYards:String(live.rem)} onChange={e=>setQYards(e.target.value.replace(/[^0-9]/g,""))} style={{width:150,textAlign:"center",fontSize:74,fontWeight:800,color:INK,border:"none",background:"transparent",fontVariantNumeric:"tabular-nums",outline:"none"}}/>
                 <button onClick={()=>setQYards(String(y+1))} style={{border:"none",background:"#fff",width:52,height:52,borderRadius:26,fontSize:24,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>+</button>
               </div>
-              <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:16}}>yards to the middle</div>
+              <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:16}}>{courses[live.course]&&courses[live.course].ref==="flag"?"yards to the flag":"yards to the middle"}</div>
               <div style={{display:"flex",gap:7,justifyContent:"center",flexWrap:"wrap",marginBottom:16}}>
                 {[["Tee","FW"],["Fairway","FW"],["First cut","FIRST"],["Rough","ROUGH"],["Deep","DEEP"],["Bunker","FBUNK"],["Recovery","TREES"]].map(([lab,v])=>{const on=lieLabel===lab;
                   return <button key={lab} className="tapbtn" onClick={()=>{setLie(v);setLieLabel(lab);}} style={{border:"none",borderRadius:20,padding:"10px 14px",fontSize:13,fontWeight:600,cursor:"pointer",background:on?PINE:"#fff",color:on?PAPER:INK,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.06)"}}>{lab}</button>;})}
