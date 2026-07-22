@@ -346,54 +346,76 @@ const MiniMap=({h,P,plan})=>{const uw=268;const tx=d=>16+Math.min(d/h.y,1)*uw;
     {pts.map((p,i)=>(<g key={i}><circle cx={p.x} cy={32} r={6.5} fill="#fcd34d" stroke="#0f2b20" strokeWidth={1}/><text x={p.x} y={35} textAnchor="middle" fontSize={6.5} fontWeight={800} fill="#0f2b20">{i+1}</text><text x={p.x} y={60} textAnchor="middle" fontSize={7} fill="#9fd6b4" fontWeight={700}>{p.c}</text></g>))}
   </svg>);};
 
-// HoleView — the automatic strategic overview shown before the opening shot.
-// A clean, calm schematic (not a satellite image): tee at the bottom, green at the
-// top, the fairway bending for doglegs, hazards drawn on the side the text names,
-// a forced-carry line, and the player's own landing zone. Derived from hole data.
+// Smooth an array of [x,y] pixel points into an SVG path (Catmull-Rom → Bézier).
+const smoothPath=pts=>{ if(pts.length<2) return "";
+  if(pts.length===2) return `M ${pts[0][0]} ${pts[0][1]} L ${pts[1][0]} ${pts[1][1]}`;
+  let d=`M ${pts[0][0]} ${pts[0][1]}`;
+  for(let i=0;i<pts.length-1;i++){const p0=pts[i-1]||pts[i],p1=pts[i],p2=pts[i+1],p3=pts[i+2]||pts[i+1];
+    const c1x=p1[0]+(p2[0]-p0[0])/6,c1y=p1[1]+(p2[1]-p0[1])/6,c2x=p2[0]-(p3[0]-p1[0])/6,c2y=p2[1]-(p3[1]-p1[1])/6;
+    d+=` C ${c1x.toFixed(1)} ${c1y.toFixed(1)} ${c2x.toFixed(1)} ${c2y.toFixed(1)} ${p2[0]} ${p2[1]}`;}
+  return d;};
+
+// HoleView — the automatic strategic overview. A clean schematic (not satellite):
+// the fairway BENDS along the hole's real centerline (h.path), hazards are drawn
+// per side and per section (h.hazards) and look like what they are — trees as
+// canopy, water as soft pools, sand as bunkers. The same geometry the engine can
+// read for angle-aware decisions. Falls back to hz text for un-mapped holes.
 const HoleView=({h,P})=>{
   const HZ=(h.hz||"").toUpperCase();
-  const dog=/DOGLEG LEFT/.test(HZ)?-1:/DOGLEG RIGHT/.test(HZ)?1:0;
-  const W=220,Ht=280,cx=110,teeY=250,greenY=40,span=teeY-greenY;
-  const yAt=d=>teeY-Math.min(d/h.y,1)*span;                 // distance-from-tee -> y
-  const greenX=cx+dog*42, ctrlX=cx+dog*34, ctrlY=greenY+span*0.42;
-  const xAt=y=>{const t=(teeY-y)/span; return cx+2*(1-t)*t*(ctrlX-cx)+t*t*(greenX-cx);}; // point on the bezier
+  const W=220,Ht=300,L=28,Rr=192,uw=Rr-L,teeY=254,greenY=48,span=teeY-greenY;
+  const yAt=d=>teeY-Math.max(0,Math.min(1,d))*span;                 // d 0..1 (tee→green) → y
+  const xAt=x=>L+Math.max(0,Math.min(1,x))*uw;                      // x 0..1 (left→right) → X
+  // Centerline: use h.path ([d,x] points) if mapped, else straight / dogleg from text.
+  let path=Array.isArray(h.path)&&h.path.length>=2?h.path:null;
+  if(!path){const dog=/DOGLEG LEFT/.test(HZ)?-1:/DOGLEG RIGHT/.test(HZ)?1:0;
+    path=dog?[[0,0.5],[0.5,0.5+dog*0.2],[1,0.5+dog*0.04]]:[[0,0.5],[1,0.5]];}
+  const cxAt=d=>{for(let i=0;i<path.length-1;i++){const[d0,x0]=path[i],[d1,x1]=path[i+1];
+    if(d<=d1||i===path.length-2){const t=Math.max(0,Math.min(1,(d-d0)/((d1-d0)||1)));return xAt(x0+(x1-x0)*t);}}return xAt(path[path.length-1][1]);};
+  const px=path.map(([d,x])=>[xAt(x),yAt(d)]);
   const narrow=/TIGHT|NARROW|CHUTE|CORRIDOR|THREAD|SLALOM/.test(HZ);
-  const fwW=narrow?24:38;
-  const water=/WATER|CREEK|POND|LAKE|DITCH|GULLY/.test(HZ);
-  const trees=/TREES|WOODS|PINES|FOREST|RAILROAD/.test(HZ);
-  const ob=/\bOB\b|OUT OF BOUNDS/.test(HZ);
-  const sand=/BUNKER|SAND|WASTE/.test(HZ);
-  const houses=/HOUSE|ROAD|HIGHWAY/.test(HZ);
-  const sideType=()=> water?["water","#7ba7c9"]:ob?["OB","#c26b5c"]:trees?["trees","#3c5f49"]:houses?["houses","#b9b2a4"]:sand?["sand","#d8c48f"]:["rough","#7d9a6f"];
-  const [tName,tCol]=sideType();
-  const sides=[];
-  if(/LEFT/.test(HZ)) sides.push(-1);
-  if(/RIGHT/.test(HZ)) sides.push(1);
-  if(!sides.length&&(water||sand)) sides.push(1),sides.push(-1); // "surrounds" style
-  const maxTee=Math.max(0,...Object.values(P.carries||{}));      // player's longest club
-  const lzY=maxTee&&maxTee<h.y? yAt(maxTee): null;
-  const near=/BUNKER|SAND/.test(HZ);
+  const fwW=narrow?22:34, off=fwW/2+11;
+  // Hazards: structured list if mapped, else derived from dzL/dzR + hz side words.
+  const dzType=v=>({trees:"trees",water:"water",sand:"sand",houses:"houses",waste:"sand"}[v]||v);
+  let hazards=Array.isArray(h.hazards)?h.hazards:null;
+  if(!hazards){hazards=[];
+    const t=/WATER|CREEK|POND|LAKE|DITCH|GULLY/.test(HZ)?"water":/BUNKER|SAND|WASTE/.test(HZ)?"sand":/HOUSE|ROAD|HIGHWAY/.test(HZ)?"houses":/\bOB\b/.test(HZ)?"houses":"trees";
+    if(h.dzL||/LEFT/.test(HZ)) hazards.push({side:"L",type:dzType(h.dzL)||t,from:0,to:1});
+    if(h.dzR||/RIGHT/.test(HZ)) hazards.push({side:"R",type:dzType(h.dzR)||t,from:0,to:1});}
+  const maxTee=Math.max(0,...Object.values(P.carries||{}));
+  const lzD=maxTee&&maxTee<h.y?maxTee/h.y:null;
+  const near=/BUNKER|SAND/.test(HZ)||(h.green&&/bunker/i.test(h.green.guard||""));
+  const COL={trees:["#37573f","#5f8560"],water:["#7ba7c9","#a9cbe1"],sand:["#d9c48c","#e7d7ad"],houses:["#b3a996","#c8c0b0"]};
+  const blob=(x,y,type,k)=>{const[c1,c2]=COL[type]||COL.trees;
+    if(type==="water")return <circle key={k} cx={x} cy={y} r={8} fill={c1} opacity={0.9}/>;
+    if(type==="sand")return <ellipse key={k} cx={x} cy={y} rx={8} ry={5.5} fill={c1}/>;
+    if(type==="houses")return <rect key={k} x={x-6} y={y-6} width={12} height={12} rx={2} fill={c1}/>;
+    return <g key={k}><circle cx={x} cy={y} r={9} fill={c1}/><circle cx={x-3} cy={y-3} r={4.5} fill={c2} opacity={0.8}/></g>;};
+  // sample a hazard section into blobs that hug the bending corridor
+  const feats=[];
+  hazards.forEach((hz,hi)=>{const s=hz.side==="L"?-1:1;const from=hz.from??0,to=hz.to??1;
+    const n=Math.max(2,Math.round((to-from)*13));
+    for(let k=0;k<=n;k++){const d=from+(to-from)*k/n;const x=cxAt(d)+s*off;const y=yAt(d);feats.push(blob(x,y,dzType(hz.type),hi+"_"+k));}});
+  const gx=cxAt(1),gy=greenY,tx=cxAt(0),ty=teeY;
   return (<svg viewBox={`0 0 ${W} ${Ht}`} style={{width:"100%",maxWidth:300,display:"block",margin:"0 auto"}}>
     <rect x={0} y={0} width={W} height={Ht} rx={18} fill="#eef1ea"/>
-    {/* fairway corridor */}
-    <path d={`M ${cx} ${teeY} Q ${ctrlX} ${ctrlY} ${greenX} ${greenY}`} fill="none" stroke="#cddbc9" strokeWidth={fwW+10} strokeLinecap="round"/>
-    <path d={`M ${cx} ${teeY} Q ${ctrlX} ${ctrlY} ${greenX} ${greenY}`} fill="none" stroke="#9dc0a1" strokeWidth={fwW} strokeLinecap="round"/>
-    {/* hazards on the named side(s) */}
-    {sides.map((s,i)=>{const yTop=greenY+span*0.30,yBot=teeY-span*0.12;const bx=xAt((yTop+yBot)/2)+s*(fwW/2+13);
-      return <rect key={i} x={bx-11} y={yTop} width={22} height={yBot-yTop} rx={9} fill={tCol} opacity={0.85}/>;})}
-    {/* forced carry line */}
-    {h.carry&&<g><line x1={xAt(yAt(h.carry))-fwW/2-6} y1={yAt(h.carry)} x2={xAt(yAt(h.carry))+fwW/2+6} y2={yAt(h.carry)} stroke="#7ba7c9" strokeWidth={7} strokeLinecap="round"/><text x={cx} y={yAt(h.carry)-6} textAnchor="middle" fontSize={9} fill="#4a6d86" fontWeight={700}>carry {h.carry}</text></g>}
+    {/* bending fairway corridor */}
+    <path d={smoothPath(px)} fill="none" stroke="#cddbc9" strokeWidth={fwW+11} strokeLinecap="round" strokeLinejoin="round"/>
+    <path d={smoothPath(px)} fill="none" stroke="#9dc0a1" strokeWidth={fwW} strokeLinecap="round" strokeLinejoin="round"/>
+    {/* hazards */}
+    {feats}
+    {/* forced carry line (perpendicular-ish across the corridor at the carry distance) */}
+    {h.carry&&h.carry<h.y&&(()=>{const d=h.carry/h.y,x=cxAt(d),y=yAt(d);return <g><line x1={x-fwW/2-7} y1={y} x2={x+fwW/2+7} y2={y} stroke="#7ba7c9" strokeWidth={6} strokeLinecap="round"/><text x={x} y={y-7} textAnchor="middle" fontSize={9} fill="#4a6d86" fontWeight={700}>{h.carryLabel||"carry"} {h.carry}</text></g>;})()}
     {/* player's landing zone */}
-    {lzY!=null&&<g><ellipse cx={xAt(lzY)} cy={lzY} rx={fwW/2-2} ry={11} fill="none" stroke="#c8a24a" strokeWidth={2} strokeDasharray="3 3"/><text x={xAt(lzY)} y={lzY+3} textAnchor="middle" fontSize={8} fill="#8a7327" fontWeight={800}>you</text></g>}
+    {lzD!=null&&<g><ellipse cx={cxAt(lzD)} cy={yAt(lzD)} rx={fwW/2-2} ry={11} fill="none" stroke="#c8a24a" strokeWidth={2} strokeDasharray="3 3"/><text x={cxAt(lzD)} y={yAt(lzD)+3} textAnchor="middle" fontSize={8} fill="#8a7327" fontWeight={800}>you</text></g>}
     {/* tee */}
-    <rect x={cx-10} y={teeY} width={20} height={9} rx={2} fill="#233b30"/>
-    <text x={cx} y={teeY+22} textAnchor="middle" fontSize={9} fill="#6b7d72" fontWeight={700}>TEE</text>
+    <rect x={tx-10} y={ty} width={20} height={9} rx={2} fill="#233b30"/>
+    <text x={tx} y={ty+22} textAnchor="middle" fontSize={9} fill="#6b7d72" fontWeight={700}>TEE</text>
     {/* greenside bunkers */}
-    {near&&<><ellipse cx={greenX-24} cy={greenY+6} rx={9} ry={6} fill="#d8c48f"/><ellipse cx={greenX+24} cy={greenY+10} rx={8} ry={5} fill="#d8c48f"/></>}
+    {near&&<><ellipse cx={gx-23} cy={gy+5} rx={9} ry={6} fill="#d9c48c"/><ellipse cx={gx+23} cy={gy+8} rx={8} ry={5} fill="#d9c48c"/></>}
     {/* green */}
-    <circle cx={greenX} cy={greenY} r={17} fill="#6fae7c" stroke="#3c6a49" strokeWidth={2}/>
-    <circle cx={greenX} cy={greenY} r={2.5} fill="#233b30"/>
-    <text x={greenX} y={greenY-22} textAnchor="middle" fontSize={9} fill="#3c6a49" fontWeight={800}>GREEN</text>
+    <circle cx={gx} cy={gy} r={16} fill="#6fae7c" stroke="#3c6a49" strokeWidth={2}/>
+    <circle cx={gx} cy={gy} r={2.5} fill="#233b30"/>
+    <text x={gx} y={gy-21} textAnchor="middle" fontSize={9} fill="#3c6a49" fontWeight={800}>GREEN</text>
   </svg>);
 };
 
@@ -802,7 +824,7 @@ export default function CaddieOS(){
               const leaves=Math.max(0,live.rem-carrySel);  // yards left uses the real distance
               const shaky=fam!=="chip"&&reliability(fam)<55; // this club is unreliable for the player
               const cc=confOf(fam);
-              const W=whisper({fam,chip:sel,eff:E.eff(fam),stat:disp(fam),conf:cc.score,hot:cc.state==="hot",cold:cc.state==="cold",adj:flags.adj[fam]||null,side:sideC,feel:(P.feels&&P.feels[fam])||null,hole:{dzL:H.dzL,dzR:H.dzR},i35:live.rem<=34,reach,leaves,shaky,wind});
+              const W=whisper({fam,chip:sel,eff:E.eff(fam),stat:disp(fam),conf:cc.score,hot:cc.state==="hot",cold:cc.state==="cold",adj:flags.adj[fam]||null,side:sideC,feel:(P.feels&&P.feels[fam])||null,hole:{dzL:H.dzL,dzR:H.dzR,favor:live.strokes===0?H.favor:null},i35:live.rem<=34,reach,leaves,shaky,wind});
               return <div style={arrive}>
                 {(()=>{const stype=live.strokes===0?"tee shot":live.rem<=34?"pitch":reach?"approach":"positioning shot";return (
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>

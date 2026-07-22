@@ -9,6 +9,15 @@ export default {
   hz: "Water everywhere — lake LEFT off the tee, a creek crosses in front of the green, pond front-right of a peninsula green · bunker right",
   dzL: "water",
   dzR: "water",
+  favor: "right-center",  // off the tee, away from the lake left
+  // gentle bend around the water: tee, out to the corner, then across to the green
+  path: [[0, 0.50], [0.58, 0.42], [1, 0.56]],
+  hazards: [
+    { side: "L", type: "water", from: 0.00, to: 0.50 },   // lake left off the tee
+    { side: "L", type: "water", from: 0.62, to: 1.00 },   // creek/pond wrapping the green left
+    { side: "R", type: "water", from: 0.66, to: 0.92 },   // pond front-right of the green
+    { side: "R", type: "sand",  from: 0.90, to: 1.00 },   // bunker right of the green
+  ],
   carry: 335,             // the approach must carry the creek short of the green
   carryLabel: "the creek",
   corner: 218,

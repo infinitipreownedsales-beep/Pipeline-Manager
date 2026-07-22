@@ -61,6 +61,7 @@ function aimPhrase(s) {
   if (h.dzR === "water") return "anything right is wet — favor center-left and we're happy";
   if (s.side && s.side.dir === "R" && s.side.pct >= 60) return "favor the left edge — your miss lives right";
   if (s.side && s.side.dir === "L" && s.side.pct >= 60) return "favor the right edge — your miss lives left";
+  if (h.favor) return `favor the ${h.favor} — that's the line the hole gives you`;
   if (s.shaky) return "aim at the fat side and give yourself room";
   if (h.dzL) return `keep it away from the ${h.dzL} left — middle is plenty`;
   if (h.dzR) return `keep it away from the ${h.dzR} right — middle is plenty`;
@@ -120,10 +121,12 @@ export function whisper(s) {
 export function teeWhisper(hole, yards) {
   const y = yards || (hole && hole.y) || null;
   const hz = hole && hole.hz ? hole.hz.toLowerCase() : "";
+  const favor = hole && hole.favor;
   let tail = "Fairway finder — smooth and center.";
-  if (/water|creek|pond|lake/.test(hz)) tail = "Trouble's in play — take the safe line, not the hero one.";
-  else if (/ob|out of bounds/.test(hz)) tail = "OB lurking — aim at the fat side and breathe.";
-  else if (/dogleg/.test(hz)) tail = "Position over power — set up the next one.";
+  if (favor) tail = `Favor the ${favor} and let the hole's shape work.`;
+  else if (/water|creek|pond|lake/.test(hz)) tail = "Trouble's in play — take the safe line, not the hero one.";
+  else if (/\bob\b|out of bounds/.test(hz)) tail = "OB lurking — aim at the fat side and breathe.";
+  else if (/dogleg|bend/.test(hz)) tail = "Position over power — set up the next one.";
   return y ? `${y} to the middle. ${tail}` : tail;
 }
 
