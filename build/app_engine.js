@@ -336,6 +336,16 @@ function computePreowned(s,metrics,inv){
     let dts=trimNewDts(metrics,model,code)||modelAvgDts(metrics,model)||45;
     out[tk]={usedDts:Math.round(dts*10)/10,usedPrice:Math.round(modeledPrice(tk)),count:0,modeled:true}; });
   return out; }
+// Estimated resale from our OWN 10-year history (Loaner Intelligence), used to
+// price a loaner candidate BEFORE it goes into service. Age = the months it
+// will have served when it comes out (new when placed, so age ≈ service months).
+// Falls back silently to null when history isn't loaded or has no comparable.
+function deprResale(model,trim,ext,ageMonths){
+  var D=(typeof window!=="undefined")?window.DEPR:null;
+  if(!D||!D.active||!D.a||!window.LoanerIntel) return null;
+  var r=window.LoanerIntel.predictResale(D.a,model,trim,ext,ageMonths);
+  return (r&&r.ok)?{price:r.price,low:r.price_low,high:r.price_high,dts:r.dts,n:r.n,conf:r.confidence}:null;
+}
 function loanerEconomics(cost,msrp,model,usedDts,usedPrice,s,rebate){
   rebate=parseFloat(rebate||0)||0;
   let icv=parseFloat((s.loaner_icv||{})[model]||0)||0, svc=Math.max(0,parseInt(s.loaner_service_months,10)||0);
@@ -351,9 +361,13 @@ function loanerEconomics(cost,msrp,model,usedDts,usedPrice,s,rebate){
 function loanerScore(econ,pstat,metric){
   let gb=Math.max(-60,Math.min(40,econ.usedGross/500));
   let vel=Math.max(0,(60-(pstat.usedDts||60))/60)*20, bb=econ.bonusOk?10:0;
-  let opp=(metric&&metric.dts!==null&&metric.r90>=2&&metric.dts<=30)?-8:0, mb=pstat.modeled?0:3;
+  let opp=(metric&&metric.dts!==null&&metric.r90>=2&&metric.dts<=30)?-8:0;
+  // quality bump: measured street data best, 10-yr history next, blind model floor none
+  let mb=(pstat.src==="measured")?3:((pstat.src==="history")?2:0);
   return gb+vel+bb+opp+mb; }
-function loanerCandReason(econ,pstat,line){ let src=pstat.modeled?"modeled":(pstat.count+" used sales"); let g=Math.round(econ.usedGross);
+function loanerCandReason(econ,pstat,line){
+  let src=pstat.src==="history"?(pstat.histN+" historical comps"):(pstat.modeled?"modeled":(pstat.count+" used sales"));
+  let g=Math.round(econ.usedGross);
   let bits=[(g>=0?"$"+g.toLocaleString()+" preowned profit":"-$"+Math.abs(g).toLocaleString()+" preowned LOSS"),Math.round(pstat.usedDts)+"-day used turn ("+src+")"];
   if(econ.upsideDown) bits.push("⚠ upside-down vs. street");
   bits.push(econ.bonusOk?"✓ bonus":"✗ misses bonus window");
@@ -367,16 +381,24 @@ function allCandidates(res){ let s=res.settings, rm=repMaps(res.inv), pre=res.pr
     let code=l.key.split("|")[1], tk=model+"|"+code, pstat=pre[tk]; if(!pstat) return;
     let cm=repCostMsrp(l.key,model,code,rm), cost=cm[0], msrp=cm[1]; if(cost<=0&&msrp<=0) return;
     let metric=res.metrics[l.key]||null, rebate=modelRebate(s,model);
-    let usedPrice=pstat.modeled?(Math.max(0,cost-rebate)*s.preowned_price_pct):pstat.usedPrice;
-    let econ=loanerEconomics(cost,msrp,model,pstat.usedDts,usedPrice,s,rebate);
+    // resale-price precedence: explicit measured sales > 10-yr history curve > 80% modeled floor
+    let svc=Math.max(1,parseInt(s.loaner_service_months,10)||3);
+    let hist=pstat.modeled?deprResale(model,l.trim,l.ext,svc):null;
+    let usedPrice, usedSrc, usedDts=pstat.usedDts;
+    if(!pstat.modeled){ usedPrice=pstat.usedPrice; usedSrc="measured"; }
+    else if(hist){ usedPrice=hist.price; usedSrc="history"; if(hist.dts!=null) usedDts=hist.dts; }
+    else { usedPrice=Math.max(0,cost-rebate)*s.preowned_price_pct; usedSrc="modeled"; }
+    let econ=loanerEconomics(cost,msrp,model,usedDts,usedPrice,s,rebate);
+    // synthetic pstat carrying the chosen source, so score/reason reflect history
+    let ps={usedDts:usedDts,modeled:(usedSrc==="modeled"),count:pstat.count,src:usedSrc,histN:hist?hist.n:null,histConf:hist?hist.conf:null};
     let fresh=pos?pos.onlotUnits.slice().sort((a,b)=>a.dis-b.dis):[];
     let units=fresh.slice(0,s.demo_vins_per_combo).map(u=>({stock:u.stock||"—",vin:(u.serial||u.stock),
       vin_last6:(u.serial||u.stock)?(u.serial||u.stock).slice(-6):"—",dis:Math.round(u.dis),msrp:u.msrp,cost:u.cost,
       year:u.myear||u.my||"",ext_int:u.ext+"/"+u.int}));
-    let score=loanerScore(econ,pstat,metric)+(units.length?4:0);
-    out.push({model:model,trim:l.trim,ext:l.ext,int:l.int,key:l.key,usedDts:pstat.usedDts,usedPrice:econ.usedPrice,
-      modeled:pstat.modeled,score:Math.round(score*10)/10,netValue:econ.usedGross,econ:econ,newDts:l.dts,
-      onlot:l.onlot,inStock:units.length>0,units:units,reason:loanerCandReason(econ,pstat,l)}); });
+    let score=loanerScore(econ,ps,metric)+(units.length?4:0);
+    out.push({model:model,trim:l.trim,ext:l.ext,int:l.int,key:l.key,usedDts:usedDts,usedPrice:econ.usedPrice,
+      modeled:ps.modeled,usedSrc:usedSrc,histResale:hist,score:Math.round(score*10)/10,netValue:econ.usedGross,econ:econ,newDts:l.dts,
+      onlot:l.onlot,inStock:units.length>0,units:units,reason:loanerCandReason(econ,ps,l)}); });
   out.sort((a,b)=>b.score-a.score); return out; }
 function loanerCandidates(res){ let s=res.settings, n=(s.loaner_picks_per_model!==undefined?s.loaner_picks_per_model:6), out={}; MODELS.forEach(m=>out[m]=[]);
   allCandidates(res).forEach(p=>out[p.model].push(p));
@@ -442,6 +464,8 @@ function runEngine(inv,sales,s,today){
   let lines=buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demoReturns);
   let orphans=findOrphans(sales,effectiveRoster(s));
   let res={settings:s,tb:tb,metrics:metrics,seas:seas,positions:positions,lines:lines,demoUnits:demoUnits,sales:sales,orphans:orphans,inv:inv,invCount:inv.length,salesCount:sales.length,windows:windows};
+  res.depr=(typeof window!=="undefined"&&window.DEPR)?window.DEPR.a:null;
+  res.deprActive=!!(typeof window!=="undefined"&&window.DEPR&&window.DEPR.active);
   res.preowned=computePreowned(s,metrics,inv);
   res.loanerBoard=loanerCandidates(res);
   res.loanerFleetPlan=loanerFleet(res);

@@ -96,6 +96,21 @@ def test_predictor_is_monotone_in_age_and_reports_confidence():
     assert pred("DELOREAN", "DMC12", 1985, "STAINLESS", 6, age_months=6)["ok"] is False
 
 
+def test_predictor_resale_feeds_loaner_economics():
+    # The Pipeline Manager tool prices a loaner candidate's resale from this
+    # predictor at ~service-age. Pin the model-level values the JS economics
+    # consume so the JS<->Python bridge can't drift silently.
+    a = li.analyze(_load(), half_life_months=24)
+    pred = a["_predictor"]
+    qx80 = pred("QX80", None, None, None, None, age_months=3)
+    qx60 = pred("QX60", None, None, None, None, age_months=3)
+    assert qx80["ok"] and qx80["price"] == 69000 and qx80["n"] == 54
+    assert qx60["ok"] and qx60["price"] == 41300 and qx60["n"] == 262
+    # a nameplate with no history (QX65 is new) has no curve -> economics fall
+    # back to the modeled floor
+    assert pred("QX65", None, None, None, None, age_months=3)["ok"] is False
+
+
 def test_model_performance_ranks_and_benchmarks():
     a = li.analyze(_load(), half_life_months=24)
     mp = a["model_perf"]

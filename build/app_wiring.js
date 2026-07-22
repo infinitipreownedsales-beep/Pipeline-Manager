@@ -1,4 +1,21 @@
 /* ===================== wiring ===================== */
+/* Loaner Intelligence depreciation history: parse once, analyze under the chosen
+   recency weight, and expose window.DEPR so the loaner economics can price a
+   candidate's resale from real history. */
+window.DEPR = { sales:null, a:null, active:false, halfLife:24 };
+function buildDepr(text, halfLife){
+  var st=document.getElementById("deprStat");
+  try{
+    if(text!=null) window.DEPR.sales = window.LoanerIntel.loadCSV(text);
+    window.DEPR.halfLife = halfLife || window.DEPR.halfLife || 24;
+    if(window.DEPR.sales && window.DEPR.sales.length){
+      window.DEPR.a = window.LoanerIntel.analyze(window.DEPR.sales, window.DEPR.halfLife);
+      window.DEPR.active = true;
+      if(st){ var m=window.DEPR.a.meta; st.className="foot okmsg";
+        st.textContent="✓ "+m.infiniti_rows.toLocaleString()+" Infiniti sales · "+m.loaner_rows+" past loaners · half-life "+window.DEPR.halfLife+"mo"; }
+    }
+  }catch(e){ window.DEPR.active=false; if(st){ st.className="foot err"; st.textContent="History problem: "+e.message; } }
+}
 function getSettings(){
   let manual=document.getElementById("wmode").value==="manual";
   let cw = manual ? {QX80:parseFloat(document.getElementById("w80").value||3),
@@ -401,6 +418,11 @@ window.addEventListener("DOMContentLoaded",function(){
   restorePreowned(); restoreLoanCfg();
   document.getElementById("pre").addEventListener("change",function(){ liveRecompute(); persistPreowned(); });
   LOANCFG_IDS.forEach(id=>document.getElementById(id).addEventListener("change",function(){ liveRecompute(); persistLoanCfg(); }));
+  // depreciation history: analyze the pre-loaded export, then wire recency + re-import
+  if(window.LoanerIntel && window.__LOANER_HISTORY__) buildDepr(window.__LOANER_HISTORY__, 24);
+  document.getElementById("deprHalf").addEventListener("change",function(){ buildDepr(null, parseFloat(this.value)); liveRecompute(); });
+  document.getElementById("deprFile").addEventListener("change",function(e){ var f=e.target.files[0]; if(!f) return;
+    var rd=new FileReader(); rd.onload=function(){ buildDepr(String(rd.result), window.DEPR.halfLife); liveRecompute(); }; rd.readAsText(f); });
   // wrap control sections as collapsible + lockable (after their rows are restored)
   setupDataSections();
   document.getElementById("expandAll").addEventListener("click",function(){ document.querySelectorAll("#datacard .dsec").forEach(function(s){ setDCollapsed(s,false); }); persistDCollapse(); });

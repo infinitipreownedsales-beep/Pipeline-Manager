@@ -214,6 +214,7 @@
   .lwarn{font-size:11px;color:var(--bad);background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);border-radius:7px;padding:4px 8px;margin:2px 0 6px}
   .lmodeled{font-size:10px;color:var(--muted);border:1px dashed var(--line2);border-radius:6px;padding:1px 6px}
   .lmeasured{font-size:10px;color:var(--teal);border:1px solid var(--teal-hd);border-radius:6px;padding:1px 6px}
+  .lhistory{font-size:10px;color:var(--accent);border:1px solid var(--accent);border-radius:6px;padding:1px 6px;font-weight:600}
   .lkpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:6px 0 14px}
   .lkpi{background:linear-gradient(180deg,var(--panel2),#111a28);border:1px solid var(--line);border-radius:12px;padding:11px 14px}
   .lkpi .lab{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
@@ -377,6 +378,21 @@
         <button class="ghost" id="addFleet" style="margin-top:8px">＋ Add loaner unit</button>
       </div>
     </div>
+    <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
+      <label class="top">Depreciation history <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— your 10-year used-car sales export. This is what lets the tool estimate a loaner candidate's <b>real resale value</b> (from your own history, by model/trim/age) instead of a flat 80% guess, so the Loaner board picks units that actually hold value. <b>Pre-loaded</b> — re-import to refresh with newer sales.</span></label>
+      <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin-top:8px">
+        <div class="fld"><label>Recency weighting</label>
+          <select id="deprHalf">
+            <option value="6">Aggressive — 6-mo half-life</option>
+            <option value="12">Recent-leaning — 12-mo</option>
+            <option value="24" selected>Balanced — 24-mo</option>
+            <option value="48">Long memory — 48-mo</option>
+            <option value="100000">Equal weight — all history</option>
+          </select></div>
+        <div class="fld"><label>Re-import history (CSV)</label><input type="file" id="deprFile" accept=".csv"></div>
+        <span id="deprStat" class="foot"></span>
+      </div>
+    </div>
     <div style="margin-top:11px;display:flex;gap:9px;align-items:center;flex-wrap:wrap">
       <button class="primary" id="run">Compute order ▶</button>
       <button class="ghost" id="loadsample">Load sample data</button>
@@ -403,6 +419,8 @@
   <div id="results"></div>
 </div>
 
+<script>__LOANER_ENGINE__</script>
+<script>window.__LOANER_HISTORY__=__LOANER_HISTORY_JSON__;</script>
 <script>
 "use strict";
 const ROSTER = __ROSTER__;

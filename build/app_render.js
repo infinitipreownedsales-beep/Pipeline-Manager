@@ -142,6 +142,11 @@ function buildSeqBlock(res, model){
 }
 
 /* ---- loaner / ICV program dashboard ---- */
+function srcBadge(p){
+  if(p.usedSrc==="history"){ return "<span class='lhistory' title='resale estimated from your own 10-year history — "+(p.histResale?p.histResale.n:0)+" comparable sales'>📊 history ("+(p.histResale?p.histResale.n:0)+")</span>"; }
+  if(p.usedSrc==="measured"){ return "<span class='lmeasured' title='measured from your preowned/auction data'>measured</span>"; }
+  return "<span class='lmodeled' title='modeled: 80% of cheapest-new (no history for this config)'>modeled</span>";
+}
 function loanerRender(res){
   let board=res.loanerBoard||{}, plan=res.loanerFleetPlan||{rows:[],in_service:0,target:0,releasing_now:0,to_add:0};
   let H=[];
@@ -193,7 +198,7 @@ function loanerRender(res){
         "<div class='demorank'>"+medal+"</div>"+
         "<div class='demotrim'>"+esc(p.trim)+" <span class='demoei'>"+esc(p.ext)+"/"+esc(p.int)+"</span></div>"+
         "<div class='money'><span class='net' style='color:"+(p.netValue>=0?"var(--good)":"var(--bad)")+"'>"+money(p.netValue)+"</span><span class='netlab'>preowned "+(p.netValue>=0?"profit":"LOSS")+"</span>"+
-          " <span class='"+(p.modeled?"lmodeled":"lmeasured")+"' title='"+(p.modeled?"modeled: 80% of cheapest-new":"measured from your preowned/auction data")+"'>"+(p.modeled?"modeled":"measured")+"</span></div>"+
+          " "+srcBadge(p)+"</div>"+
         (e.upsideDown?"<div class='lwarn'>⚠ upside-down — written-down cost is above street value; you'd re-buy it cheaper at auction</div>":"")+
         "<div class='demowhy' style='margin:4px 0 6px'>"+dtsCell(p.usedDts)+" <span class='demometa'>used turn</span> "+
           (e.bonusOk?"<span class='lbonus-ok'>✓ $"+Math.round(e.bonus).toLocaleString()+" bonus</span>":"<span class='lbonus-no'>✗ misses bonus</span>")+"</div>"+
@@ -204,7 +209,7 @@ function loanerRender(res){
           "<span class='lchip'>write-down <b>-"+money(e.deprTotal).slice(1)+"</b></span>"+
           (e.bonus?"<span class='lchip'>bonus <b>-"+money(e.bonus).slice(1)+"</b></span>":"")+
           "<span class='lchip'>adj cost <b>"+money(e.adjustedCost)+"</b></span>"+
-          "<span class='lchip'>used @ "+money(e.usedPrice)+"</span>"+
+          "<span class='lchip'>resale @ "+money(e.usedPrice)+(p.histResale?" <span class='dim'>("+money(p.histResale.low).slice(1)+"–"+money(p.histResale.high).slice(1)+")</span>":"")+"</span>"+
         "</div>");
       if(p.units.length){ p.units.forEach(u=>{
         H.push("<div class='demovin'><span class='vintag'>VIN …"+esc(u.vin_last6)+"</span>"+
@@ -213,7 +218,9 @@ function loanerRender(res){
       H.push("</div>"); });
     H.push("</div>"); });
   H.push("</div>");
-  if(anyModeled) H.push("<div class='foot'>“modeled” picks estimate used price at "+Math.round((res.settings.preowned_price_pct||0.8)*100)+"% of your <b>cheapest new price</b> (invoice − rebate) and used turn ≈ new days-to-sell — a deliberately conservative floor. The write-downs (ICV + monthly write-down + bonus) only help the cost <i>when the unit retires from the fleet</i>; preowned profit is what's left after that. Paste your own used sales or public wholesale/auction comps in ✎ Data to replace the estimate — that street price is what you could re-buy the unit for, so never carry it internally for more.</div>");
+  let anyHistory=MODELS.some(m=>(board[m]||[]).some(p=>p.usedSrc==="history"));
+  if(anyHistory) H.push("<div class='foot'><b>📊 history</b> picks price resale from your own 10-year used-car sales — the config's real median resale at ~"+(res.settings.loaner_service_months||3)+" months of age (see the <b>Loaner Depreciation</b> section below), with the comp count in parentheses. That's the street value you could re-buy the unit for, so it's what you should carry internally. The write-downs (ICV + monthly write-down + bonus) only help the cost <i>when the unit retires from the fleet</i>; preowned profit is what's left after that.</div>");
+  if(anyModeled) H.push("<div class='foot'>“modeled” picks (no history match — e.g. a brand-new nameplate) fall back to "+Math.round((res.settings.preowned_price_pct||0.8)*100)+"% of your <b>cheapest new price</b> (invoice − rebate) and used turn ≈ new days-to-sell — a deliberately conservative floor until history exists for that model.</div>");
   return H.join("");
 }
 
@@ -381,6 +388,9 @@ function render(res){
   H.push(sec(5,"Loaner / ICV Program","which units to cycle through the courtesy fleet for the best preowned profit"));
   H.push(loanerRender(res));
 
+  // 5b. LOANER DEPRECIATION INTELLIGENCE — the engine behind the resale prices above
+  if(res.deprActive&&res.depr){ H.push(sec(9,"Loaner Depreciation","what a loaner really resells for — from your own 10-year history · powers the resale prices above")); H.push(depreciationRender(res)); }
+
   // 6. OVERSTOCK
   H.push(sec(6,"Overstock / Wholesale","over-target metal — order slower; wholesale only what won't sell"));
   if(rep.over.length) H.push(tbl(["Model","Trim","Ext","Int","On hand","60-day tgt","Over","Wholesale now","Inbound","DTS","Aged"],
@@ -430,13 +440,90 @@ function render(res){
   let root=document.getElementById("results");
   root.innerHTML=H.join("");
   window.__dashes = groupSections(root);
+  if(res.deprActive&&res.depr) wireDepr(res.depr, res.settings);
+}
+/* ---------- Loaner Depreciation dashboard (in-tool view of the history engine) ---------- */
+function deprSvgLine(series, cats){
+  let W=680,H=260,pl=50,pr=14,pt=14,pb=38, n=cats.length; if(!n) return "";
+  let x=i=>pl+(n<=1?0:(W-pl-pr)*i/(n-1)), y=v=>pt+(H-pt-pb)*(1-v/1.05);
+  let g=["<svg viewBox='0 0 "+W+" "+H+"' width='100%' style='max-width:"+W+"px'>"];
+  for(let k=0;k<=4;k++){ let v=1.05*k/4, yy=y(v);
+    g.push("<line x1='"+pl+"' y1='"+yy+"' x2='"+(W-pr)+"' y2='"+yy+"' stroke='#273448'/>");
+    g.push("<text x='"+(pl-8)+"' y='"+(yy+4)+"' fill='#8492a6' font-size='11' text-anchor='end'>"+Math.round(v*100)+"%</text>"); }
+  cats.forEach((c,i)=>g.push("<text x='"+x(i)+"' y='"+(H-pb+19)+"' fill='#9dabbf' font-size='10.5' text-anchor='middle'>"+esc(c)+"</text>"));
+  series.forEach(s=>{ let pts=s.pts.map((v,i)=>v==null?null:[x(i),y(v)]).filter(Boolean);
+    if(pts.length>1) g.push("<polyline fill='none' stroke='"+s.color+"' stroke-width='2.5' points='"+pts.map(p=>p[0].toFixed(1)+","+p[1].toFixed(1)).join(" ")+"'/>");
+    s.pts.forEach((v,i)=>{ if(v!=null) g.push("<circle cx='"+x(i)+"' cy='"+y(v)+"' r='3.2' fill='"+s.color+"'/>"); }); });
+  return g.join("")+"</svg>";
+}
+const DEPR_COLORS=["#5eead4","#fb923c","#4c8dff","#f472b6","#a3e635"];
+function depreciationRender(res){
+  let a=res.depr, s=res.settings, H=[];
+  let lv=a.loaner_vs_retail.overall, gd=lv.loaner.gross-lv.retail.gross;
+  // headline: does loaner service pay
+  H.push("<div class='kpis' style='margin-bottom:12px'>");
+  H.push("<div class='kpi'><span class='edge' style='background:var(--teal)'></span><div class='lab'>Loaner resale</div><div class='big' style='color:var(--teal)'>"+money(lv.loaner.price)+"</div><div class='sub'>median · sold at ~"+lv.loaner.avg_age_mo+"mo age</div></div>");
+  H.push("<div class='kpi'><span class='edge' style='background:var(--muted)'></span><div class='lab'>Ordinary used resale</div><div class='big'>"+money(lv.retail.price)+"</div><div class='sub'>median · age ~"+lv.retail.avg_age_mo+"mo</div></div>");
+  H.push("<div class='kpi'><span class='edge' style='background:"+(gd>=0?"var(--good)":"var(--bad)")+"'></span><div class='lab'>Loaner gross edge</div><div class='big' style='color:"+(gd>=0?"var(--good)":"var(--bad)")+"'>"+(gd>=0?"+":"−")+money(Math.abs(gd)).slice(1)+"</div><div class='sub'>vs ordinary used · "+lv.loaner.n+" past loaners</div></div>");
+  H.push("<div class='kpi'><span class='edge' style='background:var(--accent)'></span><div class='lab'>History depth</div><div class='big'>"+a.meta.infiniti_rows.toLocaleString()+"</div><div class='sub'>Infiniti sales · half-life "+a.meta.half_life_months+"mo</div></div>");
+  H.push("</div>");
+  // retention curves
+  let keys=Object.keys(a.age_curves).filter(k=>a.age_curves[k].points.reduce((x,p)=>x+p.n,0)>=40);
+  let order={QX80:0,QX60:1,QX55:2,QX50:3,Q50:4}; keys.sort((x,y)=>(order[x]==null?9:order[x])-(order[y]==null?9:order[y]));
+  keys=keys.slice(0,5);
+  let cats=["0–6mo","6–12mo","1yr","1.5yr","2yr","3yr","4yr","5yr","7yr+"], edges=[0,6,12,18,24,36,48,60,84];
+  let series=keys.map((k,i)=>({name:k,color:DEPR_COLORS[i%DEPR_COLORS.length],
+    pts:edges.map(e=>{ let p=a.age_curves[k].points.find(pp=>pp.age===e); return p?p.retention_smooth:null; })}));
+  H.push("<div class='legend'>"+series.map(sr=>"<span><i style='display:inline-block;width:13px;height:4px;border-radius:2px;background:"+sr.color+";margin-right:5px'></i>"+esc(sr.name)+"</span>").join("")+"</div>");
+  H.push("<div class='tblwrap' style='background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px'>"+deprSvgLine(series,cats)+"</div>");
+  H.push("<div class='foot' style='margin:6px 0 10px'>Value retention vs vehicle age — your own Infiniti depreciation curves (age axis; the source has no odometer). This is the data that prices each loaner candidate's resale in the Loaner section above.</div>");
+  // interactive what-if predictor
+  let models=Object.keys(a.age_curves).map(k=>a.age_curves[k].model).filter((v,i,ar)=>ar.indexOf(v)===i);
+  let trimsByModel={}; for(let m in a.trim) trimsByModel[m]=a.trim[m].map(t=>t.trim);
+  window.__DEPRPC={trimsByModel:trimsByModel};
+  H.push("<div class='dc-sub' style='margin-top:6px'>Resale what-if <span class='dc-note'>put a spec into service and see what your history says it resells for at a given age</span></div>");
+  H.push("<div class='calc' style='display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin:8px 0 10px'>");
+  H.push("<div class='fld'><label>Model</label><select id='dp_model'>"+models.map(m=>"<option>"+esc(m)+"</option>").join("")+"</select></div>");
+  H.push("<div class='fld'><label>Trim</label><select id='dp_trim'></select></div>");
+  H.push("<div class='fld'><label>Age in service</label><select id='dp_age'>"+
+    [["0","new / just placed"],["3","3 months"],["6","6 months"],["12","1 year"],["18","1.5 years"],["24","2 years"],["36","3 years"]].map(o=>"<option value='"+o[0]+"'"+(o[0]=="6"?" selected":"")+">"+o[1]+"</option>").join("")+"</select></div>");
+  H.push("</div><div id='dp_out'></div>");
+  // per-model resale-by-age table (leading model)
+  let lead=keys[0]; if(lead){ let pts=a.age_curves[lead].points;
+    H.push("<div class='subttl' style='font-size:12.5px;font-weight:700;color:var(--ink2);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 4px'>"+esc(lead)+" — median resale by age</div>");
+    H.push(tbl(["Age"].concat(pts.map(p=>p.label)),[""].concat(pts.map(()=>"num")),
+      [["Resale"].concat(pts.map(p=>({html:money(p.price_smooth)}))),
+       ["Retention"].concat(pts.map(p=>({html:p.retention_smooth==null?"—":Math.round(p.retention_smooth*100)+"%"}))),
+       [{html:"<span class='dim'>Comps</span>"}].concat(pts.map(p=>({html:"<span class='dim'>"+p.n+"</span>"})))])); }
+  return H.join("");
+}
+function wireDepr(a, s){
+  let pc=window.__DEPRPC||{trimsByModel:{}};
+  function fillTrims(){ let m=document.getElementById("dp_model").value, ts=(pc.trimsByModel[m]||[]);
+    let sel=document.getElementById("dp_trim"); sel.innerHTML="<option value=''>(any trim)</option>"+ts.map(t=>"<option value='"+esc(t)+"'>"+esc(t)+"</option>").join(""); }
+  function run(){ let m=document.getElementById("dp_model").value, t=document.getElementById("dp_trim").value||null, age=+document.getElementById("dp_age").value;
+    let r=window.LoanerIntel.predictResale(a,m,t,null,age), out=document.getElementById("dp_out");
+    if(!r||!r.ok){ out.innerHTML="<div class='empty'>No comparable history for that spec.</div>"; return; }
+    let dots=Math.round(r.confidence*5);
+    out.innerHTML="<div class='lchips' style='gap:10px'>"+
+      "<span class='lchip' style='font-size:14px'>Expected resale <b style='color:var(--teal)'>"+money(r.price)+"</b></span>"+
+      "<span class='lchip'>range "+money(r.price_low)+"–"+money(r.price_high).slice(1)+"</span>"+
+      "<span class='lchip'>gross <b>"+money(r.gross)+"</b></span>"+
+      "<span class='lchip'>used turn "+(r.dts==null?"—":r.dts+"d")+"</span>"+
+      "<span class='lchip'>confidence "+"●".repeat(dots)+"<span class='dim'>"+"○".repeat(5-dots)+"</span> · "+r.n+" comps</span></div>";
+  }
+  let dm=document.getElementById("dp_model"); if(!dm) return;
+  dm.addEventListener("change",function(){ fillTrims(); run(); });
+  document.getElementById("dp_trim").addEventListener("change",run);
+  document.getElementById("dp_age").addEventListener("change",run);
+  fillTrims(); run();
 }
 // Wrap the flat output into one <section class="dash"> per dashboard so print
 // (and anything else) can show/hide them individually.
 function groupSections(root){
   const titleKey={"Order Priority":"order","6-Month Rolling Order Plan":"plan",
     "Fleet Stock Target & Seasonality":"fleet","Demo Center":"democenter",
-    "Loaner / ICV Program":"loaner",
+    "Loaner / ICV Program":"loaner","Loaner Depreciation":"depr",
     "Overstock / Wholesale":"overstock","Wholesale Now — VIN sheet":"vins",
     "Retail Forecast":"forecast"};
   let kids=[].slice.call(root.childNodes), groups=[], cur={key:"summary",title:"Summary",nodes:[]};
