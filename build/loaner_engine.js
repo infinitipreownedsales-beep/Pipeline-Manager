@@ -183,8 +183,21 @@ function loanerVsRetail(inf){
 function factor(sub,base,lo,hi){ lo=lo==null?0.75:lo; hi=hi==null?1.35:hi;
   if(!sub||!base) return 1; return Math.max(lo,Math.min(hi,sub/base)); }
 
+// INFINITI trim keywords, most-specific first, so "PURE FWD" (inventory) and
+// "3.0T PURE" (history) both resolve to the PURE curve, "AUTOG"->"AUTOGRAPH", etc.
+var TRIM_WORDS=["AUTOGRAPH","SENSORY","ESSENTIAL","SIGNATURE","LIMITED","PREMIUM","LUXE","PURE","SPORT"];
+function trimWord(t){ t=norm(t).replace(/\bAUTOG\b/,"AUTOGRAPH"); for(var i=0;i<TRIM_WORDS.length;i++){ if(t.indexOf(TRIM_WORDS[i])>=0) return TRIM_WORDS[i]; } return ""; }
 function buildPredictor(inf){
   let cm=ageCurves(inf,false), ct=ageCurves(inf,true), colors=colorAnalytics(inf,3), seas=seasonality(inf);
+  // index the best (most-supported) trim curve per model + trim keyword
+  let trimByModel={};
+  Object.keys(ct).forEach(function(key){ let parts=key.split("|"), model=parts[0], tw=trimWord(parts[1]);
+    if(!tw) return; let n=ct[key].points.reduce((s,p)=>s+p.n,0);
+    trimByModel[model]=trimByModel[model]||{};
+    if(!trimByModel[model][tw]||n>trimByModel[model][tw].n) trimByModel[model][tw]={key:key,n:n}; });
+  function resolveTrimKey(model,trim){ let tw=trimWord(trim);
+    if(tw&&trimByModel[model]&&trimByModel[model][tw]) return trimByModel[model][tw].key;
+    return model+"|"+trim; }
   function curveVal(key,age,field){
     let c=(key.indexOf("|")>=0 && key.split("|")[1])?ct[key]:cm[key];
     if(!c||!c.points.length) return [null,0];
@@ -198,11 +211,11 @@ function buildPredictor(inf){
     model=modelNorm(model); trim=trim?norm(trim):""; color=color?canonColor(color):"";
     if(ageMonths==null&&modelYear&&asOfYear)
       ageMonths=Math.max(0,(asOfYear-modelYear)*12+((month||MY_ANCHOR)-MY_ANCHOR));
-    let val=null,n=0;
-    if(trim){ let r=curveVal(model+"|"+trim,ageMonths,"price"); val=r[0]; n=r[1]; }
-    if(!val){ let r=curveVal(model,ageMonths,"price"); val=r[0]; n=r[1]; }
+    let val=null,n=0,tkey=trim?resolveTrimKey(model,trim):null;
+    if(tkey){ let r=curveVal(tkey,ageMonths,"price"); val=r[0]; n=r[1]; }
+    if(!val){ let r=curveVal(model,ageMonths,"price"); val=r[0]; n=r[1]; tkey=null; }
     if(!val) return {ok:false,reason:"no comparable history for this model"};
-    let gkey=trim?(model+"|"+trim):model;
+    let gkey=tkey||model;
     let gross=curveVal(gkey,ageMonths,"gross")[0], dts=curveVal(gkey,ageMonths,"dts")[0];
     let cfac=1;
     if(color&&colors[model]){ let crow=colors[model].colors.find(c=>c.color===color), base=colors[model].baseline.price;

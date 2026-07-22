@@ -122,6 +122,22 @@ def _canon_color(color):
     return _COLOR_ABBR.get(c, c)
 
 
+# INFINITI trim keywords, most-specific first, so "PURE FWD" (inventory) and
+# "3.0T PURE" (history) both resolve to the PURE curve, "AUTOG" -> "AUTOGRAPH".
+_TRIM_WORDS = ["AUTOGRAPH", "SENSORY", "ESSENTIAL", "SIGNATURE", "LIMITED",
+               "PREMIUM", "LUXE", "PURE", "SPORT"]
+
+
+def _trim_word(trim):
+    t = _norm(trim).replace("AUTOG ", "AUTOGRAPH ")
+    if t.strip() == "AUTOG":
+        t = "AUTOGRAPH"
+    for w in _TRIM_WORDS:
+        if w in t:
+            return w
+    return ""
+
+
 # --------------------------------------------------------------------------- #
 # Record
 # --------------------------------------------------------------------------- #
@@ -482,6 +498,23 @@ def build_predictor(infiniti):
     for m in {s.model for s in infiniti}:
         rows = [s for s in infiniti if s.model == m]
         model_base_price[m] = _wmean([(r.price, r.weight) for r in rows])
+    # best trim curve per model + trim keyword, so inventory trims ("PURE FWD")
+    # resolve to the history curve ("PURE") instead of silently falling to model
+    trim_by_model: dict = {}
+    for key, c in curves_trim.items():
+        model, _, trimstr = key.partition("|")
+        tw = _trim_word(trimstr)
+        if not tw:
+            continue
+        n = sum(p["n"] for p in c["points"])
+        cur = trim_by_model.setdefault(model, {}).get(tw)
+        if cur is None or n > cur[1]:
+            trim_by_model[model][tw] = (key, n)
+
+    def _resolve_trim_key(model, trim):
+        tw = _trim_word(trim)
+        hit = trim_by_model.get(model, {}).get(tw)
+        return hit[0] if hit else f"{model}|{trim}"
 
     def _curve_value(curve_key, age, field="price"):
         c = (curves_trim if "|" in curve_key and curve_key.split("|")[1] else
@@ -507,16 +540,19 @@ def build_predictor(infiniti):
         if age_months is None and model_year and as_of_year:
             age_months = max(0, (as_of_year - model_year) * 12 +
                              ((month or MODEL_YEAR_ANCHOR_MONTH) - MODEL_YEAR_ANCHOR_MONTH))
-        # base value: prefer model+trim curve, fall back to model curve
+        # base value: prefer the resolved trim curve, fall back to model curve
         val = n = None
-        if trim:
-            val, n = _curve_value(f"{model}|{trim}", age_months, "price")
+        tkey = _resolve_trim_key(model, trim) if trim else None
+        if tkey:
+            val, n = _curve_value(tkey, age_months, "price")
         if not val:
             val, n = _curve_value(model, age_months, "price")
+            tkey = None
         if not val:
             return {"ok": False, "reason": "no comparable history for this model"}
-        gross, _ = _curve_value(f"{model}|{trim}" if trim else model, age_months, "gross")
-        dts, _ = _curve_value(f"{model}|{trim}" if trim else model, age_months, "dts")
+        gkey = tkey or model
+        gross, _ = _curve_value(gkey, age_months, "gross")
+        dts, _ = _curve_value(gkey, age_months, "dts")
         # color factor
         cfac = 1.0
         if color and model in colors:
