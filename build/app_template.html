@@ -221,6 +221,17 @@
   .lmodeled{font-size:10px;color:var(--muted);border:1px dashed var(--line2);border-radius:6px;padding:1px 6px}
   .lmeasured{font-size:10px;color:var(--teal);border:1px solid var(--teal-hd);border-radius:6px;padding:1px 6px}
   .lhistory{font-size:10px;color:var(--accent);border:1px solid var(--accent);border-radius:6px;padding:1px 6px;font-weight:600}
+  .fbreak{margin-top:8px}
+  .fbreak summary{cursor:pointer;font-size:11.5px;color:var(--accent);list-style:none;user-select:none}
+  .fbreak summary::-webkit-details-marker{display:none}
+  .fbreak[open] summary{margin-bottom:6px}
+  .fbwrap{background:#0c1420;border:1px solid var(--line2);border-radius:9px;padding:8px 10px}
+  .fbrow{display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:2.5px 0;color:var(--ink2)}
+  .fbrow span:first-child{color:var(--muted)}
+  .fbrow.sub{font-size:11px;padding:1px 0 1px 10px}
+  .fbrow.total{border-top:1px solid var(--line2);margin-top:3px;padding-top:5px;font-weight:700;color:var(--ink)}
+  .fbrow.total span:first-child{color:var(--ink2)}
+  .fbdiv{font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted2);margin:7px 0 2px;border-bottom:1px dashed var(--line);padding-bottom:2px}
   .lkpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:6px 0 14px}
   .lkpi{background:linear-gradient(180deg,var(--panel2),#111a28);border:1px solid var(--line);border-radius:12px;padding:11px 14px}
   .lkpi .lab{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}

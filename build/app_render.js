@@ -142,6 +142,33 @@ function buildSeqBlock(res, model){
 }
 
 /* ---- loaner / ICV program dashboard ---- */
+function financialBreakdown(p){ let e=p.econ;
+  function row(lab,val,o){ o=o||{}; let disp;
+    if(o.neg) disp="<span class='neg'>−"+money(Math.abs(val)).slice(1)+"</span>";
+    else if(o.pos) disp="<span class='pos'>+"+money(Math.abs(val)).slice(1)+"</span>";
+    else if(o.total) disp="<span class='"+(val<0?"neg":"pos")+"'>"+money(val)+"</span>";  // signed
+    else disp="<span>"+money(val)+"</span>";
+    return "<div class='fbrow"+(o.sub?" sub":"")+(o.total?" total":"")+"'><span>"+lab+"</span>"+disp+"</div>"; }
+  let H=["<details class='fbreak'><summary>▸ Financial breakdown — why it ranks here</summary><div class='fbwrap'>"];
+  H.push(row("Invoice / acquisition cost", e.cost));
+  H.push(row("MSRP", e.msrp, {sub:true}));
+  if(e.rebate) H.push(row("Customer rebate (new sells at invoice − this)", e.rebate, {sub:true}));
+  H.push("<div class='fbdiv'>Cost basis while in service ("+e.serviceSpan+" mo)</div>");
+  H.push(row("ICV allowance (one-time)", e.icvTotal, {neg:true}));
+  H.push(row("Write-down / depreciation", e.deprTotal, {neg:true}));
+  if(e.bonus) H.push(row("Velocity bonus (earned)", e.bonus, {neg:true}));
+  else if(e.velocityAvail) H.push("<div class='fbrow sub'><span>Velocity bonus (misses window)</span><span class='dim'>"+money(e.velocityAvail)+" avail</span></div>");
+  H.push(row("= Adjusted cost basis", e.adjustedCost, {total:true}));
+  H.push("<div class='fbdiv'>Resale</div>");
+  H.push("<div class='fbrow'><span>Expected used retail "+srcBadge(p)+"</span><span class='pos'>+"+money(e.usedPrice).slice(1)+"</span></div>");
+  if(e.recon) H.push(row("Estimated reconditioning", e.recon, {neg:true}));
+  H.push(row("= Front-end gross", e.usedGross, {total:true}));
+  if(e.holding||e.mileageAdj){ H.push("<div class='fbdiv'>To projected net</div>");
+    if(e.holding) H.push(row("Holding cost ("+e.serviceSpan+"mo + used turn)", e.holding, {neg:true}));
+    H.push("<div class='fbrow sub'><span>Mileage adjustment</span><span class='dim'>n/a — no odometer feed</span></div>");
+    H.push(row("= Projected net profit", e.net, {total:true})); }
+  H.push("</div></details>");
+  return H.join(""); }
 function srcBadge(p){
   if(p.usedSrc==="history"){ return "<span class='lhistory' title='resale estimated from your own 10-year history — "+(p.histResale?p.histResale.n:0)+" comparable sales'>📊 history ("+(p.histResale?p.histResale.n:0)+")</span>"; }
   if(p.usedSrc==="measured"){ return "<span class='lmeasured' title='measured from your preowned/auction data'>measured</span>"; }
@@ -211,6 +238,7 @@ function loanerRender(res){
           "<span class='lchip'>adj cost <b>"+money(e.adjustedCost)+"</b></span>"+
           "<span class='lchip'>resale @ "+money(e.usedPrice)+(p.histResale?" <span class='dim'>("+money(p.histResale.low).slice(1)+"–"+money(p.histResale.high).slice(1)+")</span>":"")+"</span>"+
         "</div>");
+      H.push(financialBreakdown(p));
       if(p.units.length){ p.units.forEach(u=>{
         H.push("<div class='demovin'><span class='vintag'>VIN …"+esc(u.vin_last6)+"</span>"+
           "<span class='demound'>"+esc(u.year)+" "+esc(u.ext_int)+" · "+u.dis+"d"+(u.cost?" · cost "+money(u.cost):"")+"</span></div>"); });
