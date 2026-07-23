@@ -1269,12 +1269,16 @@ export default function CaddieOS(){
           const cT=rounds.reduce((a,r)=>a+r.convTried,0);const conv=cT?rounds.reduce((a,r)=>a+r.convMade,0)/cT:0;
           const ppr=rounds.reduce((a,r)=>a+r.putts,0)/rounds.length;
           const blow=rounds.reduce((a,r)=>a+r.scores.filter(x=>x>=7).length,0)/rounds.length;
-          const allE=rounds.flatMap(r=>(r.shots||[]).filter(x=>!x.g).map(x=>Math.abs(x.gain-x.exp)));
-          const mae=allE.length?allE.reduce((a,b)=>a+b,0)/allE.length:null;
+          // Ball-striking from OUTCOMES — how often struck shots find the short grass —
+          // not a distance vs a stock number the on-course flow can't measure. (A drive
+          // into the trees has to count against you; penalties are excluded, not NaN'd.)
+          const struck=rounds.flatMap(r=>(r.shots||[]).filter(x=>!x.pen));
+          const grassHit=struck.filter(x=>x.g||["green","fairway","first"].includes(x.end)).length;
+          const bsPct=struck.length?Math.round(grassHit/struck.length*100):null;
           const rows=[["Scoring",Math.max(0,Math.min(100,Math.round(100-avgVs*6))),`${avgVs>=0?"+":""}${avgVs.toFixed(1)} vs plan`],
             ["Short game",Math.max(0,Math.min(100,Math.round(conv*100))),`${Math.round(conv*100)}% inside-35`],
             ["Putting",Math.max(0,Math.min(100,Math.round(100-(ppr-30)*5))),`${ppr.toFixed(1)} putts/round`],
-            mae!==null?["Ball-striking",Math.max(0,Math.min(100,Math.round(100-mae*4))),`±${Math.round(mae)}y vs number`]:null,
+            bsPct!==null?["Ball-striking",bsPct,`${bsPct}% found the short grass`]:null,
             ["Discipline",Math.max(0,Math.min(100,Math.round(100-blow*18))),`${blow.toFixed(1)} blowups/round`]].filter(Boolean);
           return rows.map((r,i)=>(<div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:"1px solid #f2f2f7",gap:8}}>
             <span style={{fontSize:14,fontWeight:800,flexShrink:0}}>{r[0]}</span>
@@ -1286,10 +1290,21 @@ export default function CaddieOS(){
         <div style={S.h}>Club report — every tracked shot</div>
         {(()=>{const all=rounds.flatMap(r=>r.shots||[]);if(!all.length)return <div style={S.sub}>Play a round — every club selection is logged automatically and reported here.</div>;
           const fams=["52",...Object.keys(P.carries)];
-          const rows=fams.map(f=>{const mine=all.filter(x=>famOf(x.c)===f&&!x.p);if(!mine.length)return null;const errs=mine.filter(x=>!x.g&&(!x.lie||x.lie==="FW")&&x.from>x.exp+8).map(x=>x.gain-x.exp);const m=errs.length?Math.round(errs.reduce((a,b)=>a+b,0)/errs.length):0;const sd=errs.length>1?Math.round(Math.sqrt(errs.reduce((a,b)=>a+(b-m)*(b-m),0)/errs.length)):0;const gpct=Math.round(mine.filter(x=>x.g||Math.abs(x.gain-x.exp)<=8).length/mine.length*100);return {f,n:mine.length,m,sd,gpct};}).filter(Boolean);
+          const rows=fams.map(f=>{const mine=all.filter(x=>famOf(x.c)===f&&!x.p);if(!mine.length)return null;
+            // Hot/cold from where the ball FINISHED (the confidence engine), not distance
+            // deviation — so a club that keeps ending in trees/rough cools, as it should.
+            const cc=clubConfidence(mine,cstat(f));
+            const grass=mine.filter(x=>x.g||["green","fairway","first"].includes(x.end)).length;
+            const gpct=Math.round(grass/mine.length*100);
+            const errs=mine.filter(x=>!x.g&&(!x.lie||x.lie==="FW")&&x.gain!=null&&x.exp!=null&&x.from>x.exp+8).map(x=>x.gain-x.exp);
+            const m=errs.length?errs.reduce((a,b)=>a+b,0)/errs.length:0;
+            const sd=errs.length>1?Math.round(Math.sqrt(errs.reduce((a,b)=>a+(b-m)*(b-m),0)/errs.length)):0;
+            return {f,n:mine.length,gpct,sd,state:cc.state,score:cc.score};}).filter(Boolean);
+          const stLbl=s=>s==="hot"?"HOT":s==="cold"?"COLD":"STEADY";
+          const stCol=s=>s==="hot"?"#1a7f37":s==="cold"?"#ff453a":"#ff9f0a";
           return rows.map((r,i)=>(<div key={i} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid #f2f2f7"}}>
             <span style={{fontSize:14,fontWeight:800}}>{r.f}</span>
-            <span style={{fontSize:12,color:"#3a3a3c"}}>{r.n} shots · {r.m>=0?"+":""}{r.m}y · ±{r.sd}y{(()=>{const b=dirBias(r.f);return b?" · miss "+b:"";})()} · {r.gpct}% on <span style={{fontWeight:800,color:r.gpct>=60?"#1a7f37":r.gpct>=40?"#ff9f0a":"#ff453a"}}>{r.gpct>=60?"HOT":r.gpct>=40?"OK":"COLD"}</span></span>
+            <span style={{fontSize:12,color:"#3a3a3c"}}>{r.n} shots · {r.gpct}% found grass{r.sd>0?` · ±${r.sd}y`:""}{(()=>{const b=dirBias(r.f);return b?" · miss "+b:"";})()} · <span style={{fontWeight:800,color:stCol(r.state)}}>{stLbl(r.state)}</span> <span style={{color:"#8a8a8e"}}>{r.score}</span></span>
           </div>));})()}
       </div>
           <div style={{...S.card,background:"#1a3a2e"}}>
