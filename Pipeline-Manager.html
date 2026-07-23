@@ -268,6 +268,13 @@
   table.seltbl th.r,table.seltbl td.r{text-align:right}
   table.seltbl td{padding:8px 10px;border-bottom:1px solid var(--line)}
   table.seltbl tr.toprow td{background:rgba(52,211,153,.07);font-weight:700}
+  table.seltbl tr.urow{cursor:pointer}
+  table.seltbl tr.urow:hover td{background:rgba(76,141,255,.07)}
+  table.seltbl tr.urow.open td{background:rgba(76,141,255,.10)}
+  table.seltbl td.caret{width:20px;text-align:center;color:var(--muted);user-select:none}
+  table.seltbl tr.udetail>td{padding:4px 10px 14px 30px;background:rgba(12,20,32,.45);border-bottom:1px solid var(--line2)}
+  .polhdr select,.polhdr input{background:var(--panel3);color:var(--ink);border:1px solid var(--line2);border-radius:6px;padding:3px 6px;font-size:13px}
+  .polhdr select:focus,.polhdr input:focus{border-color:var(--accent);outline:none}
   .l1hdr{font-size:14px;font-weight:700;color:var(--ink2);margin:16px 0 6px}
   details.unit{border:1px solid var(--line2);border-radius:8px;margin-bottom:6px;background:var(--panel2)}
   details.unit>summary{cursor:pointer;padding:9px 12px;font-size:13.5px;list-style:none}
@@ -1452,9 +1459,9 @@ function _retailAt(res, ui, months){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, saleMonthIdx=((curMonth-1+months)%12)+1;
   let D=(typeof window!=="undefined")?window.DEPR:null;
   if(D&&D.active&&D.a&&window.LoanerIntel){ let r=D.a.predictor(ui.model,ui.trim||null,null,ui.ext||null,saleMonthIdx,months);
-    if(r&&r.ok) return {price:r.price, n:r.n, month:saleMonthIdx}; }
+    if(r&&r.ok) return {price:r.price, n:r.n, dts:r.dts, month:saleMonthIdx}; }
   let reb=modelRebate(s,ui.model,ui.year,curMonth);
-  return {price:Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8)), n:0, month:saleMonthIdx};
+  return {price:Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8)), n:0, dts:null, month:saleMonthIdx};
 }
 function unitDifference(res, ui, months, policy){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, year=ui.year||res.tb.today.getFullYear();
@@ -1470,7 +1477,7 @@ function unitDifference(res, ui, months, policy){
   return {invoice:Math.round(ui.cost), icv:Math.round(icv), velocity:Math.round(velo), velocityAvail:Math.round(veloAmt),
     eligible:eligible, writedown:Math.round(wd), recon:Math.round(recon),
     expectedCost:Math.round(expectedCost), expectedRetail:Math.round(ret.price),
-    difference:Math.round(ret.price-expectedCost), compN:ret.n};
+    difference:Math.round(ret.price-expectedCost), compN:ret.n, avgDays:(ret.dts!=null?Math.round(ret.dts):null)};
 }
 function _currentPolicy(s){
   return {method:(s.writedown_method==="flat")?"flat":"pct", rate:parseFloat(s.loaner_depr_pct)||1.5,
@@ -1926,6 +1933,13 @@ function heroRecommendation(res){
   return H.join("");
 }
 /* ===================== SERVICE LOANER SELECTION (email/print-friendly) ===================== */
+// expand/collapse a unit's cost-stack detail row (global — called from onclick)
+function toggleSel(tr){ var d=tr.nextElementSibling; if(!d||!d.classList.contains("udetail")) return;
+  var open=d.style.display!=="none"; d.style.display=open?"none":"table-row";
+  tr.classList.toggle("open",!open); var c=tr.querySelector(".caret"); if(c) c.innerHTML=open?"&#9656;":"&#9662;"; }
+// adjust a lever on the fly: write to the canonical Data-panel input and recompute
+function setLever(id,val){ var el=document.getElementById(id); if(!el) return; el.value=val;
+  el.dispatchEvent(new Event("change")); }
 function money0(n){ n=Math.round(n||0); return "$"+Math.abs(n).toLocaleString(); }
 function moneySign(n){ n=Math.round(n||0); return (n<0?"-$":"+$")+Math.abs(n).toLocaleString(); }
 function diffCell(n){ let c=n>=0?"var(--good)":"var(--bad)"; return "<span style='color:"+c+";font-weight:700'>"+moneySign(n)+"</span>"; }
@@ -1938,8 +1952,17 @@ function serviceSelectionRender(res){
   let sel=res.selection, s=res.settings, H=[];
   if(!sel||!sel.units.length) return "<div class='empty'>No candidate units in stock — paste inventory with unit cost, then set incentives in Data.</div>";
   let units=sel.units, p=sel.policy, need=Math.max(1,parseInt(s.service_need,10)||1);
-  let wd = (p.method==="flat") ? ("$"+Number(p.flat).toLocaleString()+" flat") : (p.rate.toFixed(2)+"% per month of "+(p.base==="msrp"?"MSRP":"invoice"));
-  H.push("<div class='polhdr'>Store policy: write-down "+wd+", "+p.months+" months in service. The same settings apply to every unit; changing them re-ranks the list.</div>");
+  // On-the-fly levers — adjust and the whole list re-ranks. These proxy the
+  // canonical Data-panel inputs so there is still one source of truth.
+  let methodSel="<select onchange=\"setLever('lwdmethod',this.value)\">"+
+    "<option value='pct'"+(p.method!=="flat"?" selected":"")+">Percent / month</option>"+
+    "<option value='flat'"+(p.method==="flat"?" selected":"")+">Flat dollars</option></select>";
+  let rateInput = p.method==="flat"
+    ? ("$<input type='number' value='"+Math.round(p.flat)+"' step='250' style='width:90px' onchange=\"setLever('lwdflat',this.value)\"> flat")
+    : ("<input type='number' value='"+p.rate.toFixed(2)+"' step='0.05' style='width:70px' onchange=\"setLever('ldepr',this.value)\">% per month of "+(p.base==="msrp"?"MSRP":"invoice"));
+  let mosInput="<input type='number' value='"+p.months+"' min='1' max='7' style='width:56px' onchange=\"setLever('lsvc',this.value)\"> months in service";
+  H.push("<div class='polhdr'><b>Store policy (adjust on the fly):</b> write-down "+methodSel+" "+rateInput+", "+mosInput+
+    ". <span class='dim'>Applied to every unit; changing it re-ranks the list below.</span></div>");
   let top=units[0], second=units[1];
   let margin=second?(top.difference-second.difference):null;
   let lead="Place the <b>"+esc(top.year+" "+top.model+" "+top.trim)+"</b> ("+esc(top.uid)+"). Difference "+diffCell(top.difference);
@@ -1948,34 +1971,34 @@ function serviceSelectionRender(res){
   else lead += ".";
   if(need>1) lead+=" Service needs "+need+" — the top "+need+" rows are the picks.";
   H.push("<div class='lead'>"+lead+"</div>");
-  H.push("<table class='seltbl'><thead><tr><th>Rank</th><th>Unit</th><th class='r'>Expected cost</th><th class='r'>Expected retail</th><th class='r'>Difference</th></tr></thead><tbody>");
-  units.forEach(u=>{ H.push("<tr class='"+(u.rank<=need?"toprow":"")+"'><td>"+u.rank+"</td>"+
-    "<td>"+esc(u.year+" "+u.model+" "+u.trim)+" · "+esc(u.uid)+"</td>"+
-    "<td class='r'>"+money0(u.expectedCost)+"</td><td class='r'>"+money0(u.expectedRetail)+"</td>"+
-    "<td class='r'>"+diffCell(u.difference)+"</td></tr>"); });
-  H.push("</tbody></table>");
-
-  H.push("<div class='l1hdr'>Unit detail</div>");
+  H.push("<div class='foot' style='margin:0 0 4px'>Click any unit to see how its cost stacks.</div>");
+  H.push("<table class='seltbl'><thead><tr><th></th><th>Rank</th><th>Unit</th><th class='r'>Expected cost</th><th class='r'>Expected retail</th><th class='r'>Difference</th></tr></thead><tbody>");
   units.forEach(u=>{
-    H.push("<details class='unit'><summary>"+u.rank+". "+esc(u.year+" "+u.model+" "+u.trim)+" · "+esc(u.uid)+" &mdash; Difference "+diffCell(u.difference)+"</summary>");
-    H.push("<div class='u3'>"+
-      "<div class='u3c'><div class='u3l'>Expected cost</div><div class='u3v'>"+money0(u.expectedCost)+"</div></div>"+
-      "<div class='u3c'><div class='u3l'>Expected retail</div><div class='u3v'>"+money0(u.expectedRetail)+"</div></div>"+
-      "<div class='u3c'><div class='u3l'>Difference</div><div class='u3v'>"+diffCell(u.difference)+"</div></div></div>");
-    H.push("<table class='stk'><tbody>");
-    H.push(stkRow("Invoice", u.invoice, ""));
-    H.push(stkRow("ICV allowance", -u.icv, "sub"));
-    H.push(stkRow("Velocity bonus"+(u.eligible?"":" (not earned)"), -(u.eligible?u.velocity:0), "sub"));
-    H.push(stkRow("Write-down"+(p.method==="flat"?" (flat)":" ("+p.rate.toFixed(2)+"% × "+p.months+" mo)"), -u.writedown, "sub"));
-    H.push(stkRow("Reconditioning", u.recon, "sub"));
-    H.push(stkRow("Expected cost", u.expectedCost, "tot"));
-    H.push("</tbody></table>");
-    H.push("<div class='basis'>Retail based on "+(u.compN>0?(u.compN+" historical "+esc(u.model+" "+u.trim)+" sales"):"the modeled fallback (no matching history yet)")+".</div>");
-    H.push("<table class='mos'><thead><tr><th>Months in service</th>"+u.byMonth.map(bm=>"<th class='r'>"+bm.months+"</th>").join("")+"</tr></thead><tbody><tr><td>Difference</td>"+
-      u.byMonth.map(bm=>"<td class='r"+(bm.months===p.months?" cur":"")+"'>"+diffCell(bm.difference)+"</td>").join("")+"</tr></tbody></table>");
-    H.push("</details>");
+    H.push("<tr class='urow"+(u.rank<=need?" toprow":"")+"' onclick='toggleSel(this)'>"+
+      "<td class='caret'>&#9656;</td><td>"+u.rank+"</td>"+
+      "<td>"+esc(u.year+" "+u.model+" "+u.trim)+" · "+esc(u.uid)+"</td>"+
+      "<td class='r'>"+money0(u.expectedCost)+"</td><td class='r'>"+money0(u.expectedRetail)+"</td>"+
+      "<td class='r'>"+diffCell(u.difference)+"</td></tr>");
+    H.push("<tr class='udetail' style='display:none'><td></td><td colspan='5'>"+unitStackInner(u,p)+"</td></tr>");
   });
+  H.push("</tbody></table>");
   H.push(policyExplorerRender(res));
+  return H.join("");
+}
+function unitStackInner(u,p){
+  let H=["<table class='stk'><tbody>"];
+  H.push(stkRow("Invoice", u.invoice, ""));
+  H.push(stkRow("ICV allowance", -u.icv, "sub"));
+  H.push(stkRow("Velocity bonus"+(u.eligible?"":" (not earned)"), -(u.eligible?u.velocity:0), "sub"));
+  H.push(stkRow("Write-down"+(p.method==="flat"?" (flat)":" ("+p.rate.toFixed(2)+"% × "+p.months+" mo)"), -u.writedown, "sub"));
+  H.push(stkRow("Reconditioning", u.recon, "sub"));
+  H.push(stkRow("Expected cost", u.expectedCost, "tot"));
+  H.push("</tbody></table>");
+  H.push("<div class='basis'>Expected retail "+money0(u.expectedRetail)+" &mdash; based on "+
+    (u.compN>0?(u.compN+" historical "+esc(u.model+" "+u.trim)+" sales"+(u.avgDays!=null?", which took about "+u.avgDays+" days to sell":"")):"the modeled fallback (no matching history yet)")+
+    ". Difference = expected retail &minus; expected cost = "+moneySign(u.difference)+".</div>");
+  H.push("<table class='mos'><thead><tr><th>Months in service</th>"+u.byMonth.map(bm=>"<th class='r'>"+bm.months+"</th>").join("")+"</tr></thead><tbody><tr><td>Difference</td>"+
+    u.byMonth.map(bm=>"<td class='r"+(bm.months===p.months?" cur":"")+"'>"+diffCell(bm.difference)+"</td>").join("")+"</tr></tbody></table>");
   return H.join("");
 }
 function policyExplorerRender(res){

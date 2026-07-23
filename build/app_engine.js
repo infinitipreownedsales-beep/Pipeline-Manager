@@ -673,9 +673,9 @@ function _retailAt(res, ui, months){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, saleMonthIdx=((curMonth-1+months)%12)+1;
   let D=(typeof window!=="undefined")?window.DEPR:null;
   if(D&&D.active&&D.a&&window.LoanerIntel){ let r=D.a.predictor(ui.model,ui.trim||null,null,ui.ext||null,saleMonthIdx,months);
-    if(r&&r.ok) return {price:r.price, n:r.n, month:saleMonthIdx}; }
+    if(r&&r.ok) return {price:r.price, n:r.n, dts:r.dts, month:saleMonthIdx}; }
   let reb=modelRebate(s,ui.model,ui.year,curMonth);
-  return {price:Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8)), n:0, month:saleMonthIdx};
+  return {price:Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8)), n:0, dts:null, month:saleMonthIdx};
 }
 function unitDifference(res, ui, months, policy){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, year=ui.year||res.tb.today.getFullYear();
@@ -691,7 +691,7 @@ function unitDifference(res, ui, months, policy){
   return {invoice:Math.round(ui.cost), icv:Math.round(icv), velocity:Math.round(velo), velocityAvail:Math.round(veloAmt),
     eligible:eligible, writedown:Math.round(wd), recon:Math.round(recon),
     expectedCost:Math.round(expectedCost), expectedRetail:Math.round(ret.price),
-    difference:Math.round(ret.price-expectedCost), compN:ret.n};
+    difference:Math.round(ret.price-expectedCost), compN:ret.n, avgDays:(ret.dts!=null?Math.round(ret.dts):null)};
 }
 function _currentPolicy(s){
   return {method:(s.writedown_method==="flat")?"flat":"pct", rate:parseFloat(s.loaner_depr_pct)||1.5,

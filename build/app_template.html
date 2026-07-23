@@ -268,6 +268,13 @@
   table.seltbl th.r,table.seltbl td.r{text-align:right}
   table.seltbl td{padding:8px 10px;border-bottom:1px solid var(--line)}
   table.seltbl tr.toprow td{background:rgba(52,211,153,.07);font-weight:700}
+  table.seltbl tr.urow{cursor:pointer}
+  table.seltbl tr.urow:hover td{background:rgba(76,141,255,.07)}
+  table.seltbl tr.urow.open td{background:rgba(76,141,255,.10)}
+  table.seltbl td.caret{width:20px;text-align:center;color:var(--muted);user-select:none}
+  table.seltbl tr.udetail>td{padding:4px 10px 14px 30px;background:rgba(12,20,32,.45);border-bottom:1px solid var(--line2)}
+  .polhdr select,.polhdr input{background:var(--panel3);color:var(--ink);border:1px solid var(--line2);border-radius:6px;padding:3px 6px;font-size:13px}
+  .polhdr select:focus,.polhdr input:focus{border-color:var(--accent);outline:none}
   .l1hdr{font-size:14px;font-weight:700;color:var(--ink2);margin:16px 0 6px}
   details.unit{border:1px solid var(--line2);border-radius:8px;margin-bottom:6px;background:var(--panel2)}
   details.unit>summary{cursor:pointer;padding:9px 12px;font-size:13.5px;list-style:none}
