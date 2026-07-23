@@ -1,29 +1,37 @@
-// Bay Pointe — Hole 2. Mapped from a Shot Scope screen recording.
-// A ~373 par 4 wrapped in water: lake left off the tee, a creek across the front
-// of a peninsula green, pond + bunker right. Flag-referenced distances.
+// Bay Pointe — Hole 2. Mapped from the Shot Scope overview (IMG_2287) + recording.
+// A 382 par 4 that opens with a forced water carry: a creek/wetland cuts across the
+// hole in front of the fairway, so the tee shot has to carry it to reach short grass.
+// Two tee boxes (the yellow circles) move day to day — the BACK box sits behind the
+// water (you carry the creek), the FORWARD box is across it at the fairway start — so
+// the yardage shown at the tee tells you which one is in play. Lake down the LEFT the
+// whole way; the green sits up top with a pond front-RIGHT and water left/long.
+// Distances are flag-referenced.
 export default {
   n: 2,
   par: 4,
-  y: 373,                 // to the flag: 218 tee→corner + 155 corner→flag
+  y: 382,                 // official card yardage (back tee, over the water)
   tgt: 5,
-  hz: "Water everywhere — lake LEFT off the tee, a creek crosses in front of the green, pond front-right of a peninsula green · bunker right",
+  hz: "Forced carry off the tee — a creek crosses in front of the fairway · lake down the LEFT all the way · pond front-RIGHT of the green · bunker right · water left & long",
   dzL: "water",
   dzR: "water",
-  favor: "right-center",  // off the tee, away from the lake left
-  // gentle bend around the water: tee, out to the corner, then across to the green
-  path: [[0, 0.50], [0.58, 0.42], [1, 0.56]],
+  favor: "right-center",  // off the tee, hold the right-center away from the lake left
+  // Mostly straight, leaning gently right to a green just right of the tee line.
+  path: [[0, 0.44], [0.5, 0.46], [1, 0.53]],
   hazards: [
-    { side: "L", type: "water", from: 0.00, to: 0.50 },   // lake left off the tee
-    { side: "L", type: "water", from: 0.62, to: 1.00 },   // creek/pond wrapping the green left
-    { side: "R", type: "water", from: 0.66, to: 0.92 },   // pond front-right of the green
-    { side: "R", type: "sand",  from: 0.90, to: 1.00 },   // bunker right of the green
+    { side: "L", type: "water", from: 0.00, to: 0.55 },   // the lake down the left off the tee
+    { side: "L", type: "water", from: 0.80, to: 1.00 },   // creek wrapping behind/left of the green
+    { side: "R", type: "sand",  from: 0.46, to: 0.62 },   // waste/bunker area right of the fairway
+    { side: "R", type: "trees", from: 0.60, to: 0.78 },   // tree line up the right
+    { side: "R", type: "water", from: 0.72, to: 0.95 },   // pond front-right of the green
+    { side: "R", type: "sand",  from: 0.92, to: 1.00 },   // bunker right of the green
   ],
-  carry: 335,             // the approach must carry the creek short of the green
+  carry: 130,             // clear the creek off the BACK tee to reach the fairway (approx)
   carryLabel: "the creek",
-  corner: 218,
-  cornerLabel: "corner",
-  green: { toPin: 373, peninsula: true, guard: "creek short & left, pond + bunker right", reference: "hardwired flag" },
-  landing: { target: 218, leaves: 155, note: "~218 to the corner, favor right-center, leaves ~155 across the creek" },
-  vibe: "A ~373 par 4 wrapped in water — a lake left off the tee and a creek that cuts across in front of a water-guarded, peninsula green (pond and bunker right). Off the tee it's a position play (~218 to the corner): favor the right-center and never chase the left, which is the lake. The approach (~155) must carry the creek to a green ringed by trouble — take enough club, aim center to long, and treat short (creek) and right (pond/bunker) as dead. Long or center-left is the only safe miss.",
-  cue: "Right-center off the tee, then carry the creek — center-long, short and right are wet.",
+  corner: 210,
+  cornerLabel: "landing",
+  green: { toPin: 382, guard: "pond front-right, water left & long, bunker right", reference: "hardwired flag" },
+  landing: { target: 210, leaves: 172, note: "~210 down the right-center leaves ~172 to a green with a pond right" },
+  tees: { note: "Two boxes: the BACK box is behind the water (carry the creek), the FORWARD box is across it at the fairway start. The tee yardage tells you which is set that day." },
+  vibe: "A 382 par 4 that starts with a decision at the tee: a creek cuts across in front of the fairway, and the two tee boxes move — some days you're behind the water carrying the creek, some days you're across it at the fairway start, so read the yardage before you pull a club. The lake runs down the ENTIRE left, so the tee shot is a right-center position play — never flirt with the left. From the fairway (~172 in) the green sits up top with a pond front-RIGHT and water left and long; a waste/bunker area guards the right off the tee. Aim center, take enough club, and treat right (pond/bunker) and long-left (water) as dead — center to center-long is the only clean miss.",
+  cue: "Read the tee yardage, then right-center over the creek — never left. Approach center, pond's right.",
 };
