@@ -385,7 +385,7 @@ function holeContext(h,d,x){
 // read for angle-aware decisions. Falls back to hz text for un-mapped holes.
 // When onPlace is given, the map becomes tappable: a tap drops the ball marker and
 // reports normalized (d,x) back so the engine learns where the shot finished.
-const HoleView=({h,P,ball,onPlace,shots})=>{
+const HoleView=({h,P,ball,onPlace,shots,target})=>{
   const HZ=(h.hz||"").toUpperCase();
   const W=220,Ht=300,L=28,Rr=192,uw=Rr-L,teeY=254,greenY=48,span=teeY-greenY;
   const yAt=d=>teeY-Math.max(0,Math.min(1,d))*span;                 // d 0..1 (tee→green) → y
@@ -441,7 +441,7 @@ const HoleView=({h,P,ball,onPlace,shots})=>{
     {/* forced carry line (perpendicular-ish across the corridor at the carry distance) */}
     {h.carry&&h.carry<h.y&&(()=>{const d=h.carry/h.y,x=cxAt(d),y=yAt(d);return <g><line x1={x-fwW/2-7} y1={y} x2={x+fwW/2+7} y2={y} stroke="#7ba7c9" strokeWidth={6} strokeLinecap="round"/><text x={x} y={y-7} textAnchor="middle" fontSize={9} fill="#4a6d86" fontWeight={700}>{h.carryLabel||"carry"} {h.carry}</text></g>;})()}
     {/* player's landing zone */}
-    {lzD!=null&&<g><ellipse cx={cxAt(lzD)} cy={yAt(lzD)} rx={fwW/2-2} ry={11} fill="none" stroke="#c8a24a" strokeWidth={2} strokeDasharray="3 3"/><text x={cxAt(lzD)} y={yAt(lzD)+3} textAnchor="middle" fontSize={8} fill="#8a7327" fontWeight={800}>you</text></g>}
+    {lzD!=null&&!target&&<g><ellipse cx={cxAt(lzD)} cy={yAt(lzD)} rx={fwW/2-2} ry={11} fill="none" stroke="#c8a24a" strokeWidth={2} strokeDasharray="3 3"/><text x={cxAt(lzD)} y={yAt(lzD)+3} textAnchor="middle" fontSize={8} fill="#8a7327" fontWeight={800}>you</text></g>}
     {/* tee */}
     <rect x={tx-10} y={ty} width={20} height={9} rx={2} fill="#233b30"/>
     <text x={tx} y={ty+22} textAnchor="middle" fontSize={9} fill="#6b7d72" fontWeight={700}>TEE</text>
@@ -454,6 +454,12 @@ const HoleView=({h,P,ball,onPlace,shots})=>{
     {/* shot path — the round as it played */}
     {pathPts.length>=2&&<><polyline points={pathPts.map(p=>p.join(",")).join(" ")} fill="none" stroke="#a3402f" strokeWidth={2} strokeDasharray="4 3" opacity={0.75}/>
       {shotPts.map(([x,y],i)=><circle key={"sp"+i} cx={x} cy={y} r={3.5} fill="#a3402f" opacity={0.8}/>)}</>}
+    {/* aim target — where to advance to when you can't reach the green */}
+    {target&&(()=>{const tgX=xAt(target.x),tgY=yAt(target.d);return <g>
+      <circle cx={tgX} cy={tgY} r={11} fill="rgba(200,162,74,0.18)" stroke="#c8a24a" strokeWidth={2.5}/>
+      <line x1={tgX-14} y1={tgY} x2={tgX+14} y2={tgY} stroke="#c8a24a" strokeWidth={2}/>
+      <line x1={tgX} y1={tgY-14} x2={tgX} y2={tgY+14} stroke="#c8a24a" strokeWidth={2}/>
+      <text x={tgX} y={tgY-17} textAnchor="middle" fontSize={9} fill="#8a7327" fontWeight={800}>{target.label||"aim here"}</text></g>;})()}
     {/* placed ball — where the shot finished */}
     {ball&&<g><circle cx={bx} cy={by} r={7} fill="#fff" stroke="#a3402f" strokeWidth={2.5}/><circle cx={bx} cy={by} r={2.5} fill="#a3402f"/>
       <text x={bx} y={by-11} textAnchor="middle" fontSize={8.5} fill="#a3402f" fontWeight={800}>ball</text></g>}
@@ -922,6 +928,18 @@ export default function CaddieOS(){
               const carrySel=E.chipCarry(sel||"CHIP");
               const reach=carrySel>=effRem-6;              // wind-aware: can this club get home?
               const leaves=Math.max(0,live.rem-carrySel);  // yards left uses the real distance
+              // Can't get home? Don't just say "too far" — pick a spot to advance TO and
+              // show it on the map. Target sits one club's carry up the play line, then
+              // we nudge it off whichever hazard is nearest so it lands in the short grass.
+              const tgt=(()=>{
+                if(reach||!Array.isArray(H.path)||live.rem<=34) return null;
+                const dNow=live.ballX!=null?live.ballD:(live.strokes===0?0:Math.max(0,1-live.rem/H.y));
+                const dTgt=Math.max(dNow+0.03,Math.min(0.96,dNow+carrySel/H.y));
+                let x=centerX(H.path,dTgt);
+                (H.hazards||[]).forEach(z=>{if((z.from??0)-0.05<=dTgt&&(z.to??1)+0.05>=dTgt){
+                  if(z.side==="L"&&x<0.62)x=Math.min(0.8,x+0.12); if(z.side==="R"&&x>0.38)x=Math.max(0.2,x-0.12);}});
+                return {d:dTgt,x,label:`aim · leaves ${leaves}`,carry:carrySel,leaves};
+              })();
               const shaky=fam!=="chip"&&reliability(fam)<55; // this club is unreliable for the player
               const cc=confOf(fam);
               const W=whisper({fam,chip:sel,eff:E.eff(fam),stat:disp(fam),conf:cc.score,hot:cc.state==="hot",cold:cc.state==="cold",adj:flags.adj[fam]||null,side:sideC,feel:(P.feels&&P.feels[fam])||null,hole:{dzL:H.dzL,dzR:H.dzR,favor:live.strokes===0?H.favor:null},i35:live.rem<=34,reach,leaves,shaky,wind});
@@ -935,6 +953,11 @@ export default function CaddieOS(){
                   <div style={{fontFamily:SERIF,fontSize:44,color:GOLD,letterSpacing:.3,marginBottom:16,textWrap:"balance"}}>{W.club}</div>
                   {W.lines.map((l,i)=>(<div key={i} style={{fontFamily:SERIF,fontSize:20,color:PAPER,lineHeight:1.5,marginBottom:10,opacity:.96}}>{l}</div>))}
                 </div>
+                {tgt&&<div style={{marginTop:14,background:"#fff",borderRadius:16,padding:"12px 12px 6px",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+                  <div style={{textAlign:"center",color:INK,fontSize:14,fontWeight:700,marginBottom:2}}>Can't get home — aim here</div>
+                  <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>Advance ~{tgt.carry}y to the short grass, leaves ~{tgt.leaves} in</div>
+                  <HoleView h={H} P={P} target={tgt} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)}/>
+                </div>}
                 {(()=>{ // P5: one plain-language reason this club came up, from the player's own data.
                   const d=disp(fam),cs=cstat(fam);
                   const reason = cc.state==="cold" ? `Heads up — ${fam} has been cold (${cc.reasons.slice(-2).join(", ")}); it's only here because nothing else covers the number.`
