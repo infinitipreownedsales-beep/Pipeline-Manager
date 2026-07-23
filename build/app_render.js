@@ -466,23 +466,29 @@ function unitStackInner(u,p){
     "<div class='pr1'><div class='prl'>Cushion (difference)</div><div class='prv' style='color:"+(u.difference>=0?"var(--good)":"var(--bad)")+"'>"+moneySign(u.difference)+"</div><div class='prn'>expected price &minus; break-even</div></div>"+
     "</div>");
   // basis + color, both drawn from the comps shown below
-  let colorTxt = (u.color && u.colorN>=2) ? (" Within these sales, the <b>"+esc(u.color.toLowerCase())+"</b> ones sold "+(u.colorPrem>=0?"+$":"−$")+Math.abs(u.colorPrem||0).toLocaleString()+" vs the set"+
+  let colorTxt = (u.color && u.colorN>=2 && u.colorPrem!=null && Math.abs(u.colorPrem)>0) ? (" Within these sales, the <b>"+esc(u.color.toLowerCase())+"</b> ones sold "+(u.colorPrem>=0?"+$":"−$")+Math.abs(u.colorPrem||0).toLocaleString()+" vs the set"+
       (u.colorDtsDelta!=null?" and "+(u.colorDtsDelta<=0?Math.abs(u.colorDtsDelta)+" days faster":u.colorDtsDelta+" days slower"):"")+", so that adjustment is applied.")
-    : (u.color ? (" This unit is <b>"+esc(u.color.toLowerCase())+"</b>, but there aren't enough same-color sales here to adjust — no color premium applied.") : "");
+    : (u.color ? (" This unit is <b>"+esc(u.color.toLowerCase())+"</b>; the history here doesn't show a distinct color effect, so no color premium is applied.") : "");
   var ageTxt=(u.ageFactor!=null&&u.ageFactor<0.999)?(", then walked down this model's age curve to ~"+(u.ageAtSale!=null?u.ageAtSale:(p.months+1.5))+" months old at sale (×"+u.ageFactor.toFixed(3)+")"):"";
   H.push("<div class='basis'>Expected price is the recency-weighted median of "+
-    (u.compN>0?("the "+u.compN+" recent near-new "+esc(u.model+" "+u.trim)+" sale"+(u.compN>1?"s":"")+" listed below"+ageTxt):"a modeled fallback (no matching history yet)")+
+    (u.compN>0?("every recent "+esc(u.model+" "+u.trim)+" sale below ("+u.compN+" of them, each adjusted to a near-new baseline)"+ageTxt):"a modeled fallback (no matching history yet)")+
     ". Projected at today's market — no seasonal guessing."+colorTxt+"</div>");
-  // the actual comps behind the number — the same near-new set the anchor is drawn from
-  var comps=(typeof window!=="undefined"&&window.DEPR&&window.DEPR.a&&window.DEPR.a.getComps)?window.DEPR.a.getComps(u.model,u.trim,u.refAge||3):[];
+  // the actual comps behind the number — full trim history, age-normalized to near-new
+  var A=(typeof window!=="undefined"&&window.DEPR&&window.DEPR.a)?window.DEPR.a:null;
+  var comps=A?(A.compsRange?A.compsRange(u.model,u.trim,36):(A.getComps?A.getComps(u.model,u.trim,u.refAge||3):[])):[];
+  var curve=(A&&A.age_curves&&A.age_curves[u.model])?A.age_curves[u.model].points:null;
   if(comps.length){
     H.push("<details class='fbreak'><summary>Show the "+comps.length+" sale"+(comps.length>1?"s":"")+" this price is based on</summary><div class='fbwrap'>");
-    H.push("<table class='mos'><thead><tr><th>Sold</th><th>Vehicle</th><th>Color</th><th class='r'>Sold for</th><th class='r'>Days to sell</th><th class='r'>Age</th></tr></thead><tbody>");
-    comps.slice(0,30).forEach(function(c){ H.push("<tr><td>"+c.date.toISOString().slice(0,7)+"</td>"+
-      "<td>"+esc((c.year||"")+" "+(c.trim||""))+"</td><td>"+esc((c.color||"").toLowerCase())+"</td>"+
-      "<td class='r'>"+money0(c.price)+"</td><td class='r'>"+(c.dts!=null?c.dts+"d":"—")+"</td><td class='r'>"+(c.age!=null?Math.round(c.age)+"mo":"—")+"</td></tr>"); });
+    H.push("<div class='basis' style='margin:0 0 6px'>Older sales are adjusted up this model's depreciation curve so a 2-year-old sale is comparable to a near-new one. The median of the <b>adjusted</b> column is the near-new baseline.</div>");
+    H.push("<table class='mos'><thead><tr><th>Sold</th><th>Vehicle</th><th>Color</th><th class='r'>Sold for</th><th class='r'>Adjusted</th><th class='r'>Days to sell</th><th class='r'>Age</th></tr></thead><tbody>");
+    comps.slice(0,40).forEach(function(c){
+      var r=(typeof _interpRet==="function"&&curve)?_interpRet(curve,c.age):null, adj=c.price;
+      if(r!=null&&r>0&&curve){ var rRef=_interpRet(curve,3); if(rRef!=null) adj=Math.round(c.price*(rRef/r)); }
+      H.push("<tr><td>"+c.date.toISOString().slice(0,7)+"</td>"+
+        "<td>"+esc((c.year||"")+" "+(c.trim||""))+"</td><td>"+esc((c.color||"").toLowerCase())+"</td>"+
+        "<td class='r'>"+money0(c.price)+"</td><td class='r'>"+(adj!==c.price?money0(adj):"—")+"</td><td class='r'>"+(c.dts!=null?c.dts+"d":"—")+"</td><td class='r'>"+(c.age!=null?Math.round(c.age)+"mo":"—")+"</td></tr>"); });
     H.push("</tbody></table>");
-    if(comps.length>30) H.push("<div class='basis'>Showing the 30 most recent of "+comps.length+".</div>");
+    if(comps.length>40) H.push("<div class='basis'>Showing the 40 most recent of "+comps.length+".</div>");
     H.push("</div></details>");
   }
   H.push("<div class='basis' style='margin-top:8px'>Cushion at each service length. Month to month only two things move, and both are real: the <b>write-down grows</b> one more month (helps the cushion), while the car is <b>one month older</b> at sale so it resells for slightly less (hurts it). The bigger step happens when the sale age pushes past the 7-month velocity window and the bonus is lost:</div>");

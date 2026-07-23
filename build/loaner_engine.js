@@ -289,6 +289,22 @@ function analyze(sales,halfLife,asOf){
           weight:Math.round(s.weight*100)/100}; })
         .sort(function(a,b){ return b.date-a.date; });
     },
+    // same model+trim family across a RANGE of ages (default up to 36mo), so an
+    // expected-retail figure can rest on the whole trim history — not just the
+    // handful that happen to be near-new. Each sale carries its age so the caller
+    // can normalize it to a common near-new baseline off the age curve.
+    compsRange:function(model,trim,maxAge){
+      let tw=trimWord(trim); maxAge=maxAge==null?36:maxAge;
+      return inf.filter(function(s){
+        if(s.model!==model||s.price==null||s.age_months==null) return false;
+        if(tw && trimWord(s.trim)!==tw) return false;
+        if(s.age_months>maxAge) return false;
+        return true; })
+        .map(function(s){ return {date:s.date, price:Math.round(s.price), gross:(s.gross!=null?Math.round(s.gross):null),
+          dts:s.dts, ext:s.ext, color:colorGroup(s.ext), age:s.age_months, year:s.model_year, trim:s.trim,
+          weight:Math.round(s.weight*100)/100}; })
+        .sort(function(a,b){ return b.date-a.date; });
+    },
     // how many of a model+trim family we actually RETAIL per month, across the
     // full history window — used to keep loaner picks diversified (we can only
     // sell so many of the same config when they all come out of service together)

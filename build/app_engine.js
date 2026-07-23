@@ -700,26 +700,34 @@ function _interpRet(points, age){
 function _retailAt(res, ui, months){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, saleMonthIdx=((curMonth-1+months)%12)+1;
   let D=(typeof window!=="undefined")?window.DEPR:null;
-  // Expected retail is built DIRECTLY from the comps you can see: the
-  // recency-weighted median of near-new same model+trim sales (a STABLE anchor,
-  // so it doesn't change with how long you plan to hold), walked down the model's
-  // own age curve to the exact age at sale, plus a color premium derived from
-  // THIS SAME set (so it can never contradict the sales shown). No seasonal
-  // guessing — resale is projected at today's market so month-to-month the only
-  // things that move are age depreciation and the write-down, both explainable.
-  if(D&&D.active&&D.a&&D.a.getComps){
-    let comps=D.a.getComps(ui.model, ui.trim, _REF_AGE);   // stable near-new comp set
+  // Expected retail is built DIRECTLY from the comps you can see: the WHOLE
+  // same model+trim history (up to ~3 years old), with each older sale
+  // age-normalized UP the model's own retention curve to a near-new baseline, so
+  // the anchor rests on every comparable sale — not just the few that happen to
+  // be near-new. That baseline is then walked back DOWN the curve to the exact
+  // age at sale, plus a color premium derived from THIS SAME set (so it can never
+  // contradict the sales shown). No seasonal guessing — resale is projected at
+  // today's market, so month to month the only things that move are age
+  // depreciation and the write-down, both explainable.
+  if(D&&D.active&&D.a&&(D.a.compsRange||D.a.getComps)){
+    let curve=(D.a.age_curves&&D.a.age_curves[ui.model])?D.a.age_curves[ui.model].points:null;
+    let rRef=_interpRet(curve, _REF_AGE);
+    let raw=D.a.compsRange?D.a.compsRange(ui.model, ui.trim, 36):D.a.getComps(ui.model, ui.trim, _REF_AGE);
+    // normalize each sale to near-new-equivalent so they're all comparable
+    let comps=raw.map(c=>{ let r=_interpRet(curve, c.age), adj=c.price;
+      if(rRef!=null&&r!=null&&r>0) adj=Math.round(c.price*(rRef/r));
+      return {price:adj, raw:c.price, dts:c.dts, age:c.age, color:c.color, ext:c.ext, year:c.year, trim:c.trim, date:c.date, weight:c.weight}; });
     if(comps.length){
-      let base=_wmedComps(comps,"price"), dts=_wmedComps(comps,"dts"), ageMed=_wmedComps(comps,"age");
-      // walk the model's retention curve from the comps' age to the age at sale
+      let base=_wmedComps(comps,"price"), dts=_wmedComps(comps,"dts");
+      // walk the near-new baseline down to the age at sale
       let turnMo=(dts!=null?dts:45)/DPM, ageAtSale=months+turnMo;
-      let curve=(D.a.age_curves&&D.a.age_curves[ui.model])?D.a.age_curves[ui.model].points:null;
-      let rSale=_interpRet(curve, ageAtSale), rBase=_interpRet(curve, (ageMed!=null?ageMed:_REF_AGE));
-      let ageFactor=(rSale!=null&&rBase!=null&&rBase>0)?(rSale/rBase):1;
+      let rSale=_interpRet(curve, ageAtSale);
+      let ageFactor=(rSale!=null&&rRef!=null&&rRef>0)?(rSale/rRef):1;
       ageFactor=Math.max(0.80, Math.min(1.02, ageFactor));  // guard thin data
+      // color premium — only meaningful when the history has more than one color
       let grp=(s.color_map||{})[String(ui.ext||"").toUpperCase()]||null, cprem=0, cn=0, cdd=null;
-      if(grp){ let same=comps.filter(c=>c.color===grp);
-        if(same.length>=2){ let sameMed=_wmedComps(same,"price"), sameDts=_wmedComps(same,"dts");
+      if(grp){ let same=comps.filter(c=>c.color===grp), other=comps.filter(c=>c.color!==grp);
+        if(same.length>=2&&other.length>=1){ let sameMed=_wmedComps(same,"price"), sameDts=_wmedComps(same,"dts");
           if(sameMed!=null&&base!=null){ let cap=0.15*base; cprem=Math.round(Math.max(-cap,Math.min(cap,sameMed-base))); cn=same.length;
             if(sameDts!=null&&dts!=null) cdd=Math.round(sameDts-dts); } } }
       let aged=Math.round(base*ageFactor);
