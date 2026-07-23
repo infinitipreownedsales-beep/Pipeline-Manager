@@ -4,8 +4,9 @@ import bp01 from "./bp01.js";
 import bp02 from "./bp02.js";
 import bp03 from "./bp03.js";
 import bp04 from "./bp04.js";
+import bp05 from "./bp05.js";
 
-export const MAPPED_HOLES = [bp01, bp02, bp03, bp04];
+export const MAPPED_HOLES = [bp01, bp02, bp03, bp04, bp05];
 
 export const MAPPED = {
   bpmapped: {
