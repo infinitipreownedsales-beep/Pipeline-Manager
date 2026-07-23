@@ -479,7 +479,6 @@ const HoleView=({h,P,ball,onPlace,shots,target})=>{
     {/* forced carry line (perpendicular-ish across the corridor at the carry distance) */}
     {h.carry&&h.carry<h.y&&(()=>{const d=h.carry/h.y,x=cxAt(d),y=yAt(d);return <g><line x1={x-fwW/2-7} y1={y} x2={x+fwW/2+7} y2={y} stroke="#7ba7c9" strokeWidth={6} strokeLinecap="round"/><text x={x} y={y-7} textAnchor="middle" fontSize={9} fill="#4a6d86" fontWeight={700}>{h.carryLabel||"carry"} {h.carry}</text></g>;})()}
     {/* player's landing zone */}
-    {lzD!=null&&!target&&!ball&&<g><ellipse cx={cxAt(lzD)} cy={yAt(lzD)} rx={fwW/2-2} ry={11} fill="none" stroke="#c8a24a" strokeWidth={2} strokeDasharray="3 3"/><text x={cxAt(lzD)} y={yAt(lzD)+3} textAnchor="middle" fontSize={8} fill="#8a7327" fontWeight={800}>you</text></g>}
     {/* tee */}
     <rect x={tx-10} y={ty} width={20} height={9} rx={2} fill="#233b30"/>
     <text x={tx} y={ty+22} textAnchor="middle" fontSize={9} fill="#6b7d72" fontWeight={700}>TEE</text>
