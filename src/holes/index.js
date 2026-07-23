@@ -6,8 +6,9 @@ import bp03 from "./bp03.js";
 import bp04 from "./bp04.js";
 import bp05 from "./bp05.js";
 import bp06 from "./bp06.js";
+import bp07 from "./bp07.js";
 
-export const MAPPED_HOLES = [bp01, bp02, bp03, bp04, bp05, bp06];
+export const MAPPED_HOLES = [bp01, bp02, bp03, bp04, bp05, bp06, bp07];
 
 export const MAPPED = {
   bpmapped: {
