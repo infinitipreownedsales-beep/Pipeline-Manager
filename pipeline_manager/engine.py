@@ -540,21 +540,24 @@ def compute_arrival_windows(inventory, today: _dt.date, s: Settings) -> dict:
         if wsum == 0:
             out[model] = fallback[model]
         else:
-            out[model] = max(s.min_cpo_window, lsum / wsum + s.order_lead_pad)
+            out[model] = max(s.min_cpo_window, lsum / wsum)   # BASE production->arrival (no order pad)
     return out
 
 
 def resolve_windows(inventory, today, s: Settings) -> dict:
-    """Per-model window value: the data-driven lead where set to "auto", else
-    the manual number (floored at min_cpo_window)."""
+    """Per-model lead time, distinct per mode: MID-MONTH = today (0); PPO = the
+    vehicle's own production->arrival lead (auto or manual); CPO = that lead PLUS
+    the order->production lead (order_lead_pad)."""
     auto = compute_arrival_windows(inventory, today, s)
+    pad = float(getattr(s, "order_lead_pad", 0.0) or 0.0)
     out = {}
     for model in ("QX80", "QX60", "QX65"):
         v = s.window_setting(model)
         if isinstance(v, str) and v.strip().lower() == "auto":
-            out[model] = auto[model]
+            base = auto[model]
         else:
-            out[model] = max(s.min_cpo_window, float(v))
+            base = max(s.min_cpo_window, float(v))
+        out[model] = 0.0 if s.mode == "MID-MONTH" else (base + pad if s.mode == "CPO" else base)
     return out
 
 
@@ -751,7 +754,7 @@ def build_lines(s, metrics, seas, positions, aged_brakes, override_map, windows,
         base, found = _base_for_order(key, metrics)
         mf = _mom_factor(metric, dts, s)
         seas_order = seas[model][(s.order_month - 1) % 12]
-        window = windows[model] if s.mode in ("CPO", "PPO") else 0.0
+        window = windows[model]   # already mode-resolved: CPO = base+pad, PPO = base, MID-MONTH = 0
         seas_arr = _interp_seas(seas[model], s.order_month, window)
 
         returns = demo_returns.get(key, [])

@@ -990,11 +990,15 @@ function computeArrivalWindows(inv, today, s){
       let lead=(arr-prod)/86400000/DPM; if(lead<0||lead>12) return;
       let monthsSince=Math.max(0,(today-prod)/86400000/DPM);
       let w=Math.pow(0.5, monthsSince/Math.max(0.5,s.lead_halflife)); wsum+=w; lsum+=w*lead; });
-    out[model]= wsum===0 ? fb[model] : Math.max(s.min_cpo_window, lsum/wsum + s.order_lead_pad); });
+    out[model]= wsum===0 ? fb[model] : Math.max(s.min_cpo_window, lsum/wsum); });   // BASE production->arrival (no order pad)
   return out; }
 function resolveWindows(inv, today, s){ let auto=computeArrivalWindows(inv,today,s), out={};
+  let pad=parseFloat(s.order_lead_pad)||0;
   MODELS.forEach(model=>{ let v=s.cpo_windows[model];
-    out[model]= (typeof v==="string" && v.toLowerCase()==="auto") ? auto[model] : Math.max(s.min_cpo_window, parseFloat(v)); });
+    let base=(typeof v==="string" && v.toLowerCase()==="auto") ? auto[model] : Math.max(s.min_cpo_window, parseFloat(v));
+    // Three modes, three lead times: MID-MONTH = today (0); PPO = the vehicle's
+    // own production->arrival lead; CPO = that PLUS the order->production lead.
+    out[model]= (s.mode==="MID-MONTH") ? 0 : (s.mode==="CPO" ? base+pad : base); });
   return out; }
 function interpSeas(idx, om, off){ let lo=Math.floor(off), fr=off-lo, a=idx[((om-1+lo)%12+12)%12], b=idx[((om-1+lo+1)%12+12)%12]; return a+(b-a)*fr; }
 function projChain(model,pos,metric,seas,s,n,returns){
@@ -1043,7 +1047,7 @@ function buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demo
     let metric=metrics[key]||null, pos=positions[key]||{onlot:0,inbound:0,arrivals:{},stalled:0,aged:[],whole:[]}, dts=metric?metric.dts:null;
     let bf=baseForOrder(key,metrics), base=bf[0], found=bf[1], mf=momFactor(metric,dts);
     let seasOrder=seas[model].index[(s.order_month-1)%12];
-    let win=(s.mode==="CPO"||s.mode==="PPO")?windows[model]:0;
+    let win=windows[model];   // already mode-resolved: CPO = base+pad, PPO = base, MID-MONTH = 0
     let seasArr=interpSeas(seas[model].index, s.order_month, win);
     let returns=demoReturns[key]||[];
     let pj=projectAtArrival(model,pos,metric,seas,s,win,returns), proj=pj[0], chain=pj[1];
