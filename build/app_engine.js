@@ -673,21 +673,43 @@ function _writedownAmt(cost, msrp, policy, months){
   let base=(String(policy.base).toLowerCase()==="msrp")?msrp:cost;
   return base*((parseFloat(policy.rate)||0)/100)*months;
 }
+// weighted median / percentile of a comp set (each {price/dts, weight})
+function _wmedComps(arr, key){
+  let v=arr.filter(c=>c[key]!=null&&c.weight>0).map(c=>[c[key],c.weight]).sort((a,b)=>a[0]-b[0]);
+  if(!v.length) return null; let tot=v.reduce((s,x)=>s+x[1],0), run=0;
+  for(let x of v){ run+=x[1]; if(run>=tot/2) return x[0]; } return v[v.length-1][0]; }
+function _wpctComps(arr, key, pct){
+  let v=arr.filter(c=>c[key]!=null&&c.weight>0).map(c=>[c[key],c.weight]).sort((a,b)=>a[0]-b[0]);
+  if(!v.length) return null; let tot=v.reduce((s,x)=>s+x[1],0), th=tot*pct, run=0;
+  for(let x of v){ run+=x[1]; if(run>=th) return x[0]; } return v[v.length-1][0]; }
+// season factor: 3-month smoothed monthly index, damped 50% and clamped to ±5%,
+// so thin monthly data can't swing the resale wildly month to month.
+function _seasonFactor(a, monthIdx){
+  let ms=a.seasonality&&a.seasonality.months; if(!ms) return 1;
+  let i=monthIdx-1, idx=[(i+11)%12,i,(i+1)%12].map(k=>ms[k]&&ms[k].price_index).filter(x=>x!=null);
+  if(!idx.length) return 1; let avg=idx.reduce((a,b)=>a+b,0)/idx.length;
+  return Math.max(0.95, Math.min(1.05, 1+(avg-1)*0.5)); }
 function _retailAt(res, ui, months){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, saleMonthIdx=((curMonth-1+months)%12)+1;
   let D=(typeof window!=="undefined")?window.DEPR:null;
-  if(D&&D.active&&D.a&&window.LoanerIntel){ let r=D.a.predictor(ui.model,ui.trim||null,null,ui.ext||null,saleMonthIdx,months);
-    if(r&&r.ok){
-      // color premium: ADDITIVE dollar amount (the color family's average $ vs the
-      // model baseline), applied to the trim/season resale and capped at ±15% of
-      // it — so the number shown is exactly the number used.
-      let grp=(s.color_map||{})[String(ui.ext||"").toUpperCase()]||null, applied=0, cdd=null;
-      let cg=D.a.color_groups&&D.a.color_groups[ui.model];
-      if(grp&&cg&&cg.groups&&cg.groups[grp]){ let prem=cg.groups[grp].price_prem||0, cap=0.15*r.price;
-        applied=Math.round(Math.max(-cap,Math.min(cap,prem))); cdd=cg.groups[grp].dts_delta; }
-      return {price:Math.round(r.price)+applied, base:Math.round(r.price), n:r.n, dts:r.dts,
-        low:(r.price_low!=null?Math.round(r.price_low)+applied:null), high:(r.price_high!=null?Math.round(r.price_high)+applied:null),
-        month:saleMonthIdx, color:grp, colorPrem:applied, colorDtsDelta:cdd, src:"history"}; }
+  // Expected retail is built DIRECTLY from the comps you can see: the
+  // recency-weighted median of the same model+trim sales at this age, adjusted
+  // for the sale month, plus a color premium derived from THIS SAME set (so it
+  // can never contradict the sales shown).
+  if(D&&D.active&&D.a&&D.a.getComps){
+    let comps=D.a.getComps(ui.model, ui.trim, months);
+    if(comps.length){
+      let base=_wmedComps(comps,"price"), sf=_seasonFactor(D.a, saleMonthIdx), dts=_wmedComps(comps,"dts");
+      let grp=(s.color_map||{})[String(ui.ext||"").toUpperCase()]||null, cprem=0, cn=0, cdd=null;
+      if(grp){ let same=comps.filter(c=>c.color===grp);
+        if(same.length>=2){ let sameMed=_wmedComps(same,"price"), sameDts=_wmedComps(same,"dts");
+          if(sameMed!=null&&base!=null){ let cap=0.15*base; cprem=Math.round(Math.max(-cap,Math.min(cap,sameMed-base))); cn=same.length;
+            if(sameDts!=null&&dts!=null) cdd=Math.round(sameDts-dts); } } }
+      let seasoned=Math.round(base*sf);
+      let lo=_wpctComps(comps,"price",0.25), hi=_wpctComps(comps,"price",0.75);
+      return {price:seasoned+cprem, base:seasoned, n:comps.length, dts:(dts!=null?Math.round(dts):null),
+        low:(lo!=null?Math.round(lo*sf)+cprem:null), high:(hi!=null?Math.round(hi*sf)+cprem:null),
+        month:saleMonthIdx, color:grp, colorPrem:cprem, colorN:cn, colorDtsDelta:cdd, seasonFactor:sf, src:"comps"}; }
   }
   let reb=modelRebate(s,ui.model,ui.year,curMonth);
   let mp=Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8));
@@ -711,13 +733,13 @@ function unitDifference(res, ui, months, policy){
     expectedCost:Math.round(expectedCost), expectedRetail:Math.round(ret.price),
     retailBase:ret.base, retailLow:ret.low, retailHigh:ret.high, saleMonth:ret.month,
     difference:Math.round(ret.price-expectedCost), compN:ret.n, avgDays:(ret.dts!=null?Math.round(ret.dts):null),
-    color:ret.color||null, colorPrem:(ret.colorPrem!=null?ret.colorPrem:null), colorDtsDelta:(ret.colorDtsDelta!=null?ret.colorDtsDelta:null)};
+    color:ret.color||null, colorPrem:(ret.colorPrem!=null?ret.colorPrem:null), colorN:(ret.colorN||0), colorDtsDelta:(ret.colorDtsDelta!=null?ret.colorDtsDelta:null)};
 }
 function _currentPolicy(s){
   return {method:(s.writedown_method==="flat")?"flat":"pct", rate:parseFloat(s.loaner_depr_pct)||1.5,
     flat:parseFloat(s.writedown_flat)||0, base:(String(s.loaner_depr_base).toLowerCase()==="msrp")?"msrp":"cost",
     months:Math.max(1,parseInt(s.loaner_service_months,10)||3)}; }
-function serviceSelection(res, policyOverride){
+function serviceSelection(res, policyOverride, skipByMonth){
   let s=res.settings, policy=policyOverride||_currentPolicy(s), months=policy.months;
   let units=[];
   (res.loanerAll||[]).forEach(p=>{ (p.units||[]).forEach(u=>{
@@ -726,15 +748,15 @@ function serviceSelection(res, policyOverride){
       stock:u.stock, vin6:u.vin_last6, uid:uid, cost:(u.cost>0?u.cost:p.econ.cost), msrp:(u.msrp>0?u.msrp:p.econ.msrp)};
     if(!(ui.cost>0)) return;
     let d=unitDifference(res, ui, months, policy);
-    let byMonth=[3,4,5,6,7].map(m=>({months:m, difference:unitDifference(res, ui, m, policy).difference}));
+    let byMonth=skipByMonth?null:[3,4,5,6,7].map(m=>({months:m, difference:unitDifference(res, ui, m, policy).difference}));
     units.push(Object.assign(ui, d, {byMonth:byMonth})); }); });
   units.sort((a,b)=>b.difference-a.difference);
   units.forEach((u,i)=>u.rank=i+1);
   return {policy:policy, months:months, units:units};
 }
 function policyExplorer(res){
-  let s=res.settings, cur=serviceSelection(res), curTop=cur.units[0]?cur.units[0].stock:null;
-  function scen(policy,label,kind){ let sel=serviceSelection(res, policy);
+  let s=res.settings, cur=serviceSelection(res, null, true), curTop=cur.units[0]?cur.units[0].stock:null;
+  function scen(policy,label,kind){ let sel=serviceSelection(res, policy, true);
     return {label:label, kind:kind, changesTop:!!(sel.units[0]&&sel.units[0].stock!==curTop),
       order:sel.units.map(u=>({rank:u.rank, stock:u.uid, name:(u.year+" "+u.model+" "+u.trim), difference:u.difference}))}; }
   let base=cur.policy, pct=[1.0,1.25,1.5,1.75,2.0,2.5].map(r=>scen({method:"pct",rate:r,flat:0,base:base.base,months:base.months}, r.toFixed(2)+"% per month", "pct"));

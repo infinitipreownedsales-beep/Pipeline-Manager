@@ -1517,21 +1517,43 @@ function _writedownAmt(cost, msrp, policy, months){
   let base=(String(policy.base).toLowerCase()==="msrp")?msrp:cost;
   return base*((parseFloat(policy.rate)||0)/100)*months;
 }
+// weighted median / percentile of a comp set (each {price/dts, weight})
+function _wmedComps(arr, key){
+  let v=arr.filter(c=>c[key]!=null&&c.weight>0).map(c=>[c[key],c.weight]).sort((a,b)=>a[0]-b[0]);
+  if(!v.length) return null; let tot=v.reduce((s,x)=>s+x[1],0), run=0;
+  for(let x of v){ run+=x[1]; if(run>=tot/2) return x[0]; } return v[v.length-1][0]; }
+function _wpctComps(arr, key, pct){
+  let v=arr.filter(c=>c[key]!=null&&c.weight>0).map(c=>[c[key],c.weight]).sort((a,b)=>a[0]-b[0]);
+  if(!v.length) return null; let tot=v.reduce((s,x)=>s+x[1],0), th=tot*pct, run=0;
+  for(let x of v){ run+=x[1]; if(run>=th) return x[0]; } return v[v.length-1][0]; }
+// season factor: 3-month smoothed monthly index, damped 50% and clamped to ±5%,
+// so thin monthly data can't swing the resale wildly month to month.
+function _seasonFactor(a, monthIdx){
+  let ms=a.seasonality&&a.seasonality.months; if(!ms) return 1;
+  let i=monthIdx-1, idx=[(i+11)%12,i,(i+1)%12].map(k=>ms[k]&&ms[k].price_index).filter(x=>x!=null);
+  if(!idx.length) return 1; let avg=idx.reduce((a,b)=>a+b,0)/idx.length;
+  return Math.max(0.95, Math.min(1.05, 1+(avg-1)*0.5)); }
 function _retailAt(res, ui, months){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, saleMonthIdx=((curMonth-1+months)%12)+1;
   let D=(typeof window!=="undefined")?window.DEPR:null;
-  if(D&&D.active&&D.a&&window.LoanerIntel){ let r=D.a.predictor(ui.model,ui.trim||null,null,ui.ext||null,saleMonthIdx,months);
-    if(r&&r.ok){
-      // color premium: ADDITIVE dollar amount (the color family's average $ vs the
-      // model baseline), applied to the trim/season resale and capped at ±15% of
-      // it — so the number shown is exactly the number used.
-      let grp=(s.color_map||{})[String(ui.ext||"").toUpperCase()]||null, applied=0, cdd=null;
-      let cg=D.a.color_groups&&D.a.color_groups[ui.model];
-      if(grp&&cg&&cg.groups&&cg.groups[grp]){ let prem=cg.groups[grp].price_prem||0, cap=0.15*r.price;
-        applied=Math.round(Math.max(-cap,Math.min(cap,prem))); cdd=cg.groups[grp].dts_delta; }
-      return {price:Math.round(r.price)+applied, base:Math.round(r.price), n:r.n, dts:r.dts,
-        low:(r.price_low!=null?Math.round(r.price_low)+applied:null), high:(r.price_high!=null?Math.round(r.price_high)+applied:null),
-        month:saleMonthIdx, color:grp, colorPrem:applied, colorDtsDelta:cdd, src:"history"}; }
+  // Expected retail is built DIRECTLY from the comps you can see: the
+  // recency-weighted median of the same model+trim sales at this age, adjusted
+  // for the sale month, plus a color premium derived from THIS SAME set (so it
+  // can never contradict the sales shown).
+  if(D&&D.active&&D.a&&D.a.getComps){
+    let comps=D.a.getComps(ui.model, ui.trim, months);
+    if(comps.length){
+      let base=_wmedComps(comps,"price"), sf=_seasonFactor(D.a, saleMonthIdx), dts=_wmedComps(comps,"dts");
+      let grp=(s.color_map||{})[String(ui.ext||"").toUpperCase()]||null, cprem=0, cn=0, cdd=null;
+      if(grp){ let same=comps.filter(c=>c.color===grp);
+        if(same.length>=2){ let sameMed=_wmedComps(same,"price"), sameDts=_wmedComps(same,"dts");
+          if(sameMed!=null&&base!=null){ let cap=0.15*base; cprem=Math.round(Math.max(-cap,Math.min(cap,sameMed-base))); cn=same.length;
+            if(sameDts!=null&&dts!=null) cdd=Math.round(sameDts-dts); } } }
+      let seasoned=Math.round(base*sf);
+      let lo=_wpctComps(comps,"price",0.25), hi=_wpctComps(comps,"price",0.75);
+      return {price:seasoned+cprem, base:seasoned, n:comps.length, dts:(dts!=null?Math.round(dts):null),
+        low:(lo!=null?Math.round(lo*sf)+cprem:null), high:(hi!=null?Math.round(hi*sf)+cprem:null),
+        month:saleMonthIdx, color:grp, colorPrem:cprem, colorN:cn, colorDtsDelta:cdd, seasonFactor:sf, src:"comps"}; }
   }
   let reb=modelRebate(s,ui.model,ui.year,curMonth);
   let mp=Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8));
@@ -1555,13 +1577,13 @@ function unitDifference(res, ui, months, policy){
     expectedCost:Math.round(expectedCost), expectedRetail:Math.round(ret.price),
     retailBase:ret.base, retailLow:ret.low, retailHigh:ret.high, saleMonth:ret.month,
     difference:Math.round(ret.price-expectedCost), compN:ret.n, avgDays:(ret.dts!=null?Math.round(ret.dts):null),
-    color:ret.color||null, colorPrem:(ret.colorPrem!=null?ret.colorPrem:null), colorDtsDelta:(ret.colorDtsDelta!=null?ret.colorDtsDelta:null)};
+    color:ret.color||null, colorPrem:(ret.colorPrem!=null?ret.colorPrem:null), colorN:(ret.colorN||0), colorDtsDelta:(ret.colorDtsDelta!=null?ret.colorDtsDelta:null)};
 }
 function _currentPolicy(s){
   return {method:(s.writedown_method==="flat")?"flat":"pct", rate:parseFloat(s.loaner_depr_pct)||1.5,
     flat:parseFloat(s.writedown_flat)||0, base:(String(s.loaner_depr_base).toLowerCase()==="msrp")?"msrp":"cost",
     months:Math.max(1,parseInt(s.loaner_service_months,10)||3)}; }
-function serviceSelection(res, policyOverride){
+function serviceSelection(res, policyOverride, skipByMonth){
   let s=res.settings, policy=policyOverride||_currentPolicy(s), months=policy.months;
   let units=[];
   (res.loanerAll||[]).forEach(p=>{ (p.units||[]).forEach(u=>{
@@ -1570,15 +1592,15 @@ function serviceSelection(res, policyOverride){
       stock:u.stock, vin6:u.vin_last6, uid:uid, cost:(u.cost>0?u.cost:p.econ.cost), msrp:(u.msrp>0?u.msrp:p.econ.msrp)};
     if(!(ui.cost>0)) return;
     let d=unitDifference(res, ui, months, policy);
-    let byMonth=[3,4,5,6,7].map(m=>({months:m, difference:unitDifference(res, ui, m, policy).difference}));
+    let byMonth=skipByMonth?null:[3,4,5,6,7].map(m=>({months:m, difference:unitDifference(res, ui, m, policy).difference}));
     units.push(Object.assign(ui, d, {byMonth:byMonth})); }); });
   units.sort((a,b)=>b.difference-a.difference);
   units.forEach((u,i)=>u.rank=i+1);
   return {policy:policy, months:months, units:units};
 }
 function policyExplorer(res){
-  let s=res.settings, cur=serviceSelection(res), curTop=cur.units[0]?cur.units[0].stock:null;
-  function scen(policy,label,kind){ let sel=serviceSelection(res, policy);
+  let s=res.settings, cur=serviceSelection(res, null, true), curTop=cur.units[0]?cur.units[0].stock:null;
+  function scen(policy,label,kind){ let sel=serviceSelection(res, policy, true);
     return {label:label, kind:kind, changesTop:!!(sel.units[0]&&sel.units[0].stock!==curTop),
       order:sel.units.map(u=>({rank:u.rank, stock:u.uid, name:(u.year+" "+u.model+" "+u.trim), difference:u.difference}))}; }
   let base=cur.policy, pct=[1.0,1.25,1.5,1.75,2.0,2.5].map(r=>scen({method:"pct",rate:r,flat:0,base:base.base,months:base.months}, r.toFixed(2)+"% per month", "pct"));
@@ -2079,12 +2101,13 @@ function unitStackInner(u,p){
       (u.retailLow!=null&&u.retailHigh!=null?("typical range "+money0(u.retailLow)+"&ndash;"+money0(u.retailHigh)):"modeled")+"</div></div>"+
     "<div class='pr1'><div class='prl'>Cushion (difference)</div><div class='prv' style='color:"+(u.difference>=0?"var(--good)":"var(--bad)")+"'>"+moneySign(u.difference)+"</div><div class='prn'>expected price &minus; break-even</div></div>"+
     "</div>");
-  // basis + color, exact
-  let colorTxt = u.color ? (" Color <b>"+esc(u.color.toLowerCase())+"</b>: "+(u.colorPrem>=0?"+":"−")+"$"+Math.abs(u.colorPrem||0).toLocaleString()+" vs the model average"+
-      (u.colorDtsDelta!=null?", "+(u.colorDtsDelta<=0?Math.abs(u.colorDtsDelta)+" days faster":u.colorDtsDelta+" days slower"):"")+".") : "";
-  H.push("<div class='basis'>Expected price is the median of "+
-    (u.compN>0?(u.compN+" historical "+esc(u.model+" "+u.trim)+" sales at ~"+p.months+" months of age"+(u.avgDays!=null?" (they took about "+u.avgDays+" days to sell)":"")):"a modeled fallback (no matching history yet)")+
-    ", adjusted for the sale month."+colorTxt+"</div>");
+  // basis + color, both drawn from the comps shown below
+  let colorTxt = (u.color && u.colorN>=2) ? (" Within these sales, the <b>"+esc(u.color.toLowerCase())+"</b> ones sold "+(u.colorPrem>=0?"+$":"−$")+Math.abs(u.colorPrem||0).toLocaleString()+" vs the set"+
+      (u.colorDtsDelta!=null?" and "+(u.colorDtsDelta<=0?Math.abs(u.colorDtsDelta)+" days faster":u.colorDtsDelta+" days slower"):"")+", so that adjustment is applied.")
+    : (u.color ? (" This unit is <b>"+esc(u.color.toLowerCase())+"</b>, but there aren't enough same-color sales here to adjust — no color premium applied.") : "");
+  H.push("<div class='basis'>Expected price is the recency-weighted median of "+
+    (u.compN>0?("the "+u.compN+" historical "+esc(u.model+" "+u.trim)+" sale"+(u.compN>1?"s":"")+" listed below (at ~"+p.months+" months of age"+(u.avgDays!=null?", ~"+u.avgDays+" days to sell":"")+"), adjusted for the sale month"):"a modeled fallback (no matching history yet)")+
+    "."+colorTxt+"</div>");
   // the actual comps behind the number
   var comps=(typeof window!=="undefined"&&window.DEPR&&window.DEPR.a&&window.DEPR.a.getComps)?window.DEPR.a.getComps(u.model,u.trim,p.months):[];
   if(comps.length){
@@ -2097,7 +2120,7 @@ function unitStackInner(u,p){
     if(comps.length>30) H.push("<div class='basis'>Showing the 30 most recent of "+comps.length+".</div>");
     H.push("</div></details>");
   }
-  H.push("<div class='basis' style='margin-top:8px'>Cushion at each service length (write-down and resale both change with age):</div>");
+  H.push("<div class='basis' style='margin-top:8px'>Cushion at each service length. It climbs because the write-down grows every month in service, and steps down when the vehicle crosses into the next age band your sales history resolves (roughly every 6 months) — both real, nothing invented:</div>");
   H.push("<table class='mos'><thead><tr><th>Months in service</th>"+u.byMonth.map(bm=>"<th class='r'>"+bm.months+"</th>").join("")+"</tr></thead><tbody><tr><td>Cushion</td>"+
     u.byMonth.map(bm=>"<td class='r"+(bm.months===p.months?" cur":"")+"'>"+diffCell(bm.difference)+"</td>").join("")+"</tr></tbody></table>");
   return H.join("");

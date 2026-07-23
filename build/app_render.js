@@ -419,12 +419,13 @@ function unitStackInner(u,p){
       (u.retailLow!=null&&u.retailHigh!=null?("typical range "+money0(u.retailLow)+"&ndash;"+money0(u.retailHigh)):"modeled")+"</div></div>"+
     "<div class='pr1'><div class='prl'>Cushion (difference)</div><div class='prv' style='color:"+(u.difference>=0?"var(--good)":"var(--bad)")+"'>"+moneySign(u.difference)+"</div><div class='prn'>expected price &minus; break-even</div></div>"+
     "</div>");
-  // basis + color, exact
-  let colorTxt = u.color ? (" Color <b>"+esc(u.color.toLowerCase())+"</b>: "+(u.colorPrem>=0?"+":"−")+"$"+Math.abs(u.colorPrem||0).toLocaleString()+" vs the model average"+
-      (u.colorDtsDelta!=null?", "+(u.colorDtsDelta<=0?Math.abs(u.colorDtsDelta)+" days faster":u.colorDtsDelta+" days slower"):"")+".") : "";
-  H.push("<div class='basis'>Expected price is the median of "+
-    (u.compN>0?(u.compN+" historical "+esc(u.model+" "+u.trim)+" sales at ~"+p.months+" months of age"+(u.avgDays!=null?" (they took about "+u.avgDays+" days to sell)":"")):"a modeled fallback (no matching history yet)")+
-    ", adjusted for the sale month."+colorTxt+"</div>");
+  // basis + color, both drawn from the comps shown below
+  let colorTxt = (u.color && u.colorN>=2) ? (" Within these sales, the <b>"+esc(u.color.toLowerCase())+"</b> ones sold "+(u.colorPrem>=0?"+$":"−$")+Math.abs(u.colorPrem||0).toLocaleString()+" vs the set"+
+      (u.colorDtsDelta!=null?" and "+(u.colorDtsDelta<=0?Math.abs(u.colorDtsDelta)+" days faster":u.colorDtsDelta+" days slower"):"")+", so that adjustment is applied.")
+    : (u.color ? (" This unit is <b>"+esc(u.color.toLowerCase())+"</b>, but there aren't enough same-color sales here to adjust — no color premium applied.") : "");
+  H.push("<div class='basis'>Expected price is the recency-weighted median of "+
+    (u.compN>0?("the "+u.compN+" historical "+esc(u.model+" "+u.trim)+" sale"+(u.compN>1?"s":"")+" listed below (at ~"+p.months+" months of age"+(u.avgDays!=null?", ~"+u.avgDays+" days to sell":"")+"), adjusted for the sale month"):"a modeled fallback (no matching history yet)")+
+    "."+colorTxt+"</div>");
   // the actual comps behind the number
   var comps=(typeof window!=="undefined"&&window.DEPR&&window.DEPR.a&&window.DEPR.a.getComps)?window.DEPR.a.getComps(u.model,u.trim,p.months):[];
   if(comps.length){
@@ -437,7 +438,7 @@ function unitStackInner(u,p){
     if(comps.length>30) H.push("<div class='basis'>Showing the 30 most recent of "+comps.length+".</div>");
     H.push("</div></details>");
   }
-  H.push("<div class='basis' style='margin-top:8px'>Cushion at each service length (write-down and resale both change with age):</div>");
+  H.push("<div class='basis' style='margin-top:8px'>Cushion at each service length. It climbs because the write-down grows every month in service, and steps down when the vehicle crosses into the next age band your sales history resolves (roughly every 6 months) — both real, nothing invented:</div>");
   H.push("<table class='mos'><thead><tr><th>Months in service</th>"+u.byMonth.map(bm=>"<th class='r'>"+bm.months+"</th>").join("")+"</tr></thead><tbody><tr><td>Cushion</td>"+
     u.byMonth.map(bm=>"<td class='r"+(bm.months===p.months?" cur":"")+"'>"+diffCell(bm.difference)+"</td>").join("")+"</tr></tbody></table>");
   return H.join("");
