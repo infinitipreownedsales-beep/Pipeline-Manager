@@ -378,6 +378,25 @@ function holeContext(h,d,x){
   return {side,blocked,off};
 }
 
+// lieAt(h, d, x) — read the LIE from a tapped map spot, so a tap alone can set the
+// lie (fairway/rough/bunker/recovery) as a smart default the player can still change.
+// Reads structured hazards (side bands + positioned pools) at that point.
+function lieAt(h,d,x){
+  const {side,off}=holeContext(h,d,x);
+  const haz=Array.isArray(h&&h.hazards)?h.hazards:[];
+  const sd=side==="left"?"L":side==="right"?"R":null;
+  const covers=type=>haz.some(z=>{
+    if(z.type!==type)return false;
+    if(Array.isArray(z.pool)){const[d0,d1,x0,x1]=z.pool;
+      return d>=Math.min(d0,d1)&&d<=Math.max(d0,d1)&&x>=Math.min(x0,x1)&&x<=Math.max(x0,x1);}
+    return z.side===sd&&(z.from??0)<=d&&(z.to??1)>=d;
+  });
+  if(off&&covers("trees")) return {lie:"TREES",label:"Recovery"};
+  if(covers("sand"))       return {lie:"FBUNK",label:"Bunker"};
+  if(off)                  return {lie:"ROUGH",label:"Rough"};
+  return {lie:"FW",label:"Fairway"};
+}
+
 // HoleView — the automatic strategic overview. A clean schematic (not satellite):
 // the fairway BENDS along the hole's real centerline (h.path), hazards are drawn
 // per side and per section (h.hazards) and look like what they are — trees as
@@ -875,10 +894,15 @@ export default function CaddieOS(){
               {Array.isArray(H.path)&&(live.strokes===0
                 ? <HoleView h={H} P={P}/>
                 : (()=>{const loc=live.ballX!=null?holeContext(H,live.ballD,live.ballX):null;
+                    const est=live.ballX!=null?Math.max(1,Math.min(H.y,Math.round((1-live.ballD)*H.y))):null;
                     const where=loc?(loc.blocked?`blocked ${loc.side} — trees on your line`:loc.side==="center"?"in the middle — clean angle":`${loc.side} of the fairway${loc.off?"":" — clean angle"}`):null;
-                    return <><div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>{live.ballX!=null?"Your spot — tap to move it":"Tap the map where your ball is — sharpens the read"}</div>
-                      <HoleView h={H} P={P} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)} onPlace={(d,x)=>saveLive({...live,ballD:d,ballX:x})}/>
-                      {where&&<div style={{textAlign:"center",fontFamily:SERIF,fontSize:15,color:INK,marginTop:8}}>You're {where}.</div>}</>;})())}
+                    // A tap sets the ball, ESTIMATES the number from the map, and reads the
+                    // lie — so no rangefinder is needed. The number can still be refined below.
+                    const placeFromMap=(d,x)=>{const remA=Math.max(1,Math.min(H.y,Math.round((1-d)*H.y)));const det=lieAt(H,d,x);
+                      setQYards(String(remA));setLie(det.lie);setLieLabel(det.label);saveLive({...live,ballD:d,ballX:x});};
+                    return <><div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>{live.ballX!=null?"Your spot — tap to move it":"Tap where your ball is — I'll estimate the number & lie"}</div>
+                      <HoleView h={H} P={P} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)} onPlace={placeFromMap}/>
+                      {where&&<div style={{textAlign:"center",fontFamily:SERIF,fontSize:15,color:INK,marginTop:8}}>You're {where}{est!=null?` · about ${est} to the flag`:""}.</div>}</>;})())}
               {live.strokes===0&&<div style={{fontFamily:SERIF,fontSize:16,color:MUTE,lineHeight:1.5,margin:"10px 0 16px",textAlign:"center"}}>{teeWhisper(H,H.y)}</div>}
               <div style={{textAlign:"center",marginBottom:6,color:MUTE,fontSize:12,letterSpacing:2,textTransform:"uppercase"}}>How far?</div>
               <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:14,marginBottom:18}}>
@@ -886,7 +910,7 @@ export default function CaddieOS(){
                 <input inputMode="numeric" value={qYards} placeholder={String(live.rem)} onChange={e=>setQYards(e.target.value.replace(/[^0-9]/g,"").slice(0,3))} style={{width:150,textAlign:"center",fontSize:74,fontWeight:800,color:INK,border:"none",background:"transparent",fontVariantNumeric:"tabular-nums",outline:"none"}}/>
                 <button onClick={()=>setQYards(String(y+1))} style={{border:"none",background:"#fff",width:52,height:52,borderRadius:26,fontSize:24,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>+</button>
               </div>
-              <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:16}}>{courses[live.course]&&courses[live.course].ref==="flag"?"yards to the flag":"yards to the middle"}</div>
+              <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:16}}>{courses[live.course]&&courses[live.course].ref==="flag"?"yards to the flag":"yards to the middle"}{live.strokes>0&&Array.isArray(H.path)?" · from your tap, or your rangefinder":""}</div>
               <div style={{display:"flex",gap:7,justifyContent:"center",flexWrap:"wrap",marginBottom:16}}>
                 {[["Tee","FW"],["Fairway","FW"],["Fringe","FRINGE"],["First cut","FIRST"],["Rough","ROUGH"],["Deep","DEEP"],["Bunker","FBUNK"],["Recovery","TREES"]].map(([lab,v])=>{const on=lieLabel===lab;
                   return <button key={lab} className="tapbtn" onClick={()=>{setLie(v);setLieLabel(lab);}} style={{border:"none",borderRadius:20,padding:"10px 14px",fontSize:13,fontWeight:600,cursor:"pointer",background:on?PINE:"#fff",color:on?PAPER:INK,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.06)"}}>{lab}</button>;})}
@@ -898,7 +922,7 @@ export default function CaddieOS(){
               <button className="tapbtn" onClick={()=>{buzz();const v=parseInt(qYards)||live.rem;
                 if(isRecoveryLie(lie)){const loc=live.ballX!=null?holeContext(H,live.ballD,live.ballX):{};const plan=recoveryPlan(v,lie,{bag:recoBag(),wedgeDist,side:loc.side,blocked:loc.blocked});saveLive({...live,rem:v});setSel(plan.best?plan.best.club:Object.keys(P.carries)[0]);}
                 else {const ev=Math.round(v*windMul*lieFactor(lie));const pk=E.pick(ev,reliability);saveLive({...live,rem:v});setSel(pk.chip);}
-                setAsked(true);setShowAlt(false);}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:17,fontWeight:700,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4}}>Read it</button>
+                setAsked(true);setShowAlt(false);}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:17,fontWeight:700,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4}}>{live.strokes===0?"Tee off":"Read it"}</button>
               {(()=>{const hs=(live.shots||[]).map((x,gi)=>({x,gi})).filter(o=>o.x.h===live.hole+1);if(!hs.length)return null;
                 return <div style={{marginTop:20,background:"#fff",borderRadius:16,padding:12,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
                   <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8}}>Shots this hole — tap to review or fix</div>
