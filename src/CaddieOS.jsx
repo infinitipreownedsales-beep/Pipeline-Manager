@@ -896,11 +896,17 @@ export default function CaddieOS(){
                 : (()=>{const loc=live.ballX!=null?holeContext(H,live.ballD,live.ballX):null;
                     const est=live.ballX!=null?Math.max(1,Math.min(H.y,Math.round((1-live.ballD)*H.y))):null;
                     const where=loc?(loc.blocked?`blocked ${loc.side} — trees on your line`:loc.side==="center"?"in the middle — clean angle":`${loc.side} of the fairway${loc.off?"":" — clean angle"}`):null;
-                    // A tap sets the ball, ESTIMATES the number from the map, and reads the
-                    // lie — so no rangefinder is needed. The number can still be refined below.
-                    const placeFromMap=(d,x)=>{const remA=Math.max(1,Math.min(H.y,Math.round((1-d)*H.y)));const det=lieAt(H,d,x);
-                      setQYards(String(remA));setLie(det.lie);setLieLabel(det.label);saveLive({...live,ballD:d,ballX:x});};
-                    return <><div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>{live.ballX!=null?"Your spot — tap to move it":"Tap where your ball is — I'll estimate the number & lie"}</div>
+                    // ONE tap does it all: sets the ball, estimates the number, reads the
+                    // lie, AND gives the club read — so the whole shot is tap → HIT IT →
+                    // result (3 clicks). No rangefinder needed; refine from the read if wanted.
+                    const placeFromMap=(d,x)=>{buzz();
+                      const remA=Math.max(1,Math.min(H.y,Math.round((1-d)*H.y)));const det=lieAt(H,d,x);
+                      const loc=holeContext(H,d,x);
+                      setQYards(String(remA));setLie(det.lie);setLieLabel(det.label);
+                      if(isRecoveryLie(det.lie)){const plan=recoveryPlan(remA,det.lie,{bag:recoBag(),wedgeDist,side:loc.side,blocked:loc.blocked});setSel(plan.best?plan.best.club:Object.keys(P.carries)[0]);}
+                      else {const ev=Math.round(remA*windMul*lieFactor(det.lie));const pk=E.pick(ev,reliability);setSel(pk.chip);}
+                      saveLive({...live,rem:remA,ballD:d,ballX:x});setShowAlt(false);setAsked(true);};
+                    return <><div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>{live.ballX!=null?"Your spot — tap to move it":"Tap where your ball is — number, lie & club in one tap"}</div>
                       <HoleView h={H} P={P} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)} onPlace={placeFromMap}/>
                       {where&&<div style={{textAlign:"center",fontFamily:SERIF,fontSize:15,color:INK,marginTop:8}}>You're {where}{est!=null?` · about ${est} to the flag`:""}.</div>}</>;})())}
               {live.strokes===0&&<div style={{fontFamily:SERIF,fontSize:16,color:MUTE,lineHeight:1.5,margin:"10px 0 16px",textAlign:"center"}}>{teeWhisper(H,H.y)}</div>}
