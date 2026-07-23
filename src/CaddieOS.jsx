@@ -385,7 +385,7 @@ function holeContext(h,d,x){
 // read for angle-aware decisions. Falls back to hz text for un-mapped holes.
 // When onPlace is given, the map becomes tappable: a tap drops the ball marker and
 // reports normalized (d,x) back so the engine learns where the shot finished.
-const HoleView=({h,P,ball,onPlace})=>{
+const HoleView=({h,P,ball,onPlace,shots})=>{
   const HZ=(h.hz||"").toUpperCase();
   const W=220,Ht=300,L=28,Rr=192,uw=Rr-L,teeY=254,greenY=48,span=teeY-greenY;
   const yAt=d=>teeY-Math.max(0,Math.min(1,d))*span;                 // d 0..1 (tee→green) → y
@@ -427,6 +427,10 @@ const HoleView=({h,P,ball,onPlace})=>{
     const x=Math.max(0,Math.min(1,(px-L)/uw)), d=Math.max(0,Math.min(1,(teeY-py)/span));
     onPlace(d,x);}:undefined;
   const bx=ball?xAt(ball.x):null, by=ball?yAt(ball.d):null;
+  // Shot-by-shot path: tee → each recorded position → the current ball. A visual
+  // record of the hole as it actually played out.
+  const shotPts=(shots||[]).filter(s=>s.atD!=null).map(s=>[xAt(s.atX),yAt(s.atD)]);
+  const pathPts=[[tx,ty],...shotPts]; if(ball) pathPts.push([bx,by]);
   return (<svg viewBox={`0 0 ${W} ${Ht}`} onClick={handleTap} style={{width:"100%",maxWidth:300,display:"block",margin:"0 auto",cursor:onPlace?"crosshair":"default"}}>
     <rect x={0} y={0} width={W} height={Ht} rx={18} fill="#eef1ea"/>
     {/* bending fairway corridor */}
@@ -447,6 +451,9 @@ const HoleView=({h,P,ball,onPlace})=>{
     <circle cx={gx} cy={gy} r={16} fill="#6fae7c" stroke="#3c6a49" strokeWidth={2}/>
     <circle cx={gx} cy={gy} r={2.5} fill="#233b30"/>
     <text x={gx} y={gy-21} textAnchor="middle" fontSize={9} fill="#3c6a49" fontWeight={800}>GREEN</text>
+    {/* shot path — the round as it played */}
+    {pathPts.length>=2&&<><polyline points={pathPts.map(p=>p.join(",")).join(" ")} fill="none" stroke="#a3402f" strokeWidth={2} strokeDasharray="4 3" opacity={0.75}/>
+      {shotPts.map(([x,y],i)=><circle key={"sp"+i} cx={x} cy={y} r={3.5} fill="#a3402f" opacity={0.8}/>)}</>}
     {/* placed ball — where the shot finished */}
     {ball&&<g><circle cx={bx} cy={by} r={7} fill="#fff" stroke="#a3402f" strokeWidth={2.5}/><circle cx={bx} cy={by} r={2.5} fill="#a3402f"/>
       <text x={bx} y={by-11} textAnchor="middle" fontSize={8.5} fill="#a3402f" fontWeight={800}>ball</text></g>}
@@ -475,14 +482,16 @@ const buzz=()=>{try{navigator.vibrate&&navigator.vibrate(12);}catch(e){}};
 // P3: how much longer a shot plays from each lie (ball comes out shorter, so you
 // need more club). 1.0 = a clean fairway lie. Used to inflate the target yardage
 // before picking a club, so recommendations reflect the real lie, not a perfect one.
-const LIE_FACTOR={FW:1,FIRST:1.03,ROUGH:1.08,DEEP:1.18,SAND:1.06,FBUNK:1.06,TREES:1.0,DIRT:1.02,HARD:1.02,PINE:1.03};
+const LIE_FACTOR={FW:1,FRINGE:1,FIRST:1.03,ROUGH:1.08,DEEP:1.18,SAND:1.06,FBUNK:1.06,TREES:1.0,DIRT:1.02,HARD:1.02,PINE:1.03};
 const lieFactor=l=>LIE_FACTOR[l]||1;
-const lieName={FW:"fairway",FIRST:"first cut",ROUGH:"rough",DEEP:"deep rough",SAND:"bunker",FBUNK:"fairway bunker",TREES:"recovery",DIRT:"bare lie",HARD:"hardpan",PINE:"pine straw"};
+const lieName={FW:"fairway",FRINGE:"fringe",FIRST:"first cut",ROUGH:"rough",DEEP:"deep rough",SAND:"bunker",FBUNK:"fairway bunker",TREES:"recovery",DIRT:"bare lie",HARD:"hardpan",PINE:"pine straw"};
 
 export default function CaddieOS(){
   const [tab,setTab]=useState("caddie");
   const [asked,setAsked]=useState(false);        // whisper flow: has the player asked this shot?
   const [awaitResult,setAwaitResult]=useState(false); // waiting for the six-zone result tap
+  const [awaitDrop,setAwaitDrop]=useState(null);   // after water: {dir} → tap the map to place the drop
+  const [dropPos,setDropPos]=useState(null);       // pending drop position {d,x} from the map tap
   const [qYards,setQYards]=useState("");          // question-screen yardage entry
   const [lieLabel,setLieLabel]=useState("Fairway"); // which lie chip is lit (Tee vs Fairway both map to FW)
   const [showAlt,setShowAlt]=useState(false);     // "something else?" expander
@@ -618,8 +627,13 @@ export default function CaddieOS(){
     if(c.spdLo&&c.spdHi&&c.spdLo!==c.spdHi)t.push(`${fm} dials in ${c.spdLo}–${c.spdHi} mph club speed`);
     if(c.n>=5&&c.sd<=7)t.push(`${fm} ±${c.sd}y — trust it`);
     return t.slice(0,2);};
+  // A club has to PROVE a tendency before it steers strategy: below this many
+  // side-traced shots, a lopsided miss % is noise, not a read. We still SHOW the
+  // early sample (labelled), but we don't aim off it or dock reliability for it.
+  const SIDE_PROVEN=5;
+  const sideProven=c=>!!(c&&c.side&&(c.side.n==null||c.side.n>=SIDE_PROVEN));
   // Lateral aim-off from measured side bias: aim half the bias the opposite way.
-  const aimOff=fm=>{const c=cstat(fm);if(!c||!c.side||c.side.med==null||Math.abs(c.side.med)<2)return null;
+  const aimOff=fm=>{const c=cstat(fm);if(!sideProven(c)||c.side.med==null||Math.abs(c.side.med)<2)return null;
     const off=Math.round(Math.abs(c.side.med)/2);const bias=c.side.med>0?"right":"left";const aim=c.side.med>0?"left":"right";
     return {off,bias,aim,text:`Biases ${Math.abs(c.side.med)}y ${bias} — aim ${off}y ${aim}`};};
   const disp=fm=>{const e=allShots.filter(x=>famOf(x.c)===fm&&!x.g&&!x.p&&(!x.lie||x.lie==="FW")&&x.from>x.exp+8).map(x=>x.gain-x.exp);if(e.length<2)return null;const avg=Math.round(e.reduce((a,b)=>a+b,0)/e.length);const sd=Math.round(Math.sqrt(e.reduce((a,b)=>a+(b-avg)*(b-avg),0)/e.length));return{n:e.length,avg,sd};};
@@ -640,8 +654,8 @@ export default function CaddieOS(){
   const confOf=fm=>clubConfidence(shotsOf(fm),cstat(fm));
   const reliability=fm=>{
     let score=confOf(fm).score;
-    const cs=cstat(fm),sidePct=cs&&cs.side?cs.side.pct:null;
-    if(sidePct!=null&&sidePct>=72) score-=8;           // a strong one-way miss is less trustworthy
+    const cs=cstat(fm),sidePct=sideProven(cs)?cs.side.pct:null;
+    if(sidePct!=null&&sidePct>=72) score-=8;           // a PROVEN one-way miss is less trustworthy
     return Math.max(0,Math.min(100,Math.round(score)));
   };
   // Recovery-mode inputs: the bag (carry + confidence) and the player's money number.
@@ -661,7 +675,7 @@ export default function CaddieOS(){
   const R=live&&!live.onGreen?E.rec(effRem):null;
   const L=live&&!live.onGreen&&(!R||R.zone==="adv")?E.layup(live.rem).filter(o=>o.r.zone!=="adv"):null;
 
-  useEffect(()=>{ setAsked(false);setAwaitResult(false);setShowAlt(false);setQYards("");setResDir("line");
+  useEffect(()=>{ setAsked(false);setAwaitResult(false);setAwaitDrop(null);setDropPos(null);setShowAlt(false);setQYards("");setResDir("line");
     if(!live||live.onGreen){setSel(null);return;}
     const hp=getPlan(CH[live.hole]);
     const bk=(!learned&&live.strokes<hp.length)?bookChipOf(hp[live.strokes].c,P):null;
@@ -678,10 +692,14 @@ export default function CaddieOS(){
   const addPenalty=()=>saveLive({...live,pen:(live.pen||0)+1,shots:[...(live.shots||[]),{pen:1,from:live.rem,c:"Penalty",h:live.hole+1}]});
   // P3: classify the shot from context so the golfer never labels it by hand.
   const shotType=(from,reach,g)=>live.strokes===0?"tee":g?"approach":from<=34?"pitch":reach?"approach":"positioning";
-  const logShot=(gain,g,syn,dirOv,endLie,typeOv,penalty)=>{
+  const logShot=(gain,g,syn,dirOv,endLie,typeOv,penalty,nextBall)=>{
+    // Record where this shot FINISHED (from the ball marker) so the round builds a
+    // shot-by-shot path on the map. nextBall (a drop) seeds the NEXT shot's spot.
     const shot={c:sel||"?",from:live.rem,gain,exp:E.chipCarry(sel||"CHIP"),g:g?1:0,p:syn?1:0,h:live.hole+1,lie,dir:dirOv!==undefined?dirOv:dir,
-      end:endLie||null,type:typeOv||shotType(live.rem,E.chipCarry(sel||"CHIP")>=live.rem-6,g),tourn:tourn?1:0};
-    let l={...live,strokes:live.strokes+1,shots:[...(live.shots||[]),shot],ballX:null,ballD:null};
+      end:endLie||null,type:typeOv||shotType(live.rem,E.chipCarry(sel||"CHIP")>=live.rem-6,g),tourn:tourn?1:0,
+      atX:live.ballX!=null?live.ballX:null,atD:live.ballD!=null?live.ballD:null};
+    let l={...live,strokes:live.strokes+1,shots:[...(live.shots||[]),shot],
+      ballX:nextBall?nextBall.x:null,ballD:nextBall?nextBall.d:null};
     // P6 fix: a Water outcome must apply its penalty in the SAME state update.
     // Previously it called addPenalty() separately, which re-saved from stale state
     // and clobbered the shot — the button looked dead. One update, one save.
@@ -799,7 +817,7 @@ export default function CaddieOS(){
               <button onClick={()=>{buzz();playHoleNow(i);}} style={{width:"100%",border:"none",borderRadius:16,padding:"15px",background:PINE,color:PAPER,fontSize:16,fontWeight:700,cursor:"pointer"}}>Play this hole now</button>
             </div>;
           }
-          const phase=live.onGreen?"putt":awaitResult?"result":asked?"whisper":"question";
+          const phase=live.onGreen?"putt":awaitDrop?"drop":awaitResult?"result":asked?"whisper":"question";
           const y=parseInt(qYards)||live.rem;
           return <div style={{padding:"16px 16px 28px"}}>
 
@@ -818,22 +836,22 @@ export default function CaddieOS(){
               <div style={{textAlign:"center",marginBottom:6,color:MUTE,fontSize:12,letterSpacing:2,textTransform:"uppercase"}}>How far?</div>
               <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:14,marginBottom:18}}>
                 <button onClick={()=>setQYards(String(Math.max(1,y-1)))} style={{border:"none",background:"#fff",width:52,height:52,borderRadius:26,fontSize:24,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>–</button>
-                <input inputMode="numeric" value={qYards!==""?qYards:String(live.rem)} onChange={e=>setQYards(e.target.value.replace(/[^0-9]/g,""))} style={{width:150,textAlign:"center",fontSize:74,fontWeight:800,color:INK,border:"none",background:"transparent",fontVariantNumeric:"tabular-nums",outline:"none"}}/>
+                <input inputMode="numeric" value={qYards} placeholder={String(live.rem)} onChange={e=>setQYards(e.target.value.replace(/[^0-9]/g,"").slice(0,3))} style={{width:150,textAlign:"center",fontSize:74,fontWeight:800,color:INK,border:"none",background:"transparent",fontVariantNumeric:"tabular-nums",outline:"none"}}/>
                 <button onClick={()=>setQYards(String(y+1))} style={{border:"none",background:"#fff",width:52,height:52,borderRadius:26,fontSize:24,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>+</button>
               </div>
               <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:16}}>{courses[live.course]&&courses[live.course].ref==="flag"?"yards to the flag":"yards to the middle"}</div>
               <div style={{display:"flex",gap:7,justifyContent:"center",flexWrap:"wrap",marginBottom:16}}>
-                {[["Tee","FW"],["Fairway","FW"],["First cut","FIRST"],["Rough","ROUGH"],["Deep","DEEP"],["Bunker","FBUNK"],["Recovery","TREES"]].map(([lab,v])=>{const on=lieLabel===lab;
+                {[["Tee","FW"],["Fairway","FW"],["Fringe","FRINGE"],["First cut","FIRST"],["Rough","ROUGH"],["Deep","DEEP"],["Bunker","FBUNK"],["Recovery","TREES"]].map(([lab,v])=>{const on=lieLabel===lab;
                   return <button key={lab} className="tapbtn" onClick={()=>{setLie(v);setLieLabel(lab);}} style={{border:"none",borderRadius:20,padding:"10px 14px",fontSize:13,fontWeight:600,cursor:"pointer",background:on?PINE:"#fff",color:on?PAPER:INK,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.06)"}}>{lab}</button>;})}
               </div>
               {/* Ball placement — the location context Recovery Mode needs. Tap the map
                   to say where the shot finished; the engine reads side + tree block. */}
-              {isRecoveryLie(lie)&&live.strokes>0&&Array.isArray(H.path)&&(()=>{
+              {live.strokes>0&&Array.isArray(H.path)&&(()=>{
                 const loc=live.ballX!=null?holeContext(H,live.ballD,live.ballX):null;
                 const where=loc?(loc.blocked?`blocked ${loc.side} — trees on your line`:loc.side==="center"?"in the middle — clean angle":`${loc.side} of the fairway${loc.off?"":" — clean angle"}`):null;
                 return <div style={{marginBottom:18}}>
-                  <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>{live.ballX!=null?"Ball placed — tap to move it":"Tap the map — where did your ball finish?"}</div>
-                  <HoleView h={H} P={P} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} onPlace={(d,x)=>saveLive({...live,ballD:d,ballX:x})}/>
+                  <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>{live.ballX!=null?"Your spot — tap to move it":"Tap the map where your ball is — sharpens the read"}</div>
+                  <HoleView h={H} P={P} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)} onPlace={(d,x)=>saveLive({...live,ballD:d,ballX:x})}/>
                   {where&&<div style={{textAlign:"center",fontFamily:SERIF,fontSize:15,color:INK,marginTop:8}}>You're {where}.</div>}
                 </div>;})()}
               <div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:22}}>
@@ -900,7 +918,7 @@ export default function CaddieOS(){
 
             {phase==="whisper"&&!isRecoveryLie(lie)&&(()=>{
               const fam=famOf(sel||"7i");
-              const sideC=(()=>{const c=cstat(fam);if(c&&c.side)return{dir:c.side.dir,pct:c.side.pct};const b=dirBias(fam);if(b)return{dir:b[0],pct:parseInt(b.slice(1))};return null;})();
+              const sideC=(()=>{const c=cstat(fam);if(sideProven(c))return{dir:c.side.dir,pct:c.side.pct};const b=dirBias(fam);if(b)return{dir:b[0],pct:parseInt(b.slice(1))};return null;})();
               const carrySel=E.chipCarry(sel||"CHIP");
               const reach=carrySel>=effRem-6;              // wind-aware: can this club get home?
               const leaves=Math.max(0,live.rem-carrySel);  // yards left uses the real distance
@@ -932,19 +950,59 @@ export default function CaddieOS(){
                   return <div style={{color:MUTE,fontSize:13,fontStyle:"italic",fontFamily:SERIF,margin:"10px 4px 0"}}>Why — {reason}</div>;})()}
                 <button onClick={()=>{buzz();setAwaitResult(true);}} style={{width:"100%",border:"none",borderRadius:18,padding:"20px",fontSize:19,fontWeight:800,cursor:"pointer",background:GOLD,color:PINE,letterSpacing:1,marginTop:18}}>HIT IT</button>
                 <button onClick={()=>setShowAlt(!showAlt)} style={{width:"100%",border:"none",background:"transparent",color:MUTE,fontSize:14,cursor:"pointer",marginTop:12,fontFamily:SERIF,fontStyle:"italic"}}>{showAlt?"never mind":"something else?"}</button>
-                {showAlt&&<div style={{marginTop:12,background:"#fff",borderRadius:16,padding:14,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
-                  <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8}}>Pick a different club</div>
-                  <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:6,marginBottom:8}}>
-                    {chips.map(c=>{const on=sel===c;return <button key={c} onClick={()=>setSel(c)} style={{flexShrink:0,border:"none",borderRadius:12,padding:"9px 12px",fontSize:14,fontWeight:700,cursor:"pointer",background:on?PINE:"#f1efe9",color:on?PAPER:INK}}>{c}<span style={{opacity:.6,fontSize:10}}> {E.chipCarry(c)}</span></button>;})}
-                  </div>
-                  {(()=>{const d=disp(fam),gp=greenProb(fam),cf=conf(fam);const bits=[];
-                    if(d)bits.push(`${d.n} tracked · ${d.avg>=0?"+":""}${d.avg}y avg · ±${d.sd}y`);
-                    if(gp!=null)bits.push(`on-target ~${gp}%`);
-                    if(cf!=null)bits.push(`confidence ${cf}/100`);
-                    if(sideC&&sideC.pct>=58)bits.push(`miss ${sideC.dir} ${sideC.pct}%`);
-                    return bits.length?<div style={{color:MUTE,fontSize:12,lineHeight:1.6}}>{bits.join(" · ")}</div>:<div style={{color:MUTE,fontSize:12}}>No tracked data yet for this club — the number's your best guide.</div>;})()}
-                  <button onClick={()=>{buzz();addPenalty();}} style={{marginTop:10,border:"none",borderRadius:10,padding:"8px 12px",background:"#f6efe6",color:"#8a6d2f",fontSize:12,fontWeight:700,cursor:"pointer"}}>Add a penalty (stroke & distance)</button>
-                </div>}
+                {showAlt&&(()=>{
+                  // Don't go blank — offer the best OTHER plays: the next-best club to
+                  // reach, and the smartest lay-up (leaves your best scoring number),
+                  // both computed from the player's carries + reliability.
+                  const cur=famOf(sel||"");
+                  const alts=[];
+                  const rp=E.pick(effRem,reliability);
+                  if(rp&&rp.reach&&rp.fam!==cur&&rp.fam!=="chip"&&rp.fam!=="52")
+                    alts.push({chip:rp.chip,kind:"reach",head:"Best club to reach",sub:`${rp.carry}y carry${rp.leaves>0?` · leaves ${rp.leaves}`:" · pin-high"}`});
+                  E.layup(live.rem).forEach(o=>{const f=famOf(o.k);if(f===cur)return;
+                    alts.push({chip:o.k,kind:"layup",head:`Lay up — leaves ${o.rem}`,sub:`${o.k} ${o.carry}y → then ${o.r.chip||o.r.club}`});});
+                  const seen={};const list=alts.filter(a=>seen[a.chip]?false:(seen[a.chip]=1)).slice(0,3);
+                  return <div style={{marginTop:12,background:"#fff",borderRadius:16,padding:14,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+                    {list.length>0&&<>
+                      <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8}}>Better plays from here</div>
+                      {list.map((a,i)=>{const on=sel===a.chip;return <button key={i} className="tapbtn" onClick={()=>{buzz();setSel(a.chip);}} style={{display:"block",width:"100%",textAlign:"left",border:on?"2px solid #1a3a2e":"2px solid #ece7dd",background:on?"#eef1ea":"#fbfaf7",borderRadius:12,padding:"10px 12px",marginBottom:8,cursor:"pointer"}}>
+                        <div style={{fontSize:14,fontWeight:800,color:INK}}>{on?"✓ ":""}{a.head} · {a.chip}</div>
+                        <div style={{fontSize:12,color:MUTE,marginTop:2}}>{a.sub}</div>
+                      </button>;})}
+                    </>}
+                    <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",margin:list.length?"6px 0 8px":"0 0 8px"}}>Or pick any club</div>
+                    <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:6,marginBottom:8}}>
+                      {chips.map(c=>{const on=sel===c;return <button key={c} onClick={()=>setSel(c)} style={{flexShrink:0,border:"none",borderRadius:12,padding:"9px 12px",fontSize:14,fontWeight:700,cursor:"pointer",background:on?PINE:"#f1efe9",color:on?PAPER:INK}}>{c}<span style={{opacity:.6,fontSize:10}}> {E.chipCarry(c)}</span></button>;})}
+                    </div>
+                    {(()=>{const d=disp(fam),gp=greenProb(fam),cf=conf(fam);const bits=[];
+                      if(d)bits.push(`${d.n} tracked · ${d.avg>=0?"+":""}${d.avg}y avg · ±${d.sd}y`);
+                      if(gp!=null)bits.push(`on-target ~${gp}%`);
+                      if(cf!=null)bits.push(`confidence ${cf}/100`);
+                      if(sideC&&sideC.pct>=58)bits.push(`miss ${sideC.dir} ${sideC.pct}%`);
+                      return bits.length?<div style={{color:MUTE,fontSize:12,lineHeight:1.6}}>{bits.join(" · ")}</div>:<div style={{color:MUTE,fontSize:12}}>No tracked data yet for this club — the number's your best guide.</div>;})()}
+                    <button onClick={()=>{buzz();addPenalty();}} style={{marginTop:10,border:"none",borderRadius:10,padding:"8px 12px",background:"#f6efe6",color:"#8a6d2f",fontSize:12,fontWeight:700,cursor:"pointer"}}>Add a penalty (stroke & distance)</button>
+                  </div>;})()}
+              </div>;})()}
+
+            {phase==="drop"&&(()=>{
+              // After a water ball: tap the map to drop, so the next shot knows its spot.
+              const mapped=Array.isArray(H.path);
+              const loc=dropPos?holeContext(H,dropPos.d,dropPos.x):null;
+              const confirm=()=>{buzz();setPendingLie(["FW","Fairway"]);
+                logShot(awaitDrop.gain,false,false,awaitDrop.dOv,"water",undefined,true,dropPos||undefined);
+                setAwaitDrop(null);setDropPos(null);};
+              return <div style={arrive}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                  <div style={{color:MUTE,fontSize:14}}><span style={{color:"#2f6d8c",fontWeight:800}}>WATER</span> · penalty stroke added</div>
+                  <button onClick={()=>{setAwaitDrop(null);setDropPos(null);}} style={{border:"none",background:"transparent",color:MUTE,fontSize:13,cursor:"pointer"}}>↩ back</button>
+                </div>
+                <div style={{fontFamily:SERIF,fontSize:22,color:INK,textAlign:"center",marginBottom:8}}>Where are you dropping?</div>
+                {mapped?<>
+                  <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:8}}>{dropPos?"Drop placed — tap to move it":"Tap the map where you'll play from"}</div>
+                  <HoleView h={H} P={P} ball={dropPos} onPlace={(d,x)=>setDropPos({d,x})}/>
+                  {loc&&<div style={{textAlign:"center",fontFamily:SERIF,fontSize:15,color:INK,marginTop:8}}>Dropping {loc.blocked?`blocked ${loc.side} — trees on your line`:loc.side==="center"?"in the middle":`${loc.side} of the fairway`}.</div>}
+                </>:<div style={{textAlign:"center",color:MUTE,fontSize:13,margin:"8px 0"}}>This hole isn't mapped yet — continue and enter your distance on the next shot.</div>}
+                <button className="tapbtn" onClick={confirm} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:17,fontWeight:800,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4,marginTop:14}}>{dropPos||!mapped?"Confirm the drop":"Skip — no exact spot"}</button>
               </div>;})()}
 
             {phase==="result"&&(()=>{const exp=E.chipCarry(sel||"CHIP");
@@ -957,8 +1015,10 @@ export default function CaddieOS(){
               const logResult=(lieKey,label,lieVal)=>{
                 buzz();
                 if(lieKey==="green"){ setPendingLie(null); logShot(live.rem,true,false,dOf(resDir),"green"); return; }
+                // Water: don't log yet — first let the player tap where they're dropping,
+                // so the engine knows the next position (and the round path stays honest).
+                if(lieKey==="water"){ setDropPos(null); setAwaitDrop({gain:gainFor(resDir),dOv:dOf(resDir)}); return; }
                 setPendingLie([lieVal,label]);
-                if(lieKey==="water"){ logShot(gainFor(resDir),false,false,dOf(resDir),"water",undefined,true); return; }
                 logShot(gainFor(resDir),false,false,dOf(resDir),lieKey);
               };
               const lies=[["fairway","Fairway","FW"],["rough","Rough","ROUGH"],["bunker","Bunker","SAND"],["trees","Trees","TREES"],["water","Water","FW"]];
@@ -1168,7 +1228,12 @@ export default function CaddieOS(){
           const longest=keys[0];
           const shaky=keys.slice().sort((a,b)=>cs[b].sd-cs[a].sd)[0];
           const shortMiss=keys.filter(k=>cs[k].shortRate>=60).sort((a,b)=>cs[b].shortRate-cs[a].shortRate)[0];
-          const sideMiss=keys.filter(k=>cs[k].side&&cs[k].side.pct>=60).sort((a,b)=>cs[b].side.pct-cs[a].side.pct)[0];
+          const proven=c=>c.side&&(c.side.n==null||c.side.n>=SIDE_PROVEN);
+          const sideMiss=keys.filter(k=>proven(cs[k])&&cs[k].side.pct>=60).sort((a,b)=>cs[b].side.pct-cs[a].side.pct)[0];
+          // "misses right ~12y (94%)" for a proven club; "early right read" when the
+          // sample's still too small to trust — the club has to earn the aim-off.
+          const sideBit=c=>{if(!c.side)return"";const dir=c.side.dir==="R"?"right":"left";const md=c.side.med!=null?" ~"+Math.abs(c.side.med)+(c.side.unit||"y"):"";
+            return proven(c)?(c.side.pct>=58?` · misses ${dir}${md} (${c.side.pct}%)`:""):` · early ${dir} read (${c.side.n||"few"})`;};
           const rel=sd=>sd<=5?["ROCK SOLID","#1a7f37"]:sd<=9?["reliable","#1a7f37"]:sd<=14?["variable","#ff9f0a"]:["inconsistent","#ff453a"];
           const attack=keys.filter(k=>cs[k].carry>=175&&cs[k].carry<=260).slice(-1)[0];
           return (<div style={{...S.card,background:"#1a3a2e"}}>
@@ -1193,12 +1258,12 @@ export default function CaddieOS(){
               </div>}
             </div>
             {shortMiss&&<div style={{color:"#fcd34d",fontSize:12,fontWeight:700,marginBottom:6}}>⚠ {lbl(shortMiss)} finishes short {cs[shortMiss].shortRate}% of the time — the engine already plays it one club up.</div>}
-            {sideMiss&&<div style={{color:"#fcd34d",fontSize:12,fontWeight:700,marginBottom:8}}>⟵⟶ {lbl(sideMiss)} misses {cs[sideMiss].side.dir==="R"?"right":"left"} {cs[sideMiss].side.pct}% of the time — aim the fat side.</div>}
+            {sideMiss&&<div style={{color:"#fcd34d",fontSize:12,fontWeight:700,marginBottom:8}}>⟵⟶ {lbl(sideMiss)} misses {cs[sideMiss].side.dir==="R"?"right":"left"} {cs[sideMiss].side.med!=null?"~"+Math.abs(cs[sideMiss].side.med)+(cs[sideMiss].side.unit||"y")+" ":""}({cs[sideMiss].side.pct}%, {cs[sideMiss].side.n||"?"} shots) — aim the fat side.</div>}
             <div style={{borderTop:"1px solid rgba(255,255,255,0.12)",paddingTop:6}}>
               {keys.map(k=>{const c=cs[k],[word,col]=rel(c.sd);
                 return <div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 0"}}>
                   <span style={{color:"white",fontSize:13,fontWeight:800,minWidth:74}}>{lbl(k)}</span>
-                  <span style={{color:"#9fd6b4",fontSize:12,flex:1,textAlign:"right"}}>{c.carry}y · plays {c.lowN}–{c.hiN}{c.side&&c.side.pct>=58?" · "+c.side.dir+" "+c.side.pct+"%":""} · {c.n} shots</span>
+                  <span style={{color:"#9fd6b4",fontSize:12,flex:1,textAlign:"right"}}>{c.carry}y · plays {c.lowN}–{c.hiN}{sideBit(c)} · {c.n} shots</span>
                   <span style={{fontSize:11,fontWeight:800,color:col==="#1a7f37"?"#86efac":col,minWidth:74,textAlign:"right"}}>±{c.sd}y {word}</span>
                 </div>;})}
             </div>
