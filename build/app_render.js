@@ -408,16 +408,37 @@ function unitStackInner(u,p){
   H.push(stkRow("Invoice", u.invoice, ""));
   H.push(stkRow("ICV allowance", -u.icv, "sub"));
   H.push(stkRow("Velocity bonus"+(u.eligible?"":" (not earned)"), -(u.eligible?u.velocity:0), "sub"));
-  H.push(stkRow("Write-down"+(p.method==="flat"?" (flat)":" ("+p.rate.toFixed(2)+"% × "+p.months+" mo)"), -u.writedown, "sub"));
+  H.push(stkRow("Write-down"+(p.method==="flat"?" (flat)":" ("+p.rate.toFixed(2)+"% of "+(u.wdBase||"invoice")+" × "+p.months+" mo)"), -u.writedown, "sub"));
   H.push(stkRow("Reconditioning", u.recon, "sub"));
   H.push(stkRow("Expected cost", u.expectedCost, "tot"));
   H.push("</tbody></table>");
-  let colorTxt = u.color ? (" Color "+esc(u.color.toLowerCase())+
-      (u.colorPrem!=null?" ("+(u.colorPrem>=0?"+":"−")+"$"+Math.abs(u.colorPrem).toLocaleString()+" vs model average"+(u.colorDtsDelta!=null?", "+(u.colorDtsDelta<=0?Math.abs(u.colorDtsDelta)+" days faster":u.colorDtsDelta+" days slower"):"")+")":"")+".") : "";
-  H.push("<div class='basis'>Expected retail "+money0(u.expectedRetail)+" &mdash; based on "+
-    (u.compN>0?(u.compN+" historical "+esc(u.model+" "+u.trim)+" sales"+(u.avgDays!=null?", which took about "+u.avgDays+" days to sell":"")):"the modeled fallback (no matching history yet)")+
-    "."+colorTxt+" Difference = expected retail &minus; expected cost = "+moneySign(u.difference)+".</div>");
-  H.push("<table class='mos'><thead><tr><th>Months in service</th>"+u.byMonth.map(bm=>"<th class='r'>"+bm.months+"</th>").join("")+"</tr></thead><tbody><tr><td>Difference</td>"+
+  // the two prices the owner asked for
+  H.push("<div class='prices'>"+
+    "<div class='pr1'><div class='prl'>Lowest retail to break even</div><div class='prv'>"+money0(u.expectedCost)+"</div><div class='prn'>sell below this and it loses money</div></div>"+
+    "<div class='pr1'><div class='prl'>Expected selling price</div><div class='prv' style='color:var(--teal)'>"+money0(u.expectedRetail)+"</div><div class='prn'>"+
+      (u.retailLow!=null&&u.retailHigh!=null?("typical range "+money0(u.retailLow)+"&ndash;"+money0(u.retailHigh)):"modeled")+"</div></div>"+
+    "<div class='pr1'><div class='prl'>Cushion (difference)</div><div class='prv' style='color:"+(u.difference>=0?"var(--good)":"var(--bad)")+"'>"+moneySign(u.difference)+"</div><div class='prn'>expected price &minus; break-even</div></div>"+
+    "</div>");
+  // basis + color, exact
+  let colorTxt = u.color ? (" Color <b>"+esc(u.color.toLowerCase())+"</b>: "+(u.colorPrem>=0?"+":"−")+"$"+Math.abs(u.colorPrem||0).toLocaleString()+" vs the model average"+
+      (u.colorDtsDelta!=null?", "+(u.colorDtsDelta<=0?Math.abs(u.colorDtsDelta)+" days faster":u.colorDtsDelta+" days slower"):"")+".") : "";
+  H.push("<div class='basis'>Expected price is the median of "+
+    (u.compN>0?(u.compN+" historical "+esc(u.model+" "+u.trim)+" sales at ~"+p.months+" months of age"+(u.avgDays!=null?" (they took about "+u.avgDays+" days to sell)":"")):"a modeled fallback (no matching history yet)")+
+    ", adjusted for the sale month."+colorTxt+"</div>");
+  // the actual comps behind the number
+  var comps=(typeof window!=="undefined"&&window.DEPR&&window.DEPR.a&&window.DEPR.a.getComps)?window.DEPR.a.getComps(u.model,u.trim,p.months):[];
+  if(comps.length){
+    H.push("<details class='fbreak'><summary>Show the "+comps.length+" sale"+(comps.length>1?"s":"")+" this price is based on</summary><div class='fbwrap'>");
+    H.push("<table class='mos'><thead><tr><th>Sold</th><th>Vehicle</th><th>Color</th><th class='r'>Sold for</th><th class='r'>Days to sell</th><th class='r'>Age</th></tr></thead><tbody>");
+    comps.slice(0,30).forEach(function(c){ H.push("<tr><td>"+c.date.toISOString().slice(0,7)+"</td>"+
+      "<td>"+esc((c.year||"")+" "+(c.trim||""))+"</td><td>"+esc((c.color||"").toLowerCase())+"</td>"+
+      "<td class='r'>"+money0(c.price)+"</td><td class='r'>"+(c.dts!=null?c.dts+"d":"—")+"</td><td class='r'>"+(c.age!=null?Math.round(c.age)+"mo":"—")+"</td></tr>"); });
+    H.push("</tbody></table>");
+    if(comps.length>30) H.push("<div class='basis'>Showing the 30 most recent of "+comps.length+".</div>");
+    H.push("</div></details>");
+  }
+  H.push("<div class='basis' style='margin-top:8px'>Cushion at each service length (write-down and resale both change with age):</div>");
+  H.push("<table class='mos'><thead><tr><th>Months in service</th>"+u.byMonth.map(bm=>"<th class='r'>"+bm.months+"</th>").join("")+"</tr></thead><tbody><tr><td>Cushion</td>"+
     u.byMonth.map(bm=>"<td class='r"+(bm.months===p.months?" cur":"")+"'>"+diffCell(bm.difference)+"</td>").join("")+"</tr></tbody></table>");
   return H.join("");
 }

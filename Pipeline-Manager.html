@@ -292,7 +292,12 @@
   table.stk td{padding:4px 12px 4px 0} table.stk td.r{text-align:right;min-width:110px}
   table.stk tr.sub td:first-child{padding-left:16px;color:var(--muted)}
   table.stk tr.tot td{border-top:1px solid var(--line2);font-weight:700;padding-top:6px}
-  .basis{font-size:12.5px;color:var(--muted);padding:2px 12px 10px}
+  .basis{font-size:12.5px;color:var(--muted);padding:2px 12px 10px;line-height:1.5}
+  .prices{display:flex;gap:14px;flex-wrap:wrap;padding:6px 12px 8px}
+  .pr1{background:var(--panel2);border:1px solid var(--line2);border-radius:9px;padding:9px 14px;min-width:170px}
+  .pr1 .prl{font-size:11px;color:var(--muted);text-transform:none}
+  .pr1 .prv{font-size:22px;font-weight:800;margin:2px 0}
+  .pr1 .prn{font-size:11px;color:var(--muted2)}
   table.mos{border-collapse:collapse;font-size:13px;margin:0 12px 12px}
   table.mos th{color:var(--muted);font-weight:600;font-size:12px;padding:4px 12px;text-align:left;text-transform:none;letter-spacing:0;background:transparent}
   table.mos th.r,table.mos td.r{text-align:right}
@@ -807,7 +812,22 @@ function analyze(sales,halfLife,asOf){
     age_curves:ageCurves(inf,false),age_curves_trim:ageCurves(inf,true),
     color:colorAnalytics(inf),color_groups:colorGroupAnalytics(inf),trim:trimAnalytics(inf),model_perf:modelPerformance(inf,sales),
     seasonality:seasonality(inf),loaner_vs_retail:loanerVsRetail(inf),benchmark:bench,
-    predictor:predictor
+    predictor:predictor,
+    // the actual historical sales behind an expected-retail figure: same model,
+    // same trim family, same age bucket (the set the median is drawn from)
+    getComps:function(model,trim,ageMonths,colorGrp){
+      let tw=trimWord(trim), bucket=ageBucket(ageMonths==null?6:ageMonths);
+      return inf.filter(function(s){
+        if(s.model!==model||s.price==null) return false;
+        if(tw && trimWord(s.trim)!==tw) return false;
+        if(s.age_months==null || ageBucket(s.age_months)!==bucket) return false;
+        if(colorGrp && colorGroup(s.ext)!==colorGrp) return false;
+        return true; })
+        .map(function(s){ return {date:s.date, price:Math.round(s.price), gross:(s.gross!=null?Math.round(s.gross):null),
+          dts:s.dts, ext:s.ext, color:colorGroup(s.ext), age:s.age_months, year:s.model_year, trim:s.trim,
+          weight:Math.round(s.weight*100)/100}; })
+        .sort(function(a,b){ return b.date-a.date; });
+    }
   };
 }
 
@@ -1502,30 +1522,38 @@ function _retailAt(res, ui, months){
   let D=(typeof window!=="undefined")?window.DEPR:null;
   if(D&&D.active&&D.a&&window.LoanerIntel){ let r=D.a.predictor(ui.model,ui.trim||null,null,ui.ext||null,saleMonthIdx,months);
     if(r&&r.ok){
-      // color premium: map the unit's paint code to a generic color, then price
-      // it against the model's own history for that color family
-      let grp=(s.color_map||{})[String(ui.ext||"").toUpperCase()]||null, cfac=1, cprem=null, cdd=null;
+      // color premium: ADDITIVE dollar amount (the color family's average $ vs the
+      // model baseline), applied to the trim/season resale and capped at ±15% of
+      // it — so the number shown is exactly the number used.
+      let grp=(s.color_map||{})[String(ui.ext||"").toUpperCase()]||null, applied=0, cdd=null;
       let cg=D.a.color_groups&&D.a.color_groups[ui.model];
-      if(grp&&cg&&cg.groups&&cg.groups[grp]){ cfac=cg.groups[grp].factor||1; cprem=cg.groups[grp].price_prem; cdd=cg.groups[grp].dts_delta; }
-      return {price:Math.round(r.price*cfac), n:r.n, dts:r.dts, month:saleMonthIdx, color:grp, colorPrem:cprem, colorFactor:cfac, colorDtsDelta:cdd}; }
+      if(grp&&cg&&cg.groups&&cg.groups[grp]){ let prem=cg.groups[grp].price_prem||0, cap=0.15*r.price;
+        applied=Math.round(Math.max(-cap,Math.min(cap,prem))); cdd=cg.groups[grp].dts_delta; }
+      return {price:Math.round(r.price)+applied, base:Math.round(r.price), n:r.n, dts:r.dts,
+        low:(r.price_low!=null?Math.round(r.price_low)+applied:null), high:(r.price_high!=null?Math.round(r.price_high)+applied:null),
+        month:saleMonthIdx, color:grp, colorPrem:applied, colorDtsDelta:cdd, src:"history"}; }
   }
   let reb=modelRebate(s,ui.model,ui.year,curMonth);
-  return {price:Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8)), n:0, dts:null, month:saleMonthIdx, color:null};
+  let mp=Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8));
+  return {price:mp, base:mp, n:0, dts:null, low:null, high:null, month:saleMonthIdx, color:null, colorPrem:0, colorDtsDelta:null, src:"modeled"};
 }
 function unitDifference(res, ui, months, policy){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, year=ui.year||res.tb.today.getFullYear();
   let ret=_retailAt(res, ui, months);
   let icv=incentive(s,ui.model,year,curMonth,"icv");
   let veloAmt=incentive(s,ui.model,year,ret.month,"velocity_bonus");
-  let turnMo=45/DPM, saleAge=months+turnMo, miles=(parseFloat(s.loaner_miles_per_month)||0)*months;
+  // velocity is earned only if the unit RETAILS within the program window —
+  // service months + its real used turn (days-to-sell) must clear max months.
+  let turnMo=(ret.dts!=null?ret.dts:45)/DPM, saleAge=months+turnMo, miles=(parseFloat(s.loaner_miles_per_month)||0)*months;
   let eligible=(saleAge<=(parseFloat(s.loaner_max_months)||7))&&(miles<(parseFloat(s.loaner_mile_cap)||1e9));
   let velo=eligible?veloAmt:0;
   let wd=_writedownAmt(ui.cost, ui.msrp, policy, months);
   let recon=parseFloat(s.loaner_recon||0)||0;
   let expectedCost=ui.cost-icv-velo-wd+recon;
   return {invoice:Math.round(ui.cost), icv:Math.round(icv), velocity:Math.round(velo), velocityAvail:Math.round(veloAmt),
-    eligible:eligible, writedown:Math.round(wd), recon:Math.round(recon),
+    eligible:eligible, writedown:Math.round(wd), recon:Math.round(recon), wdBase:(policy.base==="msrp"?"MSRP":"invoice"),
     expectedCost:Math.round(expectedCost), expectedRetail:Math.round(ret.price),
+    retailBase:ret.base, retailLow:ret.low, retailHigh:ret.high, saleMonth:ret.month,
     difference:Math.round(ret.price-expectedCost), compN:ret.n, avgDays:(ret.dts!=null?Math.round(ret.dts):null),
     color:ret.color||null, colorPrem:(ret.colorPrem!=null?ret.colorPrem:null), colorDtsDelta:(ret.colorDtsDelta!=null?ret.colorDtsDelta:null)};
 }
@@ -2040,16 +2068,37 @@ function unitStackInner(u,p){
   H.push(stkRow("Invoice", u.invoice, ""));
   H.push(stkRow("ICV allowance", -u.icv, "sub"));
   H.push(stkRow("Velocity bonus"+(u.eligible?"":" (not earned)"), -(u.eligible?u.velocity:0), "sub"));
-  H.push(stkRow("Write-down"+(p.method==="flat"?" (flat)":" ("+p.rate.toFixed(2)+"% × "+p.months+" mo)"), -u.writedown, "sub"));
+  H.push(stkRow("Write-down"+(p.method==="flat"?" (flat)":" ("+p.rate.toFixed(2)+"% of "+(u.wdBase||"invoice")+" × "+p.months+" mo)"), -u.writedown, "sub"));
   H.push(stkRow("Reconditioning", u.recon, "sub"));
   H.push(stkRow("Expected cost", u.expectedCost, "tot"));
   H.push("</tbody></table>");
-  let colorTxt = u.color ? (" Color "+esc(u.color.toLowerCase())+
-      (u.colorPrem!=null?" ("+(u.colorPrem>=0?"+":"−")+"$"+Math.abs(u.colorPrem).toLocaleString()+" vs model average"+(u.colorDtsDelta!=null?", "+(u.colorDtsDelta<=0?Math.abs(u.colorDtsDelta)+" days faster":u.colorDtsDelta+" days slower"):"")+")":"")+".") : "";
-  H.push("<div class='basis'>Expected retail "+money0(u.expectedRetail)+" &mdash; based on "+
-    (u.compN>0?(u.compN+" historical "+esc(u.model+" "+u.trim)+" sales"+(u.avgDays!=null?", which took about "+u.avgDays+" days to sell":"")):"the modeled fallback (no matching history yet)")+
-    "."+colorTxt+" Difference = expected retail &minus; expected cost = "+moneySign(u.difference)+".</div>");
-  H.push("<table class='mos'><thead><tr><th>Months in service</th>"+u.byMonth.map(bm=>"<th class='r'>"+bm.months+"</th>").join("")+"</tr></thead><tbody><tr><td>Difference</td>"+
+  // the two prices the owner asked for
+  H.push("<div class='prices'>"+
+    "<div class='pr1'><div class='prl'>Lowest retail to break even</div><div class='prv'>"+money0(u.expectedCost)+"</div><div class='prn'>sell below this and it loses money</div></div>"+
+    "<div class='pr1'><div class='prl'>Expected selling price</div><div class='prv' style='color:var(--teal)'>"+money0(u.expectedRetail)+"</div><div class='prn'>"+
+      (u.retailLow!=null&&u.retailHigh!=null?("typical range "+money0(u.retailLow)+"&ndash;"+money0(u.retailHigh)):"modeled")+"</div></div>"+
+    "<div class='pr1'><div class='prl'>Cushion (difference)</div><div class='prv' style='color:"+(u.difference>=0?"var(--good)":"var(--bad)")+"'>"+moneySign(u.difference)+"</div><div class='prn'>expected price &minus; break-even</div></div>"+
+    "</div>");
+  // basis + color, exact
+  let colorTxt = u.color ? (" Color <b>"+esc(u.color.toLowerCase())+"</b>: "+(u.colorPrem>=0?"+":"−")+"$"+Math.abs(u.colorPrem||0).toLocaleString()+" vs the model average"+
+      (u.colorDtsDelta!=null?", "+(u.colorDtsDelta<=0?Math.abs(u.colorDtsDelta)+" days faster":u.colorDtsDelta+" days slower"):"")+".") : "";
+  H.push("<div class='basis'>Expected price is the median of "+
+    (u.compN>0?(u.compN+" historical "+esc(u.model+" "+u.trim)+" sales at ~"+p.months+" months of age"+(u.avgDays!=null?" (they took about "+u.avgDays+" days to sell)":"")):"a modeled fallback (no matching history yet)")+
+    ", adjusted for the sale month."+colorTxt+"</div>");
+  // the actual comps behind the number
+  var comps=(typeof window!=="undefined"&&window.DEPR&&window.DEPR.a&&window.DEPR.a.getComps)?window.DEPR.a.getComps(u.model,u.trim,p.months):[];
+  if(comps.length){
+    H.push("<details class='fbreak'><summary>Show the "+comps.length+" sale"+(comps.length>1?"s":"")+" this price is based on</summary><div class='fbwrap'>");
+    H.push("<table class='mos'><thead><tr><th>Sold</th><th>Vehicle</th><th>Color</th><th class='r'>Sold for</th><th class='r'>Days to sell</th><th class='r'>Age</th></tr></thead><tbody>");
+    comps.slice(0,30).forEach(function(c){ H.push("<tr><td>"+c.date.toISOString().slice(0,7)+"</td>"+
+      "<td>"+esc((c.year||"")+" "+(c.trim||""))+"</td><td>"+esc((c.color||"").toLowerCase())+"</td>"+
+      "<td class='r'>"+money0(c.price)+"</td><td class='r'>"+(c.dts!=null?c.dts+"d":"—")+"</td><td class='r'>"+(c.age!=null?Math.round(c.age)+"mo":"—")+"</td></tr>"); });
+    H.push("</tbody></table>");
+    if(comps.length>30) H.push("<div class='basis'>Showing the 30 most recent of "+comps.length+".</div>");
+    H.push("</div></details>");
+  }
+  H.push("<div class='basis' style='margin-top:8px'>Cushion at each service length (write-down and resale both change with age):</div>");
+  H.push("<table class='mos'><thead><tr><th>Months in service</th>"+u.byMonth.map(bm=>"<th class='r'>"+bm.months+"</th>").join("")+"</tr></thead><tbody><tr><td>Cushion</td>"+
     u.byMonth.map(bm=>"<td class='r"+(bm.months===p.months?" cur":"")+"'>"+diffCell(bm.difference)+"</td>").join("")+"</tr></tbody></table>");
   return H.join("");
 }

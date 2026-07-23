@@ -273,6 +273,21 @@ function analyze(sales,halfLife,asOf){
     age_curves:ageCurves(inf,false),age_curves_trim:ageCurves(inf,true),
     color:colorAnalytics(inf),color_groups:colorGroupAnalytics(inf),trim:trimAnalytics(inf),model_perf:modelPerformance(inf,sales),
     seasonality:seasonality(inf),loaner_vs_retail:loanerVsRetail(inf),benchmark:bench,
-    predictor:predictor
+    predictor:predictor,
+    // the actual historical sales behind an expected-retail figure: same model,
+    // same trim family, same age bucket (the set the median is drawn from)
+    getComps:function(model,trim,ageMonths,colorGrp){
+      let tw=trimWord(trim), bucket=ageBucket(ageMonths==null?6:ageMonths);
+      return inf.filter(function(s){
+        if(s.model!==model||s.price==null) return false;
+        if(tw && trimWord(s.trim)!==tw) return false;
+        if(s.age_months==null || ageBucket(s.age_months)!==bucket) return false;
+        if(colorGrp && colorGroup(s.ext)!==colorGrp) return false;
+        return true; })
+        .map(function(s){ return {date:s.date, price:Math.round(s.price), gross:(s.gross!=null?Math.round(s.gross):null),
+          dts:s.dts, ext:s.ext, color:colorGroup(s.ext), age:s.age_months, year:s.model_year, trim:s.trim,
+          weight:Math.round(s.weight*100)/100}; })
+        .sort(function(a,b){ return b.date-a.date; });
+    }
   };
 }

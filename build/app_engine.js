@@ -678,30 +678,38 @@ function _retailAt(res, ui, months){
   let D=(typeof window!=="undefined")?window.DEPR:null;
   if(D&&D.active&&D.a&&window.LoanerIntel){ let r=D.a.predictor(ui.model,ui.trim||null,null,ui.ext||null,saleMonthIdx,months);
     if(r&&r.ok){
-      // color premium: map the unit's paint code to a generic color, then price
-      // it against the model's own history for that color family
-      let grp=(s.color_map||{})[String(ui.ext||"").toUpperCase()]||null, cfac=1, cprem=null, cdd=null;
+      // color premium: ADDITIVE dollar amount (the color family's average $ vs the
+      // model baseline), applied to the trim/season resale and capped at ±15% of
+      // it — so the number shown is exactly the number used.
+      let grp=(s.color_map||{})[String(ui.ext||"").toUpperCase()]||null, applied=0, cdd=null;
       let cg=D.a.color_groups&&D.a.color_groups[ui.model];
-      if(grp&&cg&&cg.groups&&cg.groups[grp]){ cfac=cg.groups[grp].factor||1; cprem=cg.groups[grp].price_prem; cdd=cg.groups[grp].dts_delta; }
-      return {price:Math.round(r.price*cfac), n:r.n, dts:r.dts, month:saleMonthIdx, color:grp, colorPrem:cprem, colorFactor:cfac, colorDtsDelta:cdd}; }
+      if(grp&&cg&&cg.groups&&cg.groups[grp]){ let prem=cg.groups[grp].price_prem||0, cap=0.15*r.price;
+        applied=Math.round(Math.max(-cap,Math.min(cap,prem))); cdd=cg.groups[grp].dts_delta; }
+      return {price:Math.round(r.price)+applied, base:Math.round(r.price), n:r.n, dts:r.dts,
+        low:(r.price_low!=null?Math.round(r.price_low)+applied:null), high:(r.price_high!=null?Math.round(r.price_high)+applied:null),
+        month:saleMonthIdx, color:grp, colorPrem:applied, colorDtsDelta:cdd, src:"history"}; }
   }
   let reb=modelRebate(s,ui.model,ui.year,curMonth);
-  return {price:Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8)), n:0, dts:null, month:saleMonthIdx, color:null};
+  let mp=Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8));
+  return {price:mp, base:mp, n:0, dts:null, low:null, high:null, month:saleMonthIdx, color:null, colorPrem:0, colorDtsDelta:null, src:"modeled"};
 }
 function unitDifference(res, ui, months, policy){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, year=ui.year||res.tb.today.getFullYear();
   let ret=_retailAt(res, ui, months);
   let icv=incentive(s,ui.model,year,curMonth,"icv");
   let veloAmt=incentive(s,ui.model,year,ret.month,"velocity_bonus");
-  let turnMo=45/DPM, saleAge=months+turnMo, miles=(parseFloat(s.loaner_miles_per_month)||0)*months;
+  // velocity is earned only if the unit RETAILS within the program window —
+  // service months + its real used turn (days-to-sell) must clear max months.
+  let turnMo=(ret.dts!=null?ret.dts:45)/DPM, saleAge=months+turnMo, miles=(parseFloat(s.loaner_miles_per_month)||0)*months;
   let eligible=(saleAge<=(parseFloat(s.loaner_max_months)||7))&&(miles<(parseFloat(s.loaner_mile_cap)||1e9));
   let velo=eligible?veloAmt:0;
   let wd=_writedownAmt(ui.cost, ui.msrp, policy, months);
   let recon=parseFloat(s.loaner_recon||0)||0;
   let expectedCost=ui.cost-icv-velo-wd+recon;
   return {invoice:Math.round(ui.cost), icv:Math.round(icv), velocity:Math.round(velo), velocityAvail:Math.round(veloAmt),
-    eligible:eligible, writedown:Math.round(wd), recon:Math.round(recon),
+    eligible:eligible, writedown:Math.round(wd), recon:Math.round(recon), wdBase:(policy.base==="msrp"?"MSRP":"invoice"),
     expectedCost:Math.round(expectedCost), expectedRetail:Math.round(ret.price),
+    retailBase:ret.base, retailLow:ret.low, retailHigh:ret.high, saleMonth:ret.month,
     difference:Math.round(ret.price-expectedCost), compN:ret.n, avgDays:(ret.dts!=null?Math.round(ret.dts):null),
     color:ret.color||null, colorPrem:(ret.colorPrem!=null?ret.colorPrem:null), colorDtsDelta:(ret.colorDtsDelta!=null?ret.colorDtsDelta:null)};
 }
