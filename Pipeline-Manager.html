@@ -309,7 +309,12 @@
   .scen{padding:6px 12px 10px;border-top:1px solid var(--line)}
   .scenh{font-size:13.5px;font-weight:700;margin:6px 0 4px}
   .flag{font-size:11px;font-weight:700;color:var(--warn);border:1px solid var(--warn);border-radius:5px;padding:1px 6px;margin-left:6px}
-  @media print{ details.unit,details.explorer{break-inside:avoid} .toprow td{background:#eee!important} }
+  .mixbox{background:var(--panel2);border:1px solid var(--line2);border-radius:8px;padding:10px 12px;margin:8px 0}
+  details.mixbox>summary{cursor:pointer;list-style:none}
+  details.mixbox>summary::-webkit-details-marker{display:none}
+  .mixh{font-size:13.5px;font-weight:700;margin-bottom:6px}
+  .warn{font-size:13px;color:var(--ink);background:rgba(245,158,11,.09);border:1px solid rgba(245,158,11,.30);border-radius:7px;padding:8px 10px;margin:4px 0 8px}
+  @media print{ details.unit,details.explorer,.mixbox{break-inside:avoid} .toprow td{background:#eee!important} }
   .hr-plan{font-size:12.5px;color:var(--ink2);margin-bottom:6px}
   .hr-plan .pos{color:var(--good)}
   .hr-fix{font-size:12.5px;color:var(--ink);background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.28);
@@ -827,6 +832,14 @@ function analyze(sales,halfLife,asOf){
           dts:s.dts, ext:s.ext, color:colorGroup(s.ext), age:s.age_months, year:s.model_year, trim:s.trim,
           weight:Math.round(s.weight*100)/100}; })
         .sort(function(a,b){ return b.date-a.date; });
+    },
+    // how many of a model+trim family we actually RETAIL per month, across the
+    // full history window — used to keep loaner picks diversified (we can only
+    // sell so many of the same config when they all come out of service together)
+    salesRate:function(model,trim){
+      let tw=trimWord(trim), span=Math.max(1,(asOf-dmin)/86400000/30.4), n=0;
+      for(let i=0;i<inf.length;i++){ let s=inf[i]; if(s.model===model && (!tw||trimWord(s.trim)===tw)) n++; }
+      return n/span;
     }
   };
 }
@@ -1526,34 +1539,52 @@ function _wpctComps(arr, key, pct){
   let v=arr.filter(c=>c[key]!=null&&c.weight>0).map(c=>[c[key],c.weight]).sort((a,b)=>a[0]-b[0]);
   if(!v.length) return null; let tot=v.reduce((s,x)=>s+x[1],0), th=tot*pct, run=0;
   for(let x of v){ run+=x[1]; if(run>=th) return x[0]; } return v[v.length-1][0]; }
-// season factor: 3-month smoothed monthly index, damped 50% and clamped to ±5%,
-// so thin monthly data can't swing the resale wildly month to month.
-function _seasonFactor(a, monthIdx){
-  let ms=a.seasonality&&a.seasonality.months; if(!ms) return 1;
-  let i=monthIdx-1, idx=[(i+11)%12,i,(i+1)%12].map(k=>ms[k]&&ms[k].price_index).filter(x=>x!=null);
-  if(!idx.length) return 1; let avg=idx.reduce((a,b)=>a+b,0)/idx.length;
-  return Math.max(0.95, Math.min(1.05, 1+(avg-1)*0.5)); }
+// Near-new reference age (months). Expected retail is anchored to what a near-new
+// one of these sells for, then walked down the age curve to the real sale age.
+var _REF_AGE=3;
+// Continuous retention from a model's age curve: linear interpolation between the
+// bucketed retention_smooth points, so age has NO cliffs — one more month in
+// service is a small, smooth, explainable drop rather than a step.
+function _interpRet(points, age){
+  if(!points||!points.length) return null;
+  let pts=points.filter(p=>p.retention_smooth!=null); if(pts.length<2) return null;
+  if(age<=pts[0].age) return pts[0].retention_smooth;
+  for(let i=1;i<pts.length;i++){ if(age<=pts[i].age){ let a0=pts[i-1], a1=pts[i];
+    let f=(a1.age===a0.age)?0:(age-a0.age)/(a1.age-a0.age);
+    return a0.retention_smooth+(a1.retention_smooth-a0.retention_smooth)*f; } }
+  return pts[pts.length-1].retention_smooth;
+}
 function _retailAt(res, ui, months){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, saleMonthIdx=((curMonth-1+months)%12)+1;
   let D=(typeof window!=="undefined")?window.DEPR:null;
   // Expected retail is built DIRECTLY from the comps you can see: the
-  // recency-weighted median of the same model+trim sales at this age, adjusted
-  // for the sale month, plus a color premium derived from THIS SAME set (so it
-  // can never contradict the sales shown).
+  // recency-weighted median of near-new same model+trim sales (a STABLE anchor,
+  // so it doesn't change with how long you plan to hold), walked down the model's
+  // own age curve to the exact age at sale, plus a color premium derived from
+  // THIS SAME set (so it can never contradict the sales shown). No seasonal
+  // guessing — resale is projected at today's market so month-to-month the only
+  // things that move are age depreciation and the write-down, both explainable.
   if(D&&D.active&&D.a&&D.a.getComps){
-    let comps=D.a.getComps(ui.model, ui.trim, months);
+    let comps=D.a.getComps(ui.model, ui.trim, _REF_AGE);   // stable near-new comp set
     if(comps.length){
-      let base=_wmedComps(comps,"price"), sf=_seasonFactor(D.a, saleMonthIdx), dts=_wmedComps(comps,"dts");
+      let base=_wmedComps(comps,"price"), dts=_wmedComps(comps,"dts"), ageMed=_wmedComps(comps,"age");
+      // walk the model's retention curve from the comps' age to the age at sale
+      let turnMo=(dts!=null?dts:45)/DPM, ageAtSale=months+turnMo;
+      let curve=(D.a.age_curves&&D.a.age_curves[ui.model])?D.a.age_curves[ui.model].points:null;
+      let rSale=_interpRet(curve, ageAtSale), rBase=_interpRet(curve, (ageMed!=null?ageMed:_REF_AGE));
+      let ageFactor=(rSale!=null&&rBase!=null&&rBase>0)?(rSale/rBase):1;
+      ageFactor=Math.max(0.80, Math.min(1.02, ageFactor));  // guard thin data
       let grp=(s.color_map||{})[String(ui.ext||"").toUpperCase()]||null, cprem=0, cn=0, cdd=null;
       if(grp){ let same=comps.filter(c=>c.color===grp);
         if(same.length>=2){ let sameMed=_wmedComps(same,"price"), sameDts=_wmedComps(same,"dts");
           if(sameMed!=null&&base!=null){ let cap=0.15*base; cprem=Math.round(Math.max(-cap,Math.min(cap,sameMed-base))); cn=same.length;
             if(sameDts!=null&&dts!=null) cdd=Math.round(sameDts-dts); } } }
-      let seasoned=Math.round(base*sf);
+      let aged=Math.round(base*ageFactor);
       let lo=_wpctComps(comps,"price",0.25), hi=_wpctComps(comps,"price",0.75);
-      return {price:seasoned+cprem, base:seasoned, n:comps.length, dts:(dts!=null?Math.round(dts):null),
-        low:(lo!=null?Math.round(lo*sf)+cprem:null), high:(hi!=null?Math.round(hi*sf)+cprem:null),
-        month:saleMonthIdx, color:grp, colorPrem:cprem, colorN:cn, colorDtsDelta:cdd, seasonFactor:sf, src:"comps"}; }
+      return {price:aged+cprem, base:aged, n:comps.length, dts:(dts!=null?Math.round(dts):null),
+        low:(lo!=null?Math.round(lo*ageFactor)+cprem:null), high:(hi!=null?Math.round(hi*ageFactor)+cprem:null),
+        month:saleMonthIdx, color:grp, colorPrem:cprem, colorN:cn, colorDtsDelta:cdd,
+        ageFactor:Math.round(ageFactor*1000)/1000, ageAtSale:Math.round(ageAtSale*10)/10, refAge:_REF_AGE, src:"comps"}; }
   }
   let reb=modelRebate(s,ui.model,ui.year,curMonth);
   let mp=Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8));
@@ -1577,12 +1608,14 @@ function unitDifference(res, ui, months, policy){
     expectedCost:Math.round(expectedCost), expectedRetail:Math.round(ret.price),
     retailBase:ret.base, retailLow:ret.low, retailHigh:ret.high, saleMonth:ret.month,
     difference:Math.round(ret.price-expectedCost), compN:ret.n, avgDays:(ret.dts!=null?Math.round(ret.dts):null),
-    color:ret.color||null, colorPrem:(ret.colorPrem!=null?ret.colorPrem:null), colorN:(ret.colorN||0), colorDtsDelta:(ret.colorDtsDelta!=null?ret.colorDtsDelta:null)};
+    color:ret.color||null, colorPrem:(ret.colorPrem!=null?ret.colorPrem:null), colorN:(ret.colorN||0), colorDtsDelta:(ret.colorDtsDelta!=null?ret.colorDtsDelta:null),
+    ageFactor:(ret.ageFactor!=null?ret.ageFactor:null), ageAtSale:(ret.ageAtSale!=null?ret.ageAtSale:null), refAge:(ret.refAge!=null?ret.refAge:null)};
 }
 function _currentPolicy(s){
   return {method:(s.writedown_method==="flat")?"flat":"pct", rate:parseFloat(s.loaner_depr_pct)||1.5,
     flat:parseFloat(s.writedown_flat)||0, base:(String(s.loaner_depr_base).toLowerCase()==="msrp")?"msrp":"cost",
     months:Math.max(1,parseInt(s.loaner_service_months,10)||3)}; }
+function _trimHead(t){ return String(t||"").trim().toUpperCase().split(/\s+/)[0]; }
 function serviceSelection(res, policyOverride, skipByMonth){
   let s=res.settings, policy=policyOverride||_currentPolicy(s), months=policy.months;
   let units=[];
@@ -1596,7 +1629,36 @@ function serviceSelection(res, policyOverride, skipByMonth){
     units.push(Object.assign(ui, d, {byMonth:byMonth})); }); });
   units.sort((a,b)=>b.difference-a.difference);
   units.forEach((u,i)=>u.rank=i+1);
-  return {policy:policy, months:months, units:units};
+  let div=skipByMonth?null:_diversify(res, units, s);
+  return {policy:policy, months:months, units:units, mix:(div?div.mix:null), absorb:(div?div.absorb:null), concentration:(div?div.concentration:null)};
+}
+// Diversification. Every unit placed now comes out of service together, so we can
+// only retail so many of the SAME model+trim in that window. Cap each config's
+// recommended placements at what our own history says we retail per month (over a
+// ~2-month release window), so we don't line the used lot with five identical cars.
+function _diversify(res, units, s){
+  if(!units.length) return null;
+  let need=Math.max(1,parseInt(s.service_need,10)||1);
+  let D=(typeof window!=="undefined")?window.DEPR:null;
+  let cfg=u=>u.model+" "+_trimHead(u.trim);
+  let absorb={};
+  units.forEach(u=>{ let k=cfg(u); if(absorb[k]===undefined){
+    let r=(D&&D.a&&D.a.salesRate)?D.a.salesRate(u.model,u.trim):null; absorb[k]=(r!=null?Math.round(r*100)/100:null); } });
+  let capOf=k=>{ let r=absorb[k]; return (r==null)?99:Math.max(1,Math.round(r*2)); };
+  // naive top `need` (pure difference) — to measure over-concentration
+  let naive=units.slice(0,need), naiveCnt={}; naive.forEach(u=>{ let k=cfg(u); naiveCnt[k]=(naiveCnt[k]||0)+1; });
+  let topCfg=null,topN=0; Object.keys(naiveCnt).forEach(k=>{ if(naiveCnt[k]>topN){ topN=naiveCnt[k]; topCfg=k; } });
+  // diversified greedy pick honoring caps
+  let taken={}, mix=[];
+  for(let u of units){ if(mix.length>=need) break; let k=cfg(u); let c=taken[k]||0;
+    if(c<capOf(k)){ taken[k]=c+1; mix.push({stock:u.uid, name:(u.year+" "+u.model+" "+u.trim), cfg:k, difference:u.difference, rank:u.rank, absorb:absorb[k]}); } }
+  // if caps starved the list (need exceeds what diversity allows), fill by rank
+  if(mix.length<need){ let have={}; mix.forEach(m=>have[m.stock]=1);
+    for(let u of units){ if(mix.length>=need) break; if(have[u.uid]) continue;
+      mix.push({stock:u.uid, name:(u.year+" "+u.model+" "+u.trim), cfg:cfg(u), difference:u.difference, rank:u.rank, absorb:absorb[cfg(u)]}); } }
+  let over=(need>=3 && topN>Math.max(1, capOf(topCfg)) && topN/need>0.5);
+  return {absorb:absorb, mix:mix,
+    concentration:{over:over, config:topCfg, count:topN, need:need, rate:(topCfg?absorb[topCfg]:null), cap:(topCfg?capOf(topCfg):null)}};
 }
 function policyExplorer(res){
   let s=res.settings, cur=serviceSelection(res, null, true), curTop=cur.units[0]?cur.units[0].stock:null;
@@ -1615,8 +1677,11 @@ function acquisitionRecs(res){
   let firstWord=t=>String(t||"").trim().toUpperCase().split(/\s+/)[0];
   // current coverage by model + trim head
   let cov={}; res.lines.forEach(l=>{ let k=l.model+"|"+firstWord(l.trim); cov[k]=(cov[k]||0)+(l.onlot||0); });
+  // only models we actually sell new today can be ordered — never surface a
+  // discontinued line (Q50, Q70L, …) as a unit to "order and keep in".
+  let curModels={}; (res.inv||[]).forEach(u=>{ if(u.model) curModels[String(u.model).toUpperCase()]=1; });
   let recs=[];
-  Object.keys(res.depr.trim).forEach(model=>{ res.depr.trim[model].forEach(t=>{
+  Object.keys(res.depr.trim).forEach(model=>{ if(!curModels[String(model).toUpperCase()]) return; res.depr.trim[model].forEach(t=>{
     if(t.n<8||t.gross==null) return;                      // need real history + a gross read
     let head=firstWord(t.trim), onlot=cov[model+"|"+head]||0;
     let turn=t.dts||45, speed=Math.max(0,(60-turn)/60);   // 0..1 fast
@@ -2069,9 +2134,11 @@ function serviceSelectionRender(res){
   if(second) lead += margin>0 ? (", <span style='color:var(--good);font-weight:700'>$"+margin.toLocaleString()+"</span> better than the next unit.")
                               : ", tied with the next unit.";
   else lead += ".";
-  if(need>1) lead+=" Service needs "+need+" — the top "+need+" rows are the picks.";
+  if(need>1) lead+=" Service needs "+need+" — the diversified mix below is the pick.";
   H.push("<div class='lead'>"+lead+"</div>");
-  H.push("<div class='foot' style='margin:0 0 4px'>Click any unit to see how its cost stacks.</div>");
+  if(need>1) H.push(placementMixRender(sel, need));
+  H.push(idealOrderRender(res));
+  H.push("<div class='foot' style='margin:8px 0 4px'>Every candidate, ranked by difference. Click any unit to see how its cost stacks.</div>");
   H.push("<table class='seltbl'><thead><tr><th></th><th>Rank</th><th>Unit</th><th class='r'>Expected cost</th><th class='r'>Expected retail</th><th class='r'>Difference</th></tr></thead><tbody>");
   units.forEach(u=>{
     H.push("<tr class='urow"+(u.rank<=need?" toprow":"")+"' onclick='toggleSel(this)'>"+
@@ -2083,6 +2150,50 @@ function serviceSelectionRender(res){
   });
   H.push("</tbody></table>");
   H.push(policyExplorerRender(res));
+  return H.join("");
+}
+// Diversified placement mix — caps identical configs so we don't flood the used
+// lot with five of the same car when they all come out of service together.
+function placementMixRender(sel, need){
+  let mix=sel.mix, con=sel.concentration; if(!mix||!mix.length) return "";
+  let H=["<div class='mixbox'>"];
+  H.push("<div class='mixh'>Recommended placement mix"+(need>1?" ("+need+" units)":"")+"</div>");
+  if(con&&con.over){
+    H.push("<div class='warn'>Heads up on diversification: your best-difference units are mostly <b>"+esc(con.config)+"</b> ("+con.count+" of the top "+con.need+"). "+
+      "Our history retails only about "+(con.rate!=null?con.rate.toFixed(1):"?")+" of those a month, and every loaner placed now comes out of service together — five identical ones would flood the used lot and undercut each other. The mix below spreads the placements while keeping the strongest units per config.</div>");
+  } else if(need>1){
+    H.push("<div class='basis'>These are diversified so the units don't all land on the used lot as the same car at the same time.</div>");
+  }
+  H.push("<table class='seltbl'><thead><tr><th>Place</th><th>Unit</th><th class='r'>Difference</th><th class='r'>Sells ~/mo</th></tr></thead><tbody>");
+  mix.forEach((m,i)=>H.push("<tr class='toprow'><td>"+(i+1)+"</td><td>"+esc(m.name+" · "+m.stock)+"</td>"+
+    "<td class='r'>"+diffCell(m.difference)+"</td><td class='r'>"+(m.absorb!=null?m.absorb.toFixed(1):"—")+"</td></tr>"));
+  H.push("</tbody></table></div>");
+  return H.join("");
+}
+// The other half of the question: not just which unit we HAVE, but which config
+// we should keep ORDERING for the loaner program. Built from the same per-unit
+// economics as the ranking above, grouped by model+trim and ranked by the MEDIAN
+// difference — robust to one-off units, so it answers "what should we routinely
+// order," and it converges with the in-stock top pick by construction.
+function idealOrderRender(res){
+  let sel=res.selection; if(!sel||!sel.units||!sel.units.length) return "";
+  let g={};
+  sel.units.forEach(u=>{ let k=u.model+" "+u.trim; (g[k]=g[k]||{units:[],model:u.model,trim:u.trim}).units.push(u); });
+  let med=arr=>{ let v=arr.slice().sort((a,b)=>a-b), n=v.length; return n? (n%2?v[(n-1)/2]:Math.round((v[n/2-1]+v[n/2])/2)) : null; };
+  let rows=Object.keys(g).map(k=>{ let x=g[k], ds=x.units.map(u=>u.difference);
+    let days=x.units.map(u=>u.avgDays).filter(d=>d!=null);
+    return {config:k, model:x.model, trim:x.trim, n:x.units.length,
+      medDiff:med(ds), medRetail:med(x.units.map(u=>u.expectedRetail)), days:(days.length?med(days):null)}; });
+  rows.sort((a,b)=>b.medDiff-a.medDiff);
+  let top=rows.slice(0,3); if(!top.length) return "";
+  let haveTop=(sel.units[0])?(sel.units[0].model+" "+sel.units[0].trim):null;
+  let H=["<details class='mixbox' open><summary class='mixh'>Ideal unit to order &amp; keep in</summary>"];
+  H.push("<div class='basis'>The config with the best <b>typical</b> difference across every unit of it we've got — what to keep ordering for the loaner program, rather than a one-off unit that happened to price well. Over time this and the in-stock top pick should converge.</div>");
+  H.push("<table class='seltbl'><thead><tr><th>Order</th><th>Config</th><th class='r'>Units on lot</th><th class='r'>Typical difference</th><th class='r'>Days to sell</th></tr></thead><tbody>");
+  top.forEach((r,i)=>{ let match=(haveTop&&r.config.toUpperCase()===haveTop.toUpperCase());
+    H.push("<tr class='"+(match?"toprow":"")+"'><td>"+(i+1)+"</td><td>"+esc(r.config)+(match?" <span class='flag'>matches top in-stock pick</span>":"")+"</td>"+
+      "<td class='r'>"+r.n+"</td><td class='r'>"+diffCell(r.medDiff)+"</td><td class='r'>"+(r.days!=null?r.days+"d":"—")+"</td></tr>"); });
+  H.push("</tbody></table></details>");
   return H.join("");
 }
 function unitStackInner(u,p){
@@ -2105,11 +2216,12 @@ function unitStackInner(u,p){
   let colorTxt = (u.color && u.colorN>=2) ? (" Within these sales, the <b>"+esc(u.color.toLowerCase())+"</b> ones sold "+(u.colorPrem>=0?"+$":"−$")+Math.abs(u.colorPrem||0).toLocaleString()+" vs the set"+
       (u.colorDtsDelta!=null?" and "+(u.colorDtsDelta<=0?Math.abs(u.colorDtsDelta)+" days faster":u.colorDtsDelta+" days slower"):"")+", so that adjustment is applied.")
     : (u.color ? (" This unit is <b>"+esc(u.color.toLowerCase())+"</b>, but there aren't enough same-color sales here to adjust — no color premium applied.") : "");
+  var ageTxt=(u.ageFactor!=null&&u.ageFactor<0.999)?(", then walked down this model's age curve to ~"+(u.ageAtSale!=null?u.ageAtSale:(p.months+1.5))+" months old at sale (×"+u.ageFactor.toFixed(3)+")"):"";
   H.push("<div class='basis'>Expected price is the recency-weighted median of "+
-    (u.compN>0?("the "+u.compN+" historical "+esc(u.model+" "+u.trim)+" sale"+(u.compN>1?"s":"")+" listed below (at ~"+p.months+" months of age"+(u.avgDays!=null?", ~"+u.avgDays+" days to sell":"")+"), adjusted for the sale month"):"a modeled fallback (no matching history yet)")+
-    "."+colorTxt+"</div>");
-  // the actual comps behind the number
-  var comps=(typeof window!=="undefined"&&window.DEPR&&window.DEPR.a&&window.DEPR.a.getComps)?window.DEPR.a.getComps(u.model,u.trim,p.months):[];
+    (u.compN>0?("the "+u.compN+" recent near-new "+esc(u.model+" "+u.trim)+" sale"+(u.compN>1?"s":"")+" listed below"+ageTxt):"a modeled fallback (no matching history yet)")+
+    ". Projected at today's market — no seasonal guessing."+colorTxt+"</div>");
+  // the actual comps behind the number — the same near-new set the anchor is drawn from
+  var comps=(typeof window!=="undefined"&&window.DEPR&&window.DEPR.a&&window.DEPR.a.getComps)?window.DEPR.a.getComps(u.model,u.trim,u.refAge||3):[];
   if(comps.length){
     H.push("<details class='fbreak'><summary>Show the "+comps.length+" sale"+(comps.length>1?"s":"")+" this price is based on</summary><div class='fbwrap'>");
     H.push("<table class='mos'><thead><tr><th>Sold</th><th>Vehicle</th><th>Color</th><th class='r'>Sold for</th><th class='r'>Days to sell</th><th class='r'>Age</th></tr></thead><tbody>");
@@ -2120,7 +2232,7 @@ function unitStackInner(u,p){
     if(comps.length>30) H.push("<div class='basis'>Showing the 30 most recent of "+comps.length+".</div>");
     H.push("</div></details>");
   }
-  H.push("<div class='basis' style='margin-top:8px'>Cushion at each service length. It climbs because the write-down grows every month in service, and steps down when the vehicle crosses into the next age band your sales history resolves (roughly every 6 months) — both real, nothing invented:</div>");
+  H.push("<div class='basis' style='margin-top:8px'>Cushion at each service length. Month to month only two things move, and both are real: the <b>write-down grows</b> one more month (helps the cushion), while the car is <b>one month older</b> at sale so it resells for slightly less (hurts it). The bigger step happens when the sale age pushes past the 7-month velocity window and the bonus is lost:</div>");
   H.push("<table class='mos'><thead><tr><th>Months in service</th>"+u.byMonth.map(bm=>"<th class='r'>"+bm.months+"</th>").join("")+"</tr></thead><tbody><tr><td>Cushion</td>"+
     u.byMonth.map(bm=>"<td class='r"+(bm.months===p.months?" cur":"")+"'>"+diffCell(bm.difference)+"</td>").join("")+"</tr></tbody></table>");
   return H.join("");

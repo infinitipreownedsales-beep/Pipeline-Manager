@@ -682,34 +682,52 @@ function _wpctComps(arr, key, pct){
   let v=arr.filter(c=>c[key]!=null&&c.weight>0).map(c=>[c[key],c.weight]).sort((a,b)=>a[0]-b[0]);
   if(!v.length) return null; let tot=v.reduce((s,x)=>s+x[1],0), th=tot*pct, run=0;
   for(let x of v){ run+=x[1]; if(run>=th) return x[0]; } return v[v.length-1][0]; }
-// season factor: 3-month smoothed monthly index, damped 50% and clamped to ±5%,
-// so thin monthly data can't swing the resale wildly month to month.
-function _seasonFactor(a, monthIdx){
-  let ms=a.seasonality&&a.seasonality.months; if(!ms) return 1;
-  let i=monthIdx-1, idx=[(i+11)%12,i,(i+1)%12].map(k=>ms[k]&&ms[k].price_index).filter(x=>x!=null);
-  if(!idx.length) return 1; let avg=idx.reduce((a,b)=>a+b,0)/idx.length;
-  return Math.max(0.95, Math.min(1.05, 1+(avg-1)*0.5)); }
+// Near-new reference age (months). Expected retail is anchored to what a near-new
+// one of these sells for, then walked down the age curve to the real sale age.
+var _REF_AGE=3;
+// Continuous retention from a model's age curve: linear interpolation between the
+// bucketed retention_smooth points, so age has NO cliffs — one more month in
+// service is a small, smooth, explainable drop rather than a step.
+function _interpRet(points, age){
+  if(!points||!points.length) return null;
+  let pts=points.filter(p=>p.retention_smooth!=null); if(pts.length<2) return null;
+  if(age<=pts[0].age) return pts[0].retention_smooth;
+  for(let i=1;i<pts.length;i++){ if(age<=pts[i].age){ let a0=pts[i-1], a1=pts[i];
+    let f=(a1.age===a0.age)?0:(age-a0.age)/(a1.age-a0.age);
+    return a0.retention_smooth+(a1.retention_smooth-a0.retention_smooth)*f; } }
+  return pts[pts.length-1].retention_smooth;
+}
 function _retailAt(res, ui, months){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, saleMonthIdx=((curMonth-1+months)%12)+1;
   let D=(typeof window!=="undefined")?window.DEPR:null;
   // Expected retail is built DIRECTLY from the comps you can see: the
-  // recency-weighted median of the same model+trim sales at this age, adjusted
-  // for the sale month, plus a color premium derived from THIS SAME set (so it
-  // can never contradict the sales shown).
+  // recency-weighted median of near-new same model+trim sales (a STABLE anchor,
+  // so it doesn't change with how long you plan to hold), walked down the model's
+  // own age curve to the exact age at sale, plus a color premium derived from
+  // THIS SAME set (so it can never contradict the sales shown). No seasonal
+  // guessing — resale is projected at today's market so month-to-month the only
+  // things that move are age depreciation and the write-down, both explainable.
   if(D&&D.active&&D.a&&D.a.getComps){
-    let comps=D.a.getComps(ui.model, ui.trim, months);
+    let comps=D.a.getComps(ui.model, ui.trim, _REF_AGE);   // stable near-new comp set
     if(comps.length){
-      let base=_wmedComps(comps,"price"), sf=_seasonFactor(D.a, saleMonthIdx), dts=_wmedComps(comps,"dts");
+      let base=_wmedComps(comps,"price"), dts=_wmedComps(comps,"dts"), ageMed=_wmedComps(comps,"age");
+      // walk the model's retention curve from the comps' age to the age at sale
+      let turnMo=(dts!=null?dts:45)/DPM, ageAtSale=months+turnMo;
+      let curve=(D.a.age_curves&&D.a.age_curves[ui.model])?D.a.age_curves[ui.model].points:null;
+      let rSale=_interpRet(curve, ageAtSale), rBase=_interpRet(curve, (ageMed!=null?ageMed:_REF_AGE));
+      let ageFactor=(rSale!=null&&rBase!=null&&rBase>0)?(rSale/rBase):1;
+      ageFactor=Math.max(0.80, Math.min(1.02, ageFactor));  // guard thin data
       let grp=(s.color_map||{})[String(ui.ext||"").toUpperCase()]||null, cprem=0, cn=0, cdd=null;
       if(grp){ let same=comps.filter(c=>c.color===grp);
         if(same.length>=2){ let sameMed=_wmedComps(same,"price"), sameDts=_wmedComps(same,"dts");
           if(sameMed!=null&&base!=null){ let cap=0.15*base; cprem=Math.round(Math.max(-cap,Math.min(cap,sameMed-base))); cn=same.length;
             if(sameDts!=null&&dts!=null) cdd=Math.round(sameDts-dts); } } }
-      let seasoned=Math.round(base*sf);
+      let aged=Math.round(base*ageFactor);
       let lo=_wpctComps(comps,"price",0.25), hi=_wpctComps(comps,"price",0.75);
-      return {price:seasoned+cprem, base:seasoned, n:comps.length, dts:(dts!=null?Math.round(dts):null),
-        low:(lo!=null?Math.round(lo*sf)+cprem:null), high:(hi!=null?Math.round(hi*sf)+cprem:null),
-        month:saleMonthIdx, color:grp, colorPrem:cprem, colorN:cn, colorDtsDelta:cdd, seasonFactor:sf, src:"comps"}; }
+      return {price:aged+cprem, base:aged, n:comps.length, dts:(dts!=null?Math.round(dts):null),
+        low:(lo!=null?Math.round(lo*ageFactor)+cprem:null), high:(hi!=null?Math.round(hi*ageFactor)+cprem:null),
+        month:saleMonthIdx, color:grp, colorPrem:cprem, colorN:cn, colorDtsDelta:cdd,
+        ageFactor:Math.round(ageFactor*1000)/1000, ageAtSale:Math.round(ageAtSale*10)/10, refAge:_REF_AGE, src:"comps"}; }
   }
   let reb=modelRebate(s,ui.model,ui.year,curMonth);
   let mp=Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8));
@@ -733,12 +751,14 @@ function unitDifference(res, ui, months, policy){
     expectedCost:Math.round(expectedCost), expectedRetail:Math.round(ret.price),
     retailBase:ret.base, retailLow:ret.low, retailHigh:ret.high, saleMonth:ret.month,
     difference:Math.round(ret.price-expectedCost), compN:ret.n, avgDays:(ret.dts!=null?Math.round(ret.dts):null),
-    color:ret.color||null, colorPrem:(ret.colorPrem!=null?ret.colorPrem:null), colorN:(ret.colorN||0), colorDtsDelta:(ret.colorDtsDelta!=null?ret.colorDtsDelta:null)};
+    color:ret.color||null, colorPrem:(ret.colorPrem!=null?ret.colorPrem:null), colorN:(ret.colorN||0), colorDtsDelta:(ret.colorDtsDelta!=null?ret.colorDtsDelta:null),
+    ageFactor:(ret.ageFactor!=null?ret.ageFactor:null), ageAtSale:(ret.ageAtSale!=null?ret.ageAtSale:null), refAge:(ret.refAge!=null?ret.refAge:null)};
 }
 function _currentPolicy(s){
   return {method:(s.writedown_method==="flat")?"flat":"pct", rate:parseFloat(s.loaner_depr_pct)||1.5,
     flat:parseFloat(s.writedown_flat)||0, base:(String(s.loaner_depr_base).toLowerCase()==="msrp")?"msrp":"cost",
     months:Math.max(1,parseInt(s.loaner_service_months,10)||3)}; }
+function _trimHead(t){ return String(t||"").trim().toUpperCase().split(/\s+/)[0]; }
 function serviceSelection(res, policyOverride, skipByMonth){
   let s=res.settings, policy=policyOverride||_currentPolicy(s), months=policy.months;
   let units=[];
@@ -752,7 +772,36 @@ function serviceSelection(res, policyOverride, skipByMonth){
     units.push(Object.assign(ui, d, {byMonth:byMonth})); }); });
   units.sort((a,b)=>b.difference-a.difference);
   units.forEach((u,i)=>u.rank=i+1);
-  return {policy:policy, months:months, units:units};
+  let div=skipByMonth?null:_diversify(res, units, s);
+  return {policy:policy, months:months, units:units, mix:(div?div.mix:null), absorb:(div?div.absorb:null), concentration:(div?div.concentration:null)};
+}
+// Diversification. Every unit placed now comes out of service together, so we can
+// only retail so many of the SAME model+trim in that window. Cap each config's
+// recommended placements at what our own history says we retail per month (over a
+// ~2-month release window), so we don't line the used lot with five identical cars.
+function _diversify(res, units, s){
+  if(!units.length) return null;
+  let need=Math.max(1,parseInt(s.service_need,10)||1);
+  let D=(typeof window!=="undefined")?window.DEPR:null;
+  let cfg=u=>u.model+" "+_trimHead(u.trim);
+  let absorb={};
+  units.forEach(u=>{ let k=cfg(u); if(absorb[k]===undefined){
+    let r=(D&&D.a&&D.a.salesRate)?D.a.salesRate(u.model,u.trim):null; absorb[k]=(r!=null?Math.round(r*100)/100:null); } });
+  let capOf=k=>{ let r=absorb[k]; return (r==null)?99:Math.max(1,Math.round(r*2)); };
+  // naive top `need` (pure difference) — to measure over-concentration
+  let naive=units.slice(0,need), naiveCnt={}; naive.forEach(u=>{ let k=cfg(u); naiveCnt[k]=(naiveCnt[k]||0)+1; });
+  let topCfg=null,topN=0; Object.keys(naiveCnt).forEach(k=>{ if(naiveCnt[k]>topN){ topN=naiveCnt[k]; topCfg=k; } });
+  // diversified greedy pick honoring caps
+  let taken={}, mix=[];
+  for(let u of units){ if(mix.length>=need) break; let k=cfg(u); let c=taken[k]||0;
+    if(c<capOf(k)){ taken[k]=c+1; mix.push({stock:u.uid, name:(u.year+" "+u.model+" "+u.trim), cfg:k, difference:u.difference, rank:u.rank, absorb:absorb[k]}); } }
+  // if caps starved the list (need exceeds what diversity allows), fill by rank
+  if(mix.length<need){ let have={}; mix.forEach(m=>have[m.stock]=1);
+    for(let u of units){ if(mix.length>=need) break; if(have[u.uid]) continue;
+      mix.push({stock:u.uid, name:(u.year+" "+u.model+" "+u.trim), cfg:cfg(u), difference:u.difference, rank:u.rank, absorb:absorb[cfg(u)]}); } }
+  let over=(need>=3 && topN>Math.max(1, capOf(topCfg)) && topN/need>0.5);
+  return {absorb:absorb, mix:mix,
+    concentration:{over:over, config:topCfg, count:topN, need:need, rate:(topCfg?absorb[topCfg]:null), cap:(topCfg?capOf(topCfg):null)}};
 }
 function policyExplorer(res){
   let s=res.settings, cur=serviceSelection(res, null, true), curTop=cur.units[0]?cur.units[0].stock:null;
@@ -771,8 +820,11 @@ function acquisitionRecs(res){
   let firstWord=t=>String(t||"").trim().toUpperCase().split(/\s+/)[0];
   // current coverage by model + trim head
   let cov={}; res.lines.forEach(l=>{ let k=l.model+"|"+firstWord(l.trim); cov[k]=(cov[k]||0)+(l.onlot||0); });
+  // only models we actually sell new today can be ordered — never surface a
+  // discontinued line (Q50, Q70L, …) as a unit to "order and keep in".
+  let curModels={}; (res.inv||[]).forEach(u=>{ if(u.model) curModels[String(u.model).toUpperCase()]=1; });
   let recs=[];
-  Object.keys(res.depr.trim).forEach(model=>{ res.depr.trim[model].forEach(t=>{
+  Object.keys(res.depr.trim).forEach(model=>{ if(!curModels[String(model).toUpperCase()]) return; res.depr.trim[model].forEach(t=>{
     if(t.n<8||t.gross==null) return;                      // need real history + a gross read
     let head=firstWord(t.trim), onlot=cov[model+"|"+head]||0;
     let turn=t.dts||45, speed=Math.max(0,(60-turn)/60);   // 0..1 fast

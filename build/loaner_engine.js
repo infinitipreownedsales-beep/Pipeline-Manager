@@ -288,6 +288,14 @@ function analyze(sales,halfLife,asOf){
           dts:s.dts, ext:s.ext, color:colorGroup(s.ext), age:s.age_months, year:s.model_year, trim:s.trim,
           weight:Math.round(s.weight*100)/100}; })
         .sort(function(a,b){ return b.date-a.date; });
+    },
+    // how many of a model+trim family we actually RETAIL per month, across the
+    // full history window — used to keep loaner picks diversified (we can only
+    // sell so many of the same config when they all come out of service together)
+    salesRate:function(model,trim){
+      let tw=trimWord(trim), span=Math.max(1,(asOf-dmin)/86400000/30.4), n=0;
+      for(let i=0;i<inf.length;i++){ let s=inf[i]; if(s.model===model && (!tw||trimWord(s.trim)===tw)) n++; }
+      return n/span;
     }
   };
 }

@@ -387,9 +387,11 @@ function serviceSelectionRender(res){
   if(second) lead += margin>0 ? (", <span style='color:var(--good);font-weight:700'>$"+margin.toLocaleString()+"</span> better than the next unit.")
                               : ", tied with the next unit.";
   else lead += ".";
-  if(need>1) lead+=" Service needs "+need+" — the top "+need+" rows are the picks.";
+  if(need>1) lead+=" Service needs "+need+" — the diversified mix below is the pick.";
   H.push("<div class='lead'>"+lead+"</div>");
-  H.push("<div class='foot' style='margin:0 0 4px'>Click any unit to see how its cost stacks.</div>");
+  if(need>1) H.push(placementMixRender(sel, need));
+  H.push(idealOrderRender(res));
+  H.push("<div class='foot' style='margin:8px 0 4px'>Every candidate, ranked by difference. Click any unit to see how its cost stacks.</div>");
   H.push("<table class='seltbl'><thead><tr><th></th><th>Rank</th><th>Unit</th><th class='r'>Expected cost</th><th class='r'>Expected retail</th><th class='r'>Difference</th></tr></thead><tbody>");
   units.forEach(u=>{
     H.push("<tr class='urow"+(u.rank<=need?" toprow":"")+"' onclick='toggleSel(this)'>"+
@@ -401,6 +403,50 @@ function serviceSelectionRender(res){
   });
   H.push("</tbody></table>");
   H.push(policyExplorerRender(res));
+  return H.join("");
+}
+// Diversified placement mix — caps identical configs so we don't flood the used
+// lot with five of the same car when they all come out of service together.
+function placementMixRender(sel, need){
+  let mix=sel.mix, con=sel.concentration; if(!mix||!mix.length) return "";
+  let H=["<div class='mixbox'>"];
+  H.push("<div class='mixh'>Recommended placement mix"+(need>1?" ("+need+" units)":"")+"</div>");
+  if(con&&con.over){
+    H.push("<div class='warn'>Heads up on diversification: your best-difference units are mostly <b>"+esc(con.config)+"</b> ("+con.count+" of the top "+con.need+"). "+
+      "Our history retails only about "+(con.rate!=null?con.rate.toFixed(1):"?")+" of those a month, and every loaner placed now comes out of service together — five identical ones would flood the used lot and undercut each other. The mix below spreads the placements while keeping the strongest units per config.</div>");
+  } else if(need>1){
+    H.push("<div class='basis'>These are diversified so the units don't all land on the used lot as the same car at the same time.</div>");
+  }
+  H.push("<table class='seltbl'><thead><tr><th>Place</th><th>Unit</th><th class='r'>Difference</th><th class='r'>Sells ~/mo</th></tr></thead><tbody>");
+  mix.forEach((m,i)=>H.push("<tr class='toprow'><td>"+(i+1)+"</td><td>"+esc(m.name+" · "+m.stock)+"</td>"+
+    "<td class='r'>"+diffCell(m.difference)+"</td><td class='r'>"+(m.absorb!=null?m.absorb.toFixed(1):"—")+"</td></tr>"));
+  H.push("</tbody></table></div>");
+  return H.join("");
+}
+// The other half of the question: not just which unit we HAVE, but which config
+// we should keep ORDERING for the loaner program. Built from the same per-unit
+// economics as the ranking above, grouped by model+trim and ranked by the MEDIAN
+// difference — robust to one-off units, so it answers "what should we routinely
+// order," and it converges with the in-stock top pick by construction.
+function idealOrderRender(res){
+  let sel=res.selection; if(!sel||!sel.units||!sel.units.length) return "";
+  let g={};
+  sel.units.forEach(u=>{ let k=u.model+" "+u.trim; (g[k]=g[k]||{units:[],model:u.model,trim:u.trim}).units.push(u); });
+  let med=arr=>{ let v=arr.slice().sort((a,b)=>a-b), n=v.length; return n? (n%2?v[(n-1)/2]:Math.round((v[n/2-1]+v[n/2])/2)) : null; };
+  let rows=Object.keys(g).map(k=>{ let x=g[k], ds=x.units.map(u=>u.difference);
+    let days=x.units.map(u=>u.avgDays).filter(d=>d!=null);
+    return {config:k, model:x.model, trim:x.trim, n:x.units.length,
+      medDiff:med(ds), medRetail:med(x.units.map(u=>u.expectedRetail)), days:(days.length?med(days):null)}; });
+  rows.sort((a,b)=>b.medDiff-a.medDiff);
+  let top=rows.slice(0,3); if(!top.length) return "";
+  let haveTop=(sel.units[0])?(sel.units[0].model+" "+sel.units[0].trim):null;
+  let H=["<details class='mixbox' open><summary class='mixh'>Ideal unit to order &amp; keep in</summary>"];
+  H.push("<div class='basis'>The config with the best <b>typical</b> difference across every unit of it we've got — what to keep ordering for the loaner program, rather than a one-off unit that happened to price well. Over time this and the in-stock top pick should converge.</div>");
+  H.push("<table class='seltbl'><thead><tr><th>Order</th><th>Config</th><th class='r'>Units on lot</th><th class='r'>Typical difference</th><th class='r'>Days to sell</th></tr></thead><tbody>");
+  top.forEach((r,i)=>{ let match=(haveTop&&r.config.toUpperCase()===haveTop.toUpperCase());
+    H.push("<tr class='"+(match?"toprow":"")+"'><td>"+(i+1)+"</td><td>"+esc(r.config)+(match?" <span class='flag'>matches top in-stock pick</span>":"")+"</td>"+
+      "<td class='r'>"+r.n+"</td><td class='r'>"+diffCell(r.medDiff)+"</td><td class='r'>"+(r.days!=null?r.days+"d":"—")+"</td></tr>"); });
+  H.push("</tbody></table></details>");
   return H.join("");
 }
 function unitStackInner(u,p){
@@ -423,11 +469,12 @@ function unitStackInner(u,p){
   let colorTxt = (u.color && u.colorN>=2) ? (" Within these sales, the <b>"+esc(u.color.toLowerCase())+"</b> ones sold "+(u.colorPrem>=0?"+$":"−$")+Math.abs(u.colorPrem||0).toLocaleString()+" vs the set"+
       (u.colorDtsDelta!=null?" and "+(u.colorDtsDelta<=0?Math.abs(u.colorDtsDelta)+" days faster":u.colorDtsDelta+" days slower"):"")+", so that adjustment is applied.")
     : (u.color ? (" This unit is <b>"+esc(u.color.toLowerCase())+"</b>, but there aren't enough same-color sales here to adjust — no color premium applied.") : "");
+  var ageTxt=(u.ageFactor!=null&&u.ageFactor<0.999)?(", then walked down this model's age curve to ~"+(u.ageAtSale!=null?u.ageAtSale:(p.months+1.5))+" months old at sale (×"+u.ageFactor.toFixed(3)+")"):"";
   H.push("<div class='basis'>Expected price is the recency-weighted median of "+
-    (u.compN>0?("the "+u.compN+" historical "+esc(u.model+" "+u.trim)+" sale"+(u.compN>1?"s":"")+" listed below (at ~"+p.months+" months of age"+(u.avgDays!=null?", ~"+u.avgDays+" days to sell":"")+"), adjusted for the sale month"):"a modeled fallback (no matching history yet)")+
-    "."+colorTxt+"</div>");
-  // the actual comps behind the number
-  var comps=(typeof window!=="undefined"&&window.DEPR&&window.DEPR.a&&window.DEPR.a.getComps)?window.DEPR.a.getComps(u.model,u.trim,p.months):[];
+    (u.compN>0?("the "+u.compN+" recent near-new "+esc(u.model+" "+u.trim)+" sale"+(u.compN>1?"s":"")+" listed below"+ageTxt):"a modeled fallback (no matching history yet)")+
+    ". Projected at today's market — no seasonal guessing."+colorTxt+"</div>");
+  // the actual comps behind the number — the same near-new set the anchor is drawn from
+  var comps=(typeof window!=="undefined"&&window.DEPR&&window.DEPR.a&&window.DEPR.a.getComps)?window.DEPR.a.getComps(u.model,u.trim,u.refAge||3):[];
   if(comps.length){
     H.push("<details class='fbreak'><summary>Show the "+comps.length+" sale"+(comps.length>1?"s":"")+" this price is based on</summary><div class='fbwrap'>");
     H.push("<table class='mos'><thead><tr><th>Sold</th><th>Vehicle</th><th>Color</th><th class='r'>Sold for</th><th class='r'>Days to sell</th><th class='r'>Age</th></tr></thead><tbody>");
@@ -438,7 +485,7 @@ function unitStackInner(u,p){
     if(comps.length>30) H.push("<div class='basis'>Showing the 30 most recent of "+comps.length+".</div>");
     H.push("</div></details>");
   }
-  H.push("<div class='basis' style='margin-top:8px'>Cushion at each service length. It climbs because the write-down grows every month in service, and steps down when the vehicle crosses into the next age band your sales history resolves (roughly every 6 months) — both real, nothing invented:</div>");
+  H.push("<div class='basis' style='margin-top:8px'>Cushion at each service length. Month to month only two things move, and both are real: the <b>write-down grows</b> one more month (helps the cushion), while the car is <b>one month older</b> at sale so it resells for slightly less (hurts it). The bigger step happens when the sale age pushes past the 7-month velocity window and the bonus is lost:</div>");
   H.push("<table class='mos'><thead><tr><th>Months in service</th>"+u.byMonth.map(bm=>"<th class='r'>"+bm.months+"</th>").join("")+"</tr></thead><tbody><tr><td>Cushion</td>"+
     u.byMonth.map(bm=>"<td class='r"+(bm.months===p.months?" cur":"")+"'>"+diffCell(bm.difference)+"</td>").join("")+"</tr></tbody></table>");
   return H.join("");
