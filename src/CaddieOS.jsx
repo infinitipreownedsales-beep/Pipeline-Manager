@@ -416,16 +416,22 @@ const HoleView=({h,P,ball,onPlace,shots,target})=>{
     if(type==="houses")return <rect key={k} x={x-6} y={y-6} width={12} height={12} rx={2} fill={c1}/>;
     return <g key={k}><circle cx={x} cy={y} r={9} fill={c1}/><circle cx={x-3} cy={y-3} r={4.5} fill={c2} opacity={0.8}/></g>;};
   // A "pool" hazard is a positioned water/sand BODY, not a side band: pool:[d0,d1,x0,x1]
-  // in normalized coords. It's drawn as a filled shape so a real pond looks like a
-  // pond (a big central carry), instead of a string of dots down one edge.
+  // in normalized coords. It's filled with the same small circles as the side hazards
+  // (that look stays), just packed across the whole area so a pond reads as a broad
+  // body of water rather than a thin creek down one edge.
   const pools=hazards.filter(hz=>Array.isArray(hz.pool));
   const bandHaz=hazards.filter(hz=>!Array.isArray(hz.pool));
-  const poolEls=pools.map((hz,i)=>{const[d0,d1,x0,x1]=hz.pool;
-    const cx=(xAt(x0)+xAt(x1))/2,cy=(yAt(d0)+yAt(d1))/2;
-    const rx=Math.abs(xAt(x1)-xAt(x0))/2,ry=Math.abs(yAt(d0)-yAt(d1))/2;
-    const[c1,c2]=COL[dzType(hz.type)]||COL.water;
-    return <g key={"pool"+i}><ellipse cx={cx} cy={cy} rx={rx} ry={ry} fill={c1}/>
-      <ellipse cx={cx-rx*0.18} cy={cy-ry*0.18} rx={rx*0.62} ry={ry*0.62} fill={c2} opacity={0.35}/></g>;});
+  const poolEls=[];
+  pools.forEach((hz,i)=>{const[d0,d1,x0,x1]=hz.pool;
+    const X0=xAt(Math.min(x0,x1)),X1=xAt(Math.max(x0,x1));
+    const Y0=yAt(Math.max(d0,d1)),Y1=yAt(Math.min(d0,d1));   // Y0 top → Y1 bottom
+    const cxp=(X0+X1)/2,cyp=(Y0+Y1)/2,rxp=(X1-X0)/2||1,ryp=(Y1-Y0)/2||1;
+    const type=dzType(hz.type),step=14;
+    for(let yy=Y0;yy<=Y1;yy+=step)for(let xx=X0;xx<=X1;xx+=step){
+      const nx=(xx-cxp)/rxp,ny=(yy-cyp)/ryp; if(nx*nx+ny*ny>1.03)continue;   // clip to an ellipse
+      const jx=((i*7+Math.round(xx)*3+Math.round(yy))%5)-2, jy=((i*3+Math.round(yy)*2+Math.round(xx))%5)-2;
+      poolEls.push(blob(xx+jx,yy+jy,type,"pl"+i+"_"+Math.round(xx)+"_"+Math.round(yy)));
+    }});
   // sample the remaining side-band hazards into blobs that hug the bending corridor
   const feats=[];
   bandHaz.forEach((hz,hi)=>{const s=hz.side==="L"?-1:1;const from=hz.from??0,to=hz.to??1;
