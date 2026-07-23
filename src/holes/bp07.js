@@ -8,6 +8,7 @@ export default {
   par: 5,
   y: 483,                 // ~237 tee→corner + ~246 corner→flag
   tgt: 6,
+  tees: { blue: 558, white: 535, gold: 525, red: 470, green: 375 },   // card yardages, all sets
   hz: "Par 5 around a central tree stand · drive up the LEFT · ponds low-left off the tee · trees divide the fairways · turns back RIGHT to the green · bunker right · houses right",
   favor: "center",
   // Up the left off the tee, then the hole turns back right to the green.

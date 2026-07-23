@@ -8,6 +8,7 @@ export default {
   par: 4,
   y: 327,                 // ~210 tee→corner + ~117 corner→flag
   tgt: 5,
+  tees: { blue: 355, white: 340, gold: 325, red: 215, green: 208 },   // card yardages, all sets
   hz: "Short par 4 · houses / OB down the ENTIRE left · tree line down the right · waste-sand right of the landing · green tucked at the top — position over power",
   favor: "center-right",
   // Tee center-left, a touch right through the landing, green back to center.

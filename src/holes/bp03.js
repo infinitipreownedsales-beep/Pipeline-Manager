@@ -8,6 +8,7 @@ export default {
   par: 3,
   y: 110,
   tgt: 4,
+  tees: { blue: 126, white: 118, gold: 105, red: 95, green: 85 },   // card yardages, all sets
   hz: "All carry over a big central pond (front + left) · line skirts the RIGHT edge to a raised green · small pond off the RIGHT · trees frame both sides · bailout grass long · SHORT is dead",
   favor: "center",
   // Tee sits right of the pond; the line plays up its right edge to a green just past it.

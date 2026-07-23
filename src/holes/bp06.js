@@ -8,6 +8,7 @@ export default {
   par: 3,
   y: 150,
   tgt: 4,
+  tees: { blue: 175, white: 160, gold: 140, red: 108, green: 103 },   // card yardages, all sets
   hz: "All carry over a wooded ravine · pond guards the front-LEFT of the green · trees fill the valley both sides · short and LEFT are dead — miss right or long",
   favor: "center-right",
   dzL: "water",

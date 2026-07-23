@@ -12,6 +12,8 @@ export default {
   par: 4,
   y: 382,
   tgt: 5,
+  tees: { blue: 398, white: 390, gold: 291, red: 275, green: 240,   // card yardages, all sets
+    note: "Two boxes: the BACK box (Blue/White ~390) is behind the water; the FORWARD box (Gold 291) is across it. The tee yardage tells you which is set that day." },
   hz: "Creek cuts ACROSS the middle (forced carry) · pond low-left off the tee · river/lake down the upper-LEFT and left of the green · waste + trees RIGHT · pond front-right of the green",
   dzL: "water",
   dzR: "water",
@@ -31,7 +33,6 @@ export default {
   cornerLabel: "landing",
   green: { toPin: 382, guard: "pond front-right, river left & long, tree line right", reference: "hardwired flag" },
   landing: { target: 200, leaves: 182, note: "~200 up the center carries the creek and leaves ~182 to a green with a pond right" },
-  tees: { note: "Two boxes: the BACK box is behind the water, the FORWARD box is across it. The tee yardage tells you which is set that day." },
   vibe: "A 382 par 4 that plays straighter than it looks but is pinched by water the whole way. A creek cuts across the middle — that's the forced carry — with a pond low-left off the tee and the river running down the upper-left and around the left of the green. The landing area is generous to the RIGHT, but a waste/bunker area and a tree line punish the over-cut, so the tee shot is a center thread: carry the creek, hold the middle, never bail left into the water. From there (~182 in) the green sits just left of your line with a pond front-RIGHT — aim center to center-left, take enough club, and treat right (pond) and long-left (river) as dead. Center is the whole game on this hole.",
   cue: "Read the tee yardage, carry the creek up the center — water left, waste right. Approach center-left, pond's right.",
 };

@@ -8,6 +8,7 @@ export default {
   par: 4,
   y: 374,                 // 258 tee→corner + 116 corner→flag
   tgt: 5,
+  tees: { blue: 375, white: 365, gold: 300, red: 260, green: 250 },   // card yardages, all sets
   hz: "Dogleg par 4 · trees both sides · waste/sand at the corner · big POND guards the front & RIGHT of the green — the approach carries water · miss left, never short-right",
   favor: "center",
   // Out to the corner (~d0.62), then the fairway turns left to a green tucked left.

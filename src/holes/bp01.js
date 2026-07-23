@@ -7,6 +7,7 @@ export default {
   par: 4,
   y: 368,                 // to the flag (this tee): 180 tee→point + 188 point→flag
   tgt: 5,
+  tees: { blue: 408, white: 390, gold: 360, red: 240, green: 220 },   // card yardages, all sets
   hz: "Trees left off the tee, trees down the ENTIRE right · pond top-left by the green · uphill to a raised green · greenside bunkers",
   // centerline: [d (0 tee → 1 green), x (0 left → 1 right)]. Tee sits right of center,
   // the fairway bends left to the landing, then back to a center green.

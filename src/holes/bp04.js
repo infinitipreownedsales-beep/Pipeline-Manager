@@ -8,6 +8,7 @@ export default {
   par: 5,
   y: 516,
   tgt: 6,
+  tees: { blue: 605, white: 530, gold: 515, red: 475, green: 420 },   // card yardages, all sets
   hz: "Tree-lined par 5 · lake LEFT of the tee · WATER runs up the LEFT-center of the fairway through the landing & approach · pond in the trees right-of-center · trees both sides · bunker right of the green",
   favor: "right-center",
   // Tee center, gentle bend, then back right to the green — holding away from the left water.

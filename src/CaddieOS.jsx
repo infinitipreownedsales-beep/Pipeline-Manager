@@ -397,6 +397,10 @@ function lieAt(h,d,x){
   return {lie:"FW",label:"Fairway"};
 }
 
+// Yardage for a hole from the chosen tee (falls back to the hole's flag distance).
+const TEES=[["blue","Blue"],["white","White"],["gold","Gold"],["red","Red"],["green","Green"]];
+const teeYardOf=(h,t)=>(h&&h.tees&&t&&h.tees[t]!=null)?h.tees[t]:(h?h.y:0);
+
 // HoleView — the automatic strategic overview. A clean schematic (not satellite):
 // the fairway BENDS along the hole's real centerline (h.path), hazards are drawn
 // per side and per section (h.hazards) and look like what they are — trees as
@@ -559,6 +563,7 @@ export default function CaddieOS(){
   const [newName,setNewName]=useState("");
   const [newCarry,setNewCarry]=useState("");
   const [courseSel,setCourseSel]=useState("bp");
+  const [teeSel,setTeeSel]=useState("white");   // chosen tee set (applies to the whole round)
   const [viewHole,setViewHole]=useState(null);
   const [teeIn,setTeeIn]=useState("");
   const [tourn,setTourn]=useState(false);
@@ -587,7 +592,7 @@ export default function CaddieOS(){
   const editLiveHole=(hi,d)=>{const sc=[...live.scores];sc[hi]=Math.max(1,(sc[hi]||CH[hi].tgt)+d);saveLive({...live,scores:sc});};
   const editLivePutts=(hi,d)=>{const pa=[...live.puttsArr];pa[hi]=Math.max(0,(pa[hi]||0)+d);saveLive({...live,puttsArr:pa});};
   const convCycle=hi=>{const cv=[...live.convs];cv[hi]=cv[hi]===true?false:cv[hi]===false?null:true;saveLive({...live,convs:cv});};
-  const playHoleNow=i=>{saveLive({...live,hole:i,strokes:0,rem:(live.teeAdj&&live.teeAdj[i])||CH[i].y,onGreen:false,putts:0,pen:0,i35At:null,teeAck:false});setViewHole(null);};
+  const playHoleNow=i=>{saveLive({...live,hole:i,strokes:0,rem:(live.teeAdj&&live.teeAdj[i])||teeYardOf(CH[i],live.tee),onGreen:false,putts:0,pen:0,i35At:null,teeAck:false});setViewHole(null);};
   // Quick hole change from the landing header — jump straight to that hole's tee.
   const goHole=i=>{if(!live||i<0||i>=CH.length||i===live.hole)return;buzz();playHoleNow(i);};
   const endSave=()=>{const idx=live.scores.map((sc,i)=>sc!==null?i:-1).filter(i=>i>=0);
@@ -733,7 +738,7 @@ export default function CaddieOS(){
     else {setLie("FW");setLieLabel("Fairway");}
   },[live?live.hole:-1,live?live.strokes:-1,live?live.onGreen:false,live&&live.bench?live.bench.join(","):""]);
 
-  const startRound=()=>{const N=(courses[courseSel]||COURSES.bp).holes.length;saveLive({course:courseSel,hole:0,strokes:0,rem:CH[0].y,onGreen:false,putts:0,pen:0,i35At:null,teeAck:false,bench:[],shots:[],scores:Array(N).fill(null),puttsArr:Array(N).fill(null),convs:Array(N).fill(null)});};
+  const startRound=()=>{const N=(courses[courseSel]||COURSES.bp).holes.length;saveLive({course:courseSel,tee:teeSel,hole:0,strokes:0,rem:teeYardOf(CH[0],teeSel),onGreen:false,putts:0,pen:0,i35At:null,teeAck:false,bench:[],shots:[],scores:Array(N).fill(null),puttsArr:Array(N).fill(null),convs:Array(N).fill(null)});};
   const addPenalty=()=>saveLive({...live,pen:(live.pen||0)+1,shots:[...(live.shots||[]),{pen:1,from:live.rem,c:"Penalty",h:live.hole+1}]});
   // P3: classify the shot from context so the golfer never labels it by hand.
   const shotType=(from,reach,g)=>live.strokes===0?"tee":g?"approach":from<=34?"pitch":reach?"approach":"positioning";
@@ -774,7 +779,7 @@ export default function CaddieOS(){
       const nr=[...rounds,rd];setRounds(nr);store.set("caddie:rounds",nr);
       saveLive(null);store.set("caddie:live",null);setTab("trends");
     } else {const N=sc.length;const nxt=(()=>{let n=(h+1)%N;while(sc[n]!==null&&n!==h)n=(n+1)%N;return n;})();
-      saveLive({...live,hole:nxt,strokes:0,rem:(live.teeAdj&&live.teeAdj[nxt])||CH[nxt].y,onGreen:false,putts:0,pen:0,i35At:null,teeAck:false,scores:sc,puttsArr:pa,convs:cv});}
+      saveLive({...live,hole:nxt,strokes:0,rem:(live.teeAdj&&live.teeAdj[nxt])||teeYardOf(CH[nxt],live.tee),onGreen:false,putts:0,pen:0,i35At:null,teeAck:false,scores:sc,puttsArr:pa,convs:cv});}
   };
 
   const TabBtn=({id,label})=>(
@@ -827,6 +832,14 @@ export default function CaddieOS(){
             {Object.entries(courses).map(([k,c])=>(
               <button key={k} onClick={()=>setCourseSel(k)} style={{flex:1,border:"none",borderRadius:16,padding:"14px 10px",fontSize:14,fontWeight:700,cursor:"pointer",background:courseSel===k?PINE:"#fff",color:courseSel===k?PAPER:INK,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>{c.name}</button>))}
           </div>
+          {(()=>{const ch=(courses[courseSel]||COURSES.bp).holes;const t0=ch&&ch[0]&&ch[0].tees;if(!t0)return null;
+            return <div style={{marginBottom:12}}>
+              <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:6,textAlign:"center"}}>Playing from</div>
+              <div style={{display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap"}}>
+                {TEES.filter(([k])=>t0[k]!=null).map(([k,lab])=>{const on=teeSel===k;
+                  return <button key={k} onClick={()=>setTeeSel(k)} style={{border:"none",borderRadius:14,padding:"9px 13px",fontSize:13,fontWeight:700,cursor:"pointer",background:on?PINE:"#fff",color:on?PAPER:INK,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.06)"}}>{lab}</button>;})}
+              </div>
+            </div>;})()}
           <button onClick={()=>{buzz();startRound();}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:18,fontWeight:700,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4}}>Start the round</button>
           {!P.clubStats&&<button onClick={()=>setTab("me")} style={{width:"100%",marginTop:10,border:"none",background:"transparent",color:INK,fontSize:13,textDecoration:"underline",cursor:"pointer"}}>First time? Upload your launch-monitor data →</button>}
           <div style={{marginTop:18,background:"#fff",borderRadius:16,padding:16,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
@@ -884,10 +897,15 @@ export default function CaddieOS(){
                   <button className="tapbtn" onClick={()=>goHole(live.hole-1)} disabled={!canL} style={navBtn(canL)}>‹</button>
                   <div style={{textAlign:"center"}}>
                     <div style={{fontFamily:SERIF,fontSize:25,color:INK,fontWeight:700,lineHeight:1.1}}>Hole {H.n||live.hole+1}</div>
-                    <div style={{color:MUTE,fontSize:12,letterSpacing:.4}}>Par {H.par} · {H.y} yds · Shot {live.strokes+1}{live.strokes===0?" (tee)":""}</div>
+                    <div style={{color:MUTE,fontSize:12,letterSpacing:.4}}>Par {H.par} · {teeYardOf(H,live.tee)} yds · Shot {live.strokes+1}{live.strokes===0?" (tee)":""}</div>
                   </div>
                   <button className="tapbtn" onClick={()=>goHole(live.hole+1)} disabled={!canR} style={navBtn(canR)}>›</button>
                 </div>;})()}
+              {/* Tee picker on the tee shot — set the day's tee; the distance re-defaults. */}
+              {live.strokes===0&&H.tees&&<div style={{display:"flex",gap:5,justifyContent:"center",marginBottom:12,flexWrap:"wrap"}}>
+                {TEES.filter(([k])=>H.tees[k]!=null).map(([k,lab])=>{const on=(live.tee||teeSel)===k;
+                  return <button key={k} className="tapbtn" onClick={()=>{setTeeSel(k);saveLive({...live,tee:k,rem:teeYardOf(H,k)});setQYards("");}} style={{border:"none",borderRadius:14,padding:"6px 10px",fontSize:11,fontWeight:700,cursor:"pointer",background:on?INK:"#fff",color:on?PAPER:MUTE,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.05)"}}>{lab} <span style={{opacity:.7}}>{H.tees[k]}</span></button>;})}
+              </div>}
               {/* Hole overview — the clean landing graphic; once you're playing, it's the
                   tappable placement map so you can mark where the ball finished. */}
               {Array.isArray(H.path)&&(live.strokes===0
@@ -908,7 +926,7 @@ export default function CaddieOS(){
                     return <><div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>{live.ballX!=null?"Your spot — tap to move it":"Tap where your ball is — number, lie & club in one tap"}</div>
                       <HoleView h={H} P={P} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)} onPlace={placeFromMap}/>
                       {where&&<div style={{textAlign:"center",fontFamily:SERIF,fontSize:15,color:INK,marginTop:8}}>You're {where}{est!=null?` · about ${est} to the flag`:""}.</div>}</>;})())}
-              {live.strokes===0&&<div style={{fontFamily:SERIF,fontSize:16,color:MUTE,lineHeight:1.5,margin:"10px 0 16px",textAlign:"center"}}>{teeWhisper(H,H.y)}</div>}
+              {live.strokes===0&&<div style={{fontFamily:SERIF,fontSize:16,color:MUTE,lineHeight:1.5,margin:"10px 0 16px",textAlign:"center"}}>{teeWhisper(H,teeYardOf(H,live.tee))}</div>}
               <div style={{textAlign:"center",marginBottom:6,color:MUTE,fontSize:12,letterSpacing:2,textTransform:"uppercase"}}>How far?</div>
               <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:14,marginBottom:18}}>
                 <button onClick={()=>setQYards(String(Math.max(1,y-1)))} style={{border:"none",background:"#fff",width:52,height:52,borderRadius:26,fontSize:24,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>–</button>
