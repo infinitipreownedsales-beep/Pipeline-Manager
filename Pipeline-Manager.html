@@ -193,6 +193,11 @@
   .increw .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 10px;font-size:13px;justify-self:start}
   .increw .del:hover{border-color:var(--warn);color:var(--warn)}
   @media(max-width:640px){.increw{grid-template-columns:1fr 1fr}.increw.thead{display:none}}
+  .colorrow{display:grid;grid-template-columns:110px 140px auto;gap:8px;align-items:center;margin-bottom:6px}
+  .colorrow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .colorrow input,.colorrow select{width:100%}
+  .colorrow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 10px;font-size:13px;justify-self:start}
+  .colorrow .del:hover{border-color:var(--warn);color:var(--warn)}
   /* loaner dashboard cards */
   .loancard .money{display:flex;align-items:baseline;gap:8px;margin:6px 0 4px}
   .loancard .money .net{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}
@@ -463,6 +468,12 @@
         <div class="fld"><label>Order decay</label><input type="number" id="ldecay" value="1.0" step="0.5" title="how fast each extra unit of a combo yields to the next in the build sequence (0 = order a whole combo before the next)"></div>
       </div>
       <div style="margin-top:12px">
+        <div class="dc-sub" style="margin:2px 0 6px">🎨 Paint color codes <span class="dc-note">— map each inventory color CODE to a generic color so resale can apply your history's color premium (white/black/gray sell differently). Unmapped codes get no color adjustment.</span></div>
+        <div id="colorHead" class="colorrow thead"><span>Code</span><span>Generic color</span><span></span></div>
+        <div id="colorRows"></div>
+        <button class="ghost" id="addColor" style="margin-top:8px">＋ Add color code</button>
+      </div>
+      <div style="margin-top:12px">
         <div class="dc-sub" style="margin:2px 0 6px">📋 Incentive programs <span class="dc-note">by <b>model · year · month</b> — <b>overrides</b> the flat rebate/ICV above. Leave Year or Month = <i>Any</i> to apply broadly. Velocity bonuses are monthly, so add a row per month they change. Empty table = use the flat fields above.</span></div>
         <div id="incHead" class="increw thead"><span>Year</span><span>Model</span><span>Month</span><span>Rebate</span><span>ICV</span><span>Dealer cash</span><span>Velocity</span><span></span></div>
         <div id="incRows"></div>
@@ -669,6 +680,33 @@ function trimAnalytics(inf,minN){
   return out;
 }
 
+// Generic color group from a history color NAME, so a unit's paint code (mapped
+// to a generic color) can be priced against the model's own history for that
+// color family — median resale, days-to-sell, and a clamped price factor.
+function colorGroup(name){ let c=norm(name);
+  if(/WHITE|PEARL/.test(c)) return "WHITE";
+  if(/BLACK|OBSIDIAN/.test(c)) return "BLACK";
+  if(/GRAY|GREY|GRAPHITE|CHARCOAL|SLATE|GUN|SHADOW/.test(c)) return "GRAY";
+  if(/SILVER|PLATINUM|TITANIUM|ALUMINUM|LIQUID/.test(c)) return "SILVER";
+  if(/BLUE/.test(c)) return "BLUE";
+  if(/RED|BORDEAUX|WINE|GARNET/.test(c)) return "RED";
+  if(/BROWN|BRONZE|COPPER|MOCHA|TAN|CHAMPAGNE|WHEAT|JAVA/.test(c)) return "BROWN";
+  if(/GREEN/.test(c)) return "GREEN";
+  if(/GOLD/.test(c)) return "GOLD";
+  return "OTHER"; }
+function colorGroupAnalytics(inf){
+  let byModel=groupBy(inf.filter(s=>s.ext),s=>s.model), out={};
+  for(let model in byModel){ let rows=byModel[model];
+    let basePrice=wmean(rows.map(r=>[r.price,r.weight])), baseDts=wmean(rows.map(r=>[r.dts,r.weight]));
+    let groups=groupBy(rows,r=>colorGroup(r.ext)), g={};
+    for(let grp in groups){ let cr=groups[grp], pc=cell(cr,"price"), dc=cell(cr,"dts");
+      g[grp]={n:pc.n, price:pc.median, dts:dc.median,
+        price_prem:(pc.mean&&basePrice)?rnd(pc.mean-basePrice):null,
+        dts_delta:(dc.mean&&baseDts)?rnd(dc.mean-baseDts):null,
+        factor:(pc.median&&basePrice&&pc.n>=4)?Math.max(0.85,Math.min(1.15,pc.median/basePrice)):1}; }
+    out[model]={baseline:rnd(basePrice), groups:g}; }
+  return out;
+}
 function modelPerformance(inf,benchAll){
   let sg=wmean(benchAll.map(s=>[s.gross,s.weight])), sd=wmean(benchAll.map(s=>[s.dts,s.weight]));
   let byModel=groupBy(inf,s=>s.model), items=[];
@@ -767,7 +805,7 @@ function analyze(sales,halfLife,asOf){
       date_min:dmin,date_max:asOf,as_of:asOf,half_life_months:halfLife,age_axis:true,mileage_axis:false,
       note:"Retention is modeled on vehicle age (no odometer in source); age approximated from model year with a Sept anchor."},
     age_curves:ageCurves(inf,false),age_curves_trim:ageCurves(inf,true),
-    color:colorAnalytics(inf),trim:trimAnalytics(inf),model_perf:modelPerformance(inf,sales),
+    color:colorAnalytics(inf),color_groups:colorGroupAnalytics(inf),trim:trimAnalytics(inf),model_perf:modelPerformance(inf,sales),
     seasonality:seasonality(inf),loaner_vs_retail:loanerVsRetail(inf),benchmark:bench,
     predictor:predictor
   };
@@ -1463,9 +1501,16 @@ function _retailAt(res, ui, months){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, saleMonthIdx=((curMonth-1+months)%12)+1;
   let D=(typeof window!=="undefined")?window.DEPR:null;
   if(D&&D.active&&D.a&&window.LoanerIntel){ let r=D.a.predictor(ui.model,ui.trim||null,null,ui.ext||null,saleMonthIdx,months);
-    if(r&&r.ok) return {price:r.price, n:r.n, dts:r.dts, month:saleMonthIdx}; }
+    if(r&&r.ok){
+      // color premium: map the unit's paint code to a generic color, then price
+      // it against the model's own history for that color family
+      let grp=(s.color_map||{})[String(ui.ext||"").toUpperCase()]||null, cfac=1, cprem=null, cdd=null;
+      let cg=D.a.color_groups&&D.a.color_groups[ui.model];
+      if(grp&&cg&&cg.groups&&cg.groups[grp]){ cfac=cg.groups[grp].factor||1; cprem=cg.groups[grp].price_prem; cdd=cg.groups[grp].dts_delta; }
+      return {price:Math.round(r.price*cfac), n:r.n, dts:r.dts, month:saleMonthIdx, color:grp, colorPrem:cprem, colorFactor:cfac, colorDtsDelta:cdd}; }
+  }
   let reb=modelRebate(s,ui.model,ui.year,curMonth);
-  return {price:Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8)), n:0, dts:null, month:saleMonthIdx};
+  return {price:Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8)), n:0, dts:null, month:saleMonthIdx, color:null};
 }
 function unitDifference(res, ui, months, policy){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, year=ui.year||res.tb.today.getFullYear();
@@ -1481,7 +1526,8 @@ function unitDifference(res, ui, months, policy){
   return {invoice:Math.round(ui.cost), icv:Math.round(icv), velocity:Math.round(velo), velocityAvail:Math.round(veloAmt),
     eligible:eligible, writedown:Math.round(wd), recon:Math.round(recon),
     expectedCost:Math.round(expectedCost), expectedRetail:Math.round(ret.price),
-    difference:Math.round(ret.price-expectedCost), compN:ret.n, avgDays:(ret.dts!=null?Math.round(ret.dts):null)};
+    difference:Math.round(ret.price-expectedCost), compN:ret.n, avgDays:(ret.dts!=null?Math.round(ret.dts):null),
+    color:ret.color||null, colorPrem:(ret.colorPrem!=null?ret.colorPrem:null), colorDtsDelta:(ret.colorDtsDelta!=null?ret.colorDtsDelta:null)};
 }
 function _currentPolicy(s){
   return {method:(s.writedown_method==="flat")?"flat":"pct", rate:parseFloat(s.loaner_depr_pct)||1.5,
@@ -1998,9 +2044,11 @@ function unitStackInner(u,p){
   H.push(stkRow("Reconditioning", u.recon, "sub"));
   H.push(stkRow("Expected cost", u.expectedCost, "tot"));
   H.push("</tbody></table>");
+  let colorTxt = u.color ? (" Color "+esc(u.color.toLowerCase())+
+      (u.colorPrem!=null?" ("+(u.colorPrem>=0?"+":"−")+"$"+Math.abs(u.colorPrem).toLocaleString()+" vs model average"+(u.colorDtsDelta!=null?", "+(u.colorDtsDelta<=0?Math.abs(u.colorDtsDelta)+" days faster":u.colorDtsDelta+" days slower"):"")+")":"")+".") : "";
   H.push("<div class='basis'>Expected retail "+money0(u.expectedRetail)+" &mdash; based on "+
     (u.compN>0?(u.compN+" historical "+esc(u.model+" "+u.trim)+" sales"+(u.avgDays!=null?", which took about "+u.avgDays+" days to sell":"")):"the modeled fallback (no matching history yet)")+
-    ". Difference = expected retail &minus; expected cost = "+moneySign(u.difference)+".</div>");
+    "."+colorTxt+" Difference = expected retail &minus; expected cost = "+moneySign(u.difference)+".</div>");
   H.push("<table class='mos'><thead><tr><th>Months in service</th>"+u.byMonth.map(bm=>"<th class='r'>"+bm.months+"</th>").join("")+"</tr></thead><tbody><tr><td>Difference</td>"+
     u.byMonth.map(bm=>"<td class='r"+(bm.months===p.months?" cur":"")+"'>"+diffCell(bm.difference)+"</td>").join("")+"</tr></tbody></table>");
   return H.join("");
@@ -2361,6 +2409,7 @@ function getSettings(){
     preowned_price_pct:numVal("lret",0.80), order_unit_decay:numVal("ldecay",1.0),
     loaner_hold_per_day:numVal("lhold",0), incentives:readIncentives(),
     writedown_method:(document.getElementById("lwdmethod")||{}).value||"pct", writedown_flat:numVal("lwdflat",0),
+    color_map:readColorMap(),
     service_need:numVal("serviceNeed",3), new_retail_gross:numVal("lnewgross",1500),
     loaner_units:readFleet(), preowned_sales:readPreowned() }; }
 function numVal(id,def){ let el=document.getElementById(id); if(!el) return def; let v=parseFloat(el.value); return isNaN(v)?def:v; }
@@ -2368,6 +2417,25 @@ const LOANCFG_IDS=["lfleet","licv80","licv60","licv65","reb80","reb60","reb65","
 function persistLoanCfg(){ try{ let o={}; LOANCFG_IDS.forEach(id=>o[id]=document.getElementById(id).value); localStorage.setItem("pm_loancfg",JSON.stringify(o)); }catch(e){} }
 function restoreLoanCfg(){ try{ let o=JSON.parse(localStorage.getItem("pm_loancfg")||"null"); if(!o) return;
   LOANCFG_IDS.forEach(id=>{ if(o[id]!==undefined&&document.getElementById(id)) document.getElementById(id).value=o[id]; }); }catch(e){} }
+
+/* ---- paint color-code map (translate inventory codes to generic colors) ---- */
+const COLOR_MAP_DEFAULT=[["XKJ","WHITE"],["QBE","WHITE"],["KCN","GRAY"],["KAD","GRAY"],["KH3","BLACK"],["GAT","BLACK"]];
+const COLOR_CHOICES=["WHITE","BLACK","GRAY","SILVER","BLUE","RED","BROWN","GREEN","GOLD","OTHER"];
+function rawColorMap(){ let out=[]; document.querySelectorAll("#colorRows .colorrow").forEach(row=>{
+  if(row.classList.contains("thead")) return;
+  out.push({code:row.querySelector(".c-code").value.trim().toUpperCase(), color:row.querySelector(".c-color").value}); }); return out; }
+function addColorRow(d){ d=d||{}; let row=document.createElement("div"); row.className="colorrow";
+  row.innerHTML="<input class='c-code' placeholder='code' value='"+attrq(d.code||"")+"' style='text-transform:uppercase'>"+
+    "<select class='c-color'>"+COLOR_CHOICES.map(c=>"<option"+((d.color||"WHITE")===c?" selected":"")+">"+c+"</option>").join("")+"</select>"+
+    "<button class='del' title='remove'>✕</button>";
+  row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistColorMap(); });
+  row.querySelectorAll("input,select").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistColorMap(); }));
+  document.getElementById("colorRows").appendChild(row); return row; }
+function readColorMap(){ let m={}; rawColorMap().forEach(r=>{ if(r.code) m[r.code]=r.color; }); return m; }
+function persistColorMap(){ try{ localStorage.setItem("pm_colormap",JSON.stringify(rawColorMap())); }catch(e){} }
+function restoreColorMap(){ let saved=null; try{ saved=JSON.parse(localStorage.getItem("pm_colormap")||"null"); }catch(e){}
+  if(saved&&saved.length) saved.forEach(addColorRow);
+  else COLOR_MAP_DEFAULT.forEach(pair=>addColorRow({code:pair[0],color:pair[1]})); }
 
 /* ---- centralized incentive table (Enh 1+2: by model / year / month) ---- */
 function rawInc(){ let out=[];
@@ -2769,6 +2837,8 @@ window.addEventListener("DOMContentLoaded",function(){
   restoreFleet();
   document.getElementById("addInc").addEventListener("click",function(){ addIncentiveRow(); persistInc(); });
   restoreInc();
+  document.getElementById("addColor").addEventListener("click",function(){ addColorRow(); persistColorMap(); });
+  restoreColorMap();
   restorePreowned(); restoreLoanCfg();
   document.getElementById("pre").addEventListener("change",function(){ liveRecompute(); persistPreowned(); });
   LOANCFG_IDS.forEach(id=>document.getElementById(id).addEventListener("change",function(){ liveRecompute(); persistLoanCfg(); }));

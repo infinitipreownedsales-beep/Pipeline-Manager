@@ -146,6 +146,33 @@ function trimAnalytics(inf,minN){
   return out;
 }
 
+// Generic color group from a history color NAME, so a unit's paint code (mapped
+// to a generic color) can be priced against the model's own history for that
+// color family — median resale, days-to-sell, and a clamped price factor.
+function colorGroup(name){ let c=norm(name);
+  if(/WHITE|PEARL/.test(c)) return "WHITE";
+  if(/BLACK|OBSIDIAN/.test(c)) return "BLACK";
+  if(/GRAY|GREY|GRAPHITE|CHARCOAL|SLATE|GUN|SHADOW/.test(c)) return "GRAY";
+  if(/SILVER|PLATINUM|TITANIUM|ALUMINUM|LIQUID/.test(c)) return "SILVER";
+  if(/BLUE/.test(c)) return "BLUE";
+  if(/RED|BORDEAUX|WINE|GARNET/.test(c)) return "RED";
+  if(/BROWN|BRONZE|COPPER|MOCHA|TAN|CHAMPAGNE|WHEAT|JAVA/.test(c)) return "BROWN";
+  if(/GREEN/.test(c)) return "GREEN";
+  if(/GOLD/.test(c)) return "GOLD";
+  return "OTHER"; }
+function colorGroupAnalytics(inf){
+  let byModel=groupBy(inf.filter(s=>s.ext),s=>s.model), out={};
+  for(let model in byModel){ let rows=byModel[model];
+    let basePrice=wmean(rows.map(r=>[r.price,r.weight])), baseDts=wmean(rows.map(r=>[r.dts,r.weight]));
+    let groups=groupBy(rows,r=>colorGroup(r.ext)), g={};
+    for(let grp in groups){ let cr=groups[grp], pc=cell(cr,"price"), dc=cell(cr,"dts");
+      g[grp]={n:pc.n, price:pc.median, dts:dc.median,
+        price_prem:(pc.mean&&basePrice)?rnd(pc.mean-basePrice):null,
+        dts_delta:(dc.mean&&baseDts)?rnd(dc.mean-baseDts):null,
+        factor:(pc.median&&basePrice&&pc.n>=4)?Math.max(0.85,Math.min(1.15,pc.median/basePrice)):1}; }
+    out[model]={baseline:rnd(basePrice), groups:g}; }
+  return out;
+}
 function modelPerformance(inf,benchAll){
   let sg=wmean(benchAll.map(s=>[s.gross,s.weight])), sd=wmean(benchAll.map(s=>[s.dts,s.weight]));
   let byModel=groupBy(inf,s=>s.model), items=[];
@@ -244,7 +271,7 @@ function analyze(sales,halfLife,asOf){
       date_min:dmin,date_max:asOf,as_of:asOf,half_life_months:halfLife,age_axis:true,mileage_axis:false,
       note:"Retention is modeled on vehicle age (no odometer in source); age approximated from model year with a Sept anchor."},
     age_curves:ageCurves(inf,false),age_curves_trim:ageCurves(inf,true),
-    color:colorAnalytics(inf),trim:trimAnalytics(inf),model_perf:modelPerformance(inf,sales),
+    color:colorAnalytics(inf),color_groups:colorGroupAnalytics(inf),trim:trimAnalytics(inf),model_perf:modelPerformance(inf,sales),
     seasonality:seasonality(inf),loaner_vs_retail:loanerVsRetail(inf),benchmark:bench,
     predictor:predictor
   };

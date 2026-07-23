@@ -412,9 +412,11 @@ function unitStackInner(u,p){
   H.push(stkRow("Reconditioning", u.recon, "sub"));
   H.push(stkRow("Expected cost", u.expectedCost, "tot"));
   H.push("</tbody></table>");
+  let colorTxt = u.color ? (" Color "+esc(u.color.toLowerCase())+
+      (u.colorPrem!=null?" ("+(u.colorPrem>=0?"+":"−")+"$"+Math.abs(u.colorPrem).toLocaleString()+" vs model average"+(u.colorDtsDelta!=null?", "+(u.colorDtsDelta<=0?Math.abs(u.colorDtsDelta)+" days faster":u.colorDtsDelta+" days slower"):"")+")":"")+".") : "";
   H.push("<div class='basis'>Expected retail "+money0(u.expectedRetail)+" &mdash; based on "+
     (u.compN>0?(u.compN+" historical "+esc(u.model+" "+u.trim)+" sales"+(u.avgDays!=null?", which took about "+u.avgDays+" days to sell":"")):"the modeled fallback (no matching history yet)")+
-    ". Difference = expected retail &minus; expected cost = "+moneySign(u.difference)+".</div>");
+    "."+colorTxt+" Difference = expected retail &minus; expected cost = "+moneySign(u.difference)+".</div>");
   H.push("<table class='mos'><thead><tr><th>Months in service</th>"+u.byMonth.map(bm=>"<th class='r'>"+bm.months+"</th>").join("")+"</tr></thead><tbody><tr><td>Difference</td>"+
     u.byMonth.map(bm=>"<td class='r"+(bm.months===p.months?" cur":"")+"'>"+diffCell(bm.difference)+"</td>").join("")+"</tr></tbody></table>");
   return H.join("");

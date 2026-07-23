@@ -382,6 +382,49 @@ def color_analytics(infiniti, min_n=MIN_CELL_N):
     return out
 
 
+def _color_group(name):
+    import re as _re
+    c = _norm(name)
+    if _re.search(r"WHITE|PEARL", c): return "WHITE"
+    if _re.search(r"BLACK|OBSIDIAN", c): return "BLACK"
+    if _re.search(r"GRAY|GREY|GRAPHITE|CHARCOAL|SLATE|GUN|SHADOW", c): return "GRAY"
+    if _re.search(r"SILVER|PLATINUM|TITANIUM|ALUMINUM|LIQUID", c): return "SILVER"
+    if _re.search(r"BLUE", c): return "BLUE"
+    if _re.search(r"RED|BORDEAUX|WINE|GARNET", c): return "RED"
+    if _re.search(r"BROWN|BRONZE|COPPER|MOCHA|TAN|CHAMPAGNE|WHEAT|JAVA", c): return "BROWN"
+    if _re.search(r"GREEN", c): return "GREEN"
+    if _re.search(r"GOLD", c): return "GOLD"
+    return "OTHER"
+
+
+def color_group_analytics(infiniti):
+    """Per model, resale by GENERIC color family (white/black/gray/...), so a
+    unit's paint code (mapped to a generic color) can be priced against the
+    model's own history for that family."""
+    from collections import defaultdict as _dd
+    by_model = _dd(list)
+    for s in infiniti:
+        if s.ext:
+            by_model[s.model].append(s)
+    out = {}
+    for model, rows in by_model.items():
+        base_price = _wmean([(r.price, r.weight) for r in rows])
+        base_dts = _wmean([(r.dts, r.weight) for r in rows])
+        groups = _dd(list)
+        for r in rows:
+            groups[_color_group(r.ext)].append(r)
+        g = {}
+        for grp, cr in groups.items():
+            pc, dc = _cell(cr, "price"), _cell(cr, "dts")
+            g[grp] = {"n": pc["n"], "price": pc["median"], "dts": dc["median"],
+                      "price_prem": _round(pc["mean"] - base_price) if (pc["mean"] and base_price) else None,
+                      "dts_delta": _round(dc["mean"] - base_dts) if (dc["mean"] and base_dts) else None,
+                      "factor": max(0.85, min(1.15, pc["median"] / base_price))
+                      if (pc["median"] and base_price and pc["n"] >= 4) else 1.0}
+        out[model] = {"baseline": _round(base_price), "groups": g}
+    return out
+
+
 def trim_analytics(infiniti, min_n=MIN_CELL_N):
     by_model = defaultdict(lambda: defaultdict(list))
     for s in infiniti:
@@ -609,6 +652,7 @@ def analyze(sales, half_life_months=DEFAULT_HALF_LIFE_MONTHS, as_of=None):
         "age_curves": age_curves(infiniti, by_trim=False),
         "age_curves_trim": age_curves(infiniti, by_trim=True),
         "color": color_analytics(infiniti),
+        "color_groups": color_group_analytics(infiniti),
         "trim": trim_analytics(infiniti),
         "model_perf": model_performance(infiniti, sales),
         "seasonality": seasonality(infiniti),

@@ -42,6 +42,7 @@ function getSettings(){
     preowned_price_pct:numVal("lret",0.80), order_unit_decay:numVal("ldecay",1.0),
     loaner_hold_per_day:numVal("lhold",0), incentives:readIncentives(),
     writedown_method:(document.getElementById("lwdmethod")||{}).value||"pct", writedown_flat:numVal("lwdflat",0),
+    color_map:readColorMap(),
     service_need:numVal("serviceNeed",3), new_retail_gross:numVal("lnewgross",1500),
     loaner_units:readFleet(), preowned_sales:readPreowned() }; }
 function numVal(id,def){ let el=document.getElementById(id); if(!el) return def; let v=parseFloat(el.value); return isNaN(v)?def:v; }
@@ -49,6 +50,25 @@ const LOANCFG_IDS=["lfleet","licv80","licv60","licv65","reb80","reb60","reb65","
 function persistLoanCfg(){ try{ let o={}; LOANCFG_IDS.forEach(id=>o[id]=document.getElementById(id).value); localStorage.setItem("pm_loancfg",JSON.stringify(o)); }catch(e){} }
 function restoreLoanCfg(){ try{ let o=JSON.parse(localStorage.getItem("pm_loancfg")||"null"); if(!o) return;
   LOANCFG_IDS.forEach(id=>{ if(o[id]!==undefined&&document.getElementById(id)) document.getElementById(id).value=o[id]; }); }catch(e){} }
+
+/* ---- paint color-code map (translate inventory codes to generic colors) ---- */
+const COLOR_MAP_DEFAULT=[["XKJ","WHITE"],["QBE","WHITE"],["KCN","GRAY"],["KAD","GRAY"],["KH3","BLACK"],["GAT","BLACK"]];
+const COLOR_CHOICES=["WHITE","BLACK","GRAY","SILVER","BLUE","RED","BROWN","GREEN","GOLD","OTHER"];
+function rawColorMap(){ let out=[]; document.querySelectorAll("#colorRows .colorrow").forEach(row=>{
+  if(row.classList.contains("thead")) return;
+  out.push({code:row.querySelector(".c-code").value.trim().toUpperCase(), color:row.querySelector(".c-color").value}); }); return out; }
+function addColorRow(d){ d=d||{}; let row=document.createElement("div"); row.className="colorrow";
+  row.innerHTML="<input class='c-code' placeholder='code' value='"+attrq(d.code||"")+"' style='text-transform:uppercase'>"+
+    "<select class='c-color'>"+COLOR_CHOICES.map(c=>"<option"+((d.color||"WHITE")===c?" selected":"")+">"+c+"</option>").join("")+"</select>"+
+    "<button class='del' title='remove'>✕</button>";
+  row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistColorMap(); });
+  row.querySelectorAll("input,select").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistColorMap(); }));
+  document.getElementById("colorRows").appendChild(row); return row; }
+function readColorMap(){ let m={}; rawColorMap().forEach(r=>{ if(r.code) m[r.code]=r.color; }); return m; }
+function persistColorMap(){ try{ localStorage.setItem("pm_colormap",JSON.stringify(rawColorMap())); }catch(e){} }
+function restoreColorMap(){ let saved=null; try{ saved=JSON.parse(localStorage.getItem("pm_colormap")||"null"); }catch(e){}
+  if(saved&&saved.length) saved.forEach(addColorRow);
+  else COLOR_MAP_DEFAULT.forEach(pair=>addColorRow({code:pair[0],color:pair[1]})); }
 
 /* ---- centralized incentive table (Enh 1+2: by model / year / month) ---- */
 function rawInc(){ let out=[];
@@ -450,6 +470,8 @@ window.addEventListener("DOMContentLoaded",function(){
   restoreFleet();
   document.getElementById("addInc").addEventListener("click",function(){ addIncentiveRow(); persistInc(); });
   restoreInc();
+  document.getElementById("addColor").addEventListener("click",function(){ addColorRow(); persistColorMap(); });
+  restoreColorMap();
   restorePreowned(); restoreLoanCfg();
   document.getElementById("pre").addEventListener("change",function(){ liveRecompute(); persistPreowned(); });
   LOANCFG_IDS.forEach(id=>document.getElementById(id).addEventListener("change",function(){ liveRecompute(); persistLoanCfg(); }));
