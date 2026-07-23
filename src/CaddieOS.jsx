@@ -460,7 +460,7 @@ const HoleView=({h,P,ball,onPlace,shots,target})=>{
     {/* forced carry line (perpendicular-ish across the corridor at the carry distance) */}
     {h.carry&&h.carry<h.y&&(()=>{const d=h.carry/h.y,x=cxAt(d),y=yAt(d);return <g><line x1={x-fwW/2-7} y1={y} x2={x+fwW/2+7} y2={y} stroke="#7ba7c9" strokeWidth={6} strokeLinecap="round"/><text x={x} y={y-7} textAnchor="middle" fontSize={9} fill="#4a6d86" fontWeight={700}>{h.carryLabel||"carry"} {h.carry}</text></g>;})()}
     {/* player's landing zone */}
-    {lzD!=null&&!target&&<g><ellipse cx={cxAt(lzD)} cy={yAt(lzD)} rx={fwW/2-2} ry={11} fill="none" stroke="#c8a24a" strokeWidth={2} strokeDasharray="3 3"/><text x={cxAt(lzD)} y={yAt(lzD)+3} textAnchor="middle" fontSize={8} fill="#8a7327" fontWeight={800}>you</text></g>}
+    {lzD!=null&&!target&&!ball&&<g><ellipse cx={cxAt(lzD)} cy={yAt(lzD)} rx={fwW/2-2} ry={11} fill="none" stroke="#c8a24a" strokeWidth={2} strokeDasharray="3 3"/><text x={cxAt(lzD)} y={yAt(lzD)+3} textAnchor="middle" fontSize={8} fill="#8a7327" fontWeight={800}>you</text></g>}
     {/* tee */}
     <rect x={tx-10} y={ty} width={20} height={9} rx={2} fill="#233b30"/>
     <text x={tx} y={ty+22} textAnchor="middle" fontSize={9} fill="#6b7d72" fontWeight={700}>TEE</text>
@@ -570,6 +570,8 @@ export default function CaddieOS(){
   const editLivePutts=(hi,d)=>{const pa=[...live.puttsArr];pa[hi]=Math.max(0,(pa[hi]||0)+d);saveLive({...live,puttsArr:pa});};
   const convCycle=hi=>{const cv=[...live.convs];cv[hi]=cv[hi]===true?false:cv[hi]===false?null:true;saveLive({...live,convs:cv});};
   const playHoleNow=i=>{saveLive({...live,hole:i,strokes:0,rem:(live.teeAdj&&live.teeAdj[i])||CH[i].y,onGreen:false,putts:0,pen:0,i35At:null,teeAck:false});setViewHole(null);};
+  // Quick hole change from the landing header — jump straight to that hole's tee.
+  const goHole=i=>{if(!live||i<0||i>=CH.length||i===live.hole)return;buzz();playHoleNow(i);};
   const endSave=()=>{const idx=live.scores.map((sc,i)=>sc!==null?i:-1).filter(i=>i>=0);
     if(idx.length){const rd={date:new Date().toLocaleDateString(),course:courses[live.course]?courses[live.course].name:"",holes:idx.length,total:idx.reduce((a,i)=>a+live.scores[i],0),plan:idx.reduce((a,i)=>a+CH[i].tgt,0),scores:live.scores.map(sc=>sc===null?0:sc),putts:live.puttsArr.reduce((a,b)=>a+(b||0),0),convMade:live.convs.filter(c=>c===true).length,convTried:live.convs.filter(c=>c!==null).length,benched:live.bench||[],shots:live.shots||[]};saveRounds([...rounds,rd]);}
     saveLive(null);store.set("caddie:live",null);setEndArm(false);setTab("trends");};
@@ -856,8 +858,28 @@ export default function CaddieOS(){
                     <button className="tapbtn" onClick={()=>saveLive({...live,dismiss:[...(live.dismiss||[]),c]})} style={{flex:1,border:"none",borderRadius:12,padding:"12px",background:"#f1efe9",color:INK,fontWeight:700,cursor:"pointer"}}>No, it's fine</button>
                   </div>
                 </div>;})()}
-              <div style={{textAlign:"center",color:MUTE,fontSize:11,letterSpacing:2,textTransform:"uppercase",marginBottom:live.strokes===0?8:12}}>Shot {live.strokes+1}{live.strokes===0?" · tee shot":""}</div>
-              {live.strokes===0&&<><HoleView h={H} P={P}/><div style={{fontFamily:SERIF,fontSize:16,color:MUTE,lineHeight:1.5,margin:"10px 0 16px"}}>{teeWhisper(H,H.y)}</div></>}
+              {/* Hole header — number + par/yardage, with quick prev/next hole nav so
+                  you can flip holes and know which is which by the overview, not by reading. */}
+              {(()=>{const navBtn=en=>({border:"none",background:en?"#fff":"transparent",color:en?INK:"#cfcabf",width:44,height:44,borderRadius:22,fontSize:26,fontWeight:400,lineHeight:1,cursor:en?"pointer":"default",boxShadow:en?"0 1px 4px rgba(0,0,0,.06)":"none"});
+                const canL=live.hole>0,canR=live.hole<CH.length-1;
+                return <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                  <button className="tapbtn" onClick={()=>goHole(live.hole-1)} disabled={!canL} style={navBtn(canL)}>‹</button>
+                  <div style={{textAlign:"center"}}>
+                    <div style={{fontFamily:SERIF,fontSize:25,color:INK,fontWeight:700,lineHeight:1.1}}>Hole {H.n||live.hole+1}</div>
+                    <div style={{color:MUTE,fontSize:12,letterSpacing:.4}}>Par {H.par} · {H.y} yds · Shot {live.strokes+1}{live.strokes===0?" (tee)":""}</div>
+                  </div>
+                  <button className="tapbtn" onClick={()=>goHole(live.hole+1)} disabled={!canR} style={navBtn(canR)}>›</button>
+                </div>;})()}
+              {/* Hole overview — the clean landing graphic; once you're playing, it's the
+                  tappable placement map so you can mark where the ball finished. */}
+              {Array.isArray(H.path)&&(live.strokes===0
+                ? <HoleView h={H} P={P}/>
+                : (()=>{const loc=live.ballX!=null?holeContext(H,live.ballD,live.ballX):null;
+                    const where=loc?(loc.blocked?`blocked ${loc.side} — trees on your line`:loc.side==="center"?"in the middle — clean angle":`${loc.side} of the fairway${loc.off?"":" — clean angle"}`):null;
+                    return <><div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>{live.ballX!=null?"Your spot — tap to move it":"Tap the map where your ball is — sharpens the read"}</div>
+                      <HoleView h={H} P={P} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)} onPlace={(d,x)=>saveLive({...live,ballD:d,ballX:x})}/>
+                      {where&&<div style={{textAlign:"center",fontFamily:SERIF,fontSize:15,color:INK,marginTop:8}}>You're {where}.</div>}</>;})())}
+              {live.strokes===0&&<div style={{fontFamily:SERIF,fontSize:16,color:MUTE,lineHeight:1.5,margin:"10px 0 16px",textAlign:"center"}}>{teeWhisper(H,H.y)}</div>}
               <div style={{textAlign:"center",marginBottom:6,color:MUTE,fontSize:12,letterSpacing:2,textTransform:"uppercase"}}>How far?</div>
               <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:14,marginBottom:18}}>
                 <button onClick={()=>setQYards(String(Math.max(1,y-1)))} style={{border:"none",background:"#fff",width:52,height:52,borderRadius:26,fontSize:24,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>–</button>
@@ -869,16 +891,6 @@ export default function CaddieOS(){
                 {[["Tee","FW"],["Fairway","FW"],["Fringe","FRINGE"],["First cut","FIRST"],["Rough","ROUGH"],["Deep","DEEP"],["Bunker","FBUNK"],["Recovery","TREES"]].map(([lab,v])=>{const on=lieLabel===lab;
                   return <button key={lab} className="tapbtn" onClick={()=>{setLie(v);setLieLabel(lab);}} style={{border:"none",borderRadius:20,padding:"10px 14px",fontSize:13,fontWeight:600,cursor:"pointer",background:on?PINE:"#fff",color:on?PAPER:INK,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.06)"}}>{lab}</button>;})}
               </div>
-              {/* Ball placement — the location context Recovery Mode needs. Tap the map
-                  to say where the shot finished; the engine reads side + tree block. */}
-              {live.strokes>0&&Array.isArray(H.path)&&(()=>{
-                const loc=live.ballX!=null?holeContext(H,live.ballD,live.ballX):null;
-                const where=loc?(loc.blocked?`blocked ${loc.side} — trees on your line`:loc.side==="center"?"in the middle — clean angle":`${loc.side} of the fairway${loc.off?"":" — clean angle"}`):null;
-                return <div style={{marginBottom:18}}>
-                  <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>{live.ballX!=null?"Your spot — tap to move it":"Tap the map where your ball is — sharpens the read"}</div>
-                  <HoleView h={H} P={P} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)} onPlace={(d,x)=>saveLive({...live,ballD:d,ballX:x})}/>
-                  {where&&<div style={{textAlign:"center",fontFamily:SERIF,fontSize:15,color:INK,marginTop:8}}>You're {where}.</div>}
-                </div>;})()}
               <div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:22}}>
                 {[["NONE","calm"],["INTO","into"],["DOWN","down"],["CROSS","cross"]].map(([k,l])=>(
                   <button key={k} onClick={()=>setWind(k)} style={{border:"none",borderRadius:14,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer",background:wind===k?INK:"transparent",color:wind===k?PAPER:MUTE}}>{l}</button>))}
