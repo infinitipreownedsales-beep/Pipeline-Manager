@@ -415,9 +415,20 @@ const HoleView=({h,P,ball,onPlace,shots,target})=>{
     if(type==="sand")return <ellipse key={k} cx={x} cy={y} rx={8} ry={5.5} fill={c1}/>;
     if(type==="houses")return <rect key={k} x={x-6} y={y-6} width={12} height={12} rx={2} fill={c1}/>;
     return <g key={k}><circle cx={x} cy={y} r={9} fill={c1}/><circle cx={x-3} cy={y-3} r={4.5} fill={c2} opacity={0.8}/></g>;};
-  // sample a hazard section into blobs that hug the bending corridor
+  // A "pool" hazard is a positioned water/sand BODY, not a side band: pool:[d0,d1,x0,x1]
+  // in normalized coords. It's drawn as a filled shape so a real pond looks like a
+  // pond (a big central carry), instead of a string of dots down one edge.
+  const pools=hazards.filter(hz=>Array.isArray(hz.pool));
+  const bandHaz=hazards.filter(hz=>!Array.isArray(hz.pool));
+  const poolEls=pools.map((hz,i)=>{const[d0,d1,x0,x1]=hz.pool;
+    const cx=(xAt(x0)+xAt(x1))/2,cy=(yAt(d0)+yAt(d1))/2;
+    const rx=Math.abs(xAt(x1)-xAt(x0))/2,ry=Math.abs(yAt(d0)-yAt(d1))/2;
+    const[c1,c2]=COL[dzType(hz.type)]||COL.water;
+    return <g key={"pool"+i}><ellipse cx={cx} cy={cy} rx={rx} ry={ry} fill={c1}/>
+      <ellipse cx={cx-rx*0.18} cy={cy-ry*0.18} rx={rx*0.62} ry={ry*0.62} fill={c2} opacity={0.35}/></g>;});
+  // sample the remaining side-band hazards into blobs that hug the bending corridor
   const feats=[];
-  hazards.forEach((hz,hi)=>{const s=hz.side==="L"?-1:1;const from=hz.from??0,to=hz.to??1;
+  bandHaz.forEach((hz,hi)=>{const s=hz.side==="L"?-1:1;const from=hz.from??0,to=hz.to??1;
     const n=Math.max(2,Math.round((to-from)*13));
     for(let k=0;k<=n;k++){const d=from+(to-from)*k/n;const x=cxAt(d)+s*off;const y=yAt(d);feats.push(blob(x,y,dzType(hz.type),hi+"_"+k));}});
   const gx=cxAt(1),gy=greenY,tx=cxAt(0),ty=teeY;
@@ -436,6 +447,8 @@ const HoleView=({h,P,ball,onPlace,shots,target})=>{
     {/* bending fairway corridor */}
     <path d={smoothPath(px)} fill="none" stroke="#cddbc9" strokeWidth={fwW+11} strokeLinecap="round" strokeLinejoin="round"/>
     <path d={smoothPath(px)} fill="none" stroke="#9dc0a1" strokeWidth={fwW} strokeLinecap="round" strokeLinejoin="round"/>
+    {/* water/sand bodies (ponds) drawn over the ground, then side-band hazards */}
+    {poolEls}
     {/* hazards */}
     {feats}
     {/* forced carry line (perpendicular-ish across the corridor at the carry distance) */}
