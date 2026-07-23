@@ -8,7 +8,7 @@ export default {
   par: 3,
   y: 110,
   tgt: 4,
-  hz: "All carry over a big central pond (front + left) · line skirts the RIGHT edge to a raised green · small pond off the RIGHT · bailout grass long · SHORT is dead",
+  hz: "All carry over a big central pond (front + left) · line skirts the RIGHT edge to a raised green · small pond off the RIGHT · trees frame both sides · bailout grass long · SHORT is dead",
   favor: "center",
   // Tee sits right of the pond; the line plays up its right edge to a green just past it.
   path: [[0, 0.60], [0.5, 0.585], [1, 0.52]],
@@ -17,6 +17,9 @@ export default {
     { type: "water", pool: [0.16, 0.80, 0.06, 0.60] },
     // a small pond off the right of the green
     { type: "water", pool: [0.80, 0.97, 0.66, 0.90] },
+    // tree line down the right of the corridor, and trees framing the left of the green
+    { side: "R", type: "trees", from: 0.05, to: 0.92 },
+    { side: "L", type: "trees", from: 0.82, to: 1.00 },
   ],
   carry: 95,              // carry the pond to the front of the raised green
   carryLabel: "the water",
