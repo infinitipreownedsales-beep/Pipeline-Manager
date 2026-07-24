@@ -408,7 +408,7 @@ const teeYardOf=(h,t)=>(h&&h.tees&&t&&h.tees[t]!=null)?h.tees[t]:(h?h.y:0);
 // read for angle-aware decisions. Falls back to hz text for un-mapped holes.
 // When onPlace is given, the map becomes tappable: a tap drops the ball marker and
 // reports normalized (d,x) back so the engine learns where the shot finished.
-const HoleView=({h,P,ball,onPlace,shots,target})=>{
+const HoleView=({h,P,ball,onPlace,shots,target,tee})=>{
   const HZ=(h.hz||"").toUpperCase();
   const W=220,Ht=300,L=28,Rr=192,uw=Rr-L,teeY=254,greenY=48,span=teeY-greenY;
   const yAt=d=>teeY-Math.max(0,Math.min(1,d))*span;                 // d 0..1 (tee→green) → y
@@ -460,7 +460,14 @@ const HoleView=({h,P,ball,onPlace,shots,target})=>{
   bandHaz.forEach((hz,hi)=>{const s=hz.side==="L"?-1:1;const from=hz.from??0,to=hz.to??1;
     const n=Math.max(2,Math.round((to-from)*13));
     for(let k=0;k<=n;k++){const d=from+(to-from)*k/n;const x=cxAt(d)+s*off;const y=yAt(d);feats.push(blob(x,y,dzType(hz.type),hi+"_"+k));}});
-  const gx=cxAt(1),gy=greenY,tx=cxAt(0),ty=teeY;
+  // Split tees: a shorter tee sits FORWARD up the hole. Derive each tee's spot from
+  // its yardage vs the back tee, so the selected tee's box shows where you actually
+  // play from (e.g. Hole 2's forward tees sit across the water).
+  const teeVals=h.tees?["blue","white","gold","red","green"].filter(k=>h.tees[k]!=null):[];
+  const maxTeeYd=teeVals.length?Math.max(...teeVals.map(k=>h.tees[k])):0;
+  const teeDof=k=>(maxTeeYd&&h.tees&&h.tees[k]!=null)?Math.max(0,Math.min(0.55,(maxTeeYd-h.tees[k])/maxTeeYd)):0;
+  const teeD=tee?teeDof(tee):0;
+  const gx=cxAt(1),gy=greenY,tx=cxAt(teeD),ty=yAt(teeD);
   // Tap → normalized (d,x): invert yAt/xAt using the SVG's own coordinate box.
   const handleTap=onPlace?e=>{const svg=e.currentTarget;const r=svg.getBoundingClientRect();
     const px=(e.clientX-r.left)/r.width*W, py=(e.clientY-r.top)/r.height*Ht;
@@ -483,9 +490,11 @@ const HoleView=({h,P,ball,onPlace,shots,target})=>{
     {/* forced carry line (perpendicular-ish across the corridor at the carry distance) */}
     {h.carry&&h.carry<h.y&&(()=>{const d=h.carry/h.y,x=cxAt(d),y=yAt(d);return <g><line x1={x-fwW/2-7} y1={y} x2={x+fwW/2+7} y2={y} stroke="#7ba7c9" strokeWidth={6} strokeLinecap="round"/><text x={x} y={y-7} textAnchor="middle" fontSize={9} fill="#4a6d86" fontWeight={700}>{h.carryLabel||"carry"} {h.carry}</text></g>;})()}
     {/* player's landing zone */}
-    {/* tee */}
-    <rect x={tx-10} y={ty} width={20} height={9} rx={2} fill="#233b30"/>
-    <text x={tx} y={ty+22} textAnchor="middle" fontSize={9} fill="#6b7d72" fontWeight={700}>TEE</text>
+    {/* tees — faint boxes for the other sets, solid for the one you're playing */}
+    {tee&&teeVals.filter(k=>k!==tee).map(k=>{const d=teeDof(k),x=cxAt(d),yy=yAt(d);
+      return <rect key={"t"+k} x={x-7} y={yy-3} width={14} height={6} rx={2} fill="#233b30" opacity={0.22}/>;})}
+    <rect x={tx-10} y={ty-4} width={20} height={9} rx={2} fill="#233b30"/>
+    <text x={tx} y={ty+16} textAnchor="middle" fontSize={9} fill="#6b7d72" fontWeight={700}>{tee?tee.toUpperCase():"TEE"}</text>
     {/* greenside bunkers */}
     {near&&<><ellipse cx={gx-23} cy={gy+5} rx={9} ry={6} fill="#d9c48c"/><ellipse cx={gx+23} cy={gy+8} rx={8} ry={5} fill="#d9c48c"/></>}
     {/* green */}
@@ -930,7 +939,7 @@ export default function CaddieOS(){
               {/* Hole overview — the clean landing graphic; once you're playing, it's the
                   tappable placement map so you can mark where the ball finished. */}
               {Array.isArray(H.path)&&(live.strokes===0
-                ? <HoleView h={H} P={P}/>
+                ? <HoleView h={H} P={P} tee={live.tee}/>
                 : (()=>{const loc=live.ballX!=null?holeContext(H,live.ballD,live.ballX):null;
                     const est=live.ballX!=null?Math.max(1,Math.min(H.y,Math.round((1-live.ballD)*H.y))):null;
                     const where=loc?(loc.blocked?`blocked ${loc.side} — trees on your line`:loc.side==="center"?"in the middle — clean angle":`${loc.side} of the fairway${loc.off?"":" — clean angle"}`):null;
@@ -942,7 +951,7 @@ export default function CaddieOS(){
                       setQYards(String(remA));setLie(det.lie);setLieLabel(det.label);
                       saveLive({...live,rem:remA,ballD:d,ballX:x});};
                     return <><div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>{live.ballX!=null?"Your spot — tap to move it · then the number below":"First, tap where your ball is — I'll read the number & lie"}</div>
-                      <HoleView h={H} P={P} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)} onPlace={placeFromMap}/>
+                      <HoleView h={H} P={P} tee={live.tee} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)} onPlace={placeFromMap}/>
                       {where&&<div style={{textAlign:"center",fontFamily:SERIF,fontSize:15,color:INK,marginTop:8}}>You're {where}{est!=null?` · about ${est} to the flag`:""}.</div>}</>;})())}
               {live.strokes===0&&<div style={{fontFamily:SERIF,fontSize:16,color:MUTE,lineHeight:1.5,margin:"10px 0 16px",textAlign:"center"}}>{teeWhisper(H,teeYardOf(H,live.tee))}</div>}
               <div style={{textAlign:"center",marginBottom:6,color:MUTE,fontSize:12,letterSpacing:2,textTransform:"uppercase"}}>How far?</div>
@@ -1053,7 +1062,7 @@ export default function CaddieOS(){
                 {tgt&&<div style={{marginTop:14,background:"#fff",borderRadius:16,padding:"12px 12px 6px",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
                   <div style={{textAlign:"center",color:INK,fontSize:14,fontWeight:700,marginBottom:2}}>Can't get home — aim here</div>
                   <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>Advance ~{tgt.carry}y to the short grass, leaves ~{tgt.leaves} in</div>
-                  <HoleView h={H} P={P} target={tgt} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)}/>
+                  <HoleView h={H} P={P} tee={live.tee} target={tgt} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)}/>
                 </div>}
                 {(()=>{ // P5: one plain-language reason this club came up, from the player's own data.
                   const d=disp(fam),cs=cstat(fam);
@@ -1119,7 +1128,7 @@ export default function CaddieOS(){
                 <div style={{fontFamily:SERIF,fontSize:22,color:INK,textAlign:"center",marginBottom:8}}>Where are you dropping?</div>
                 {mapped?<>
                   <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:8}}>{dropPos?"Drop placed — tap to move it":"Tap the map where you'll play from"}</div>
-                  <HoleView h={H} P={P} ball={dropPos} onPlace={(d,x)=>setDropPos({d,x})}/>
+                  <HoleView h={H} P={P} tee={live.tee} ball={dropPos} onPlace={(d,x)=>setDropPos({d,x})}/>
                   {loc&&<div style={{textAlign:"center",fontFamily:SERIF,fontSize:15,color:INK,marginTop:8}}>Dropping {loc.blocked?`blocked ${loc.side} — trees on your line`:loc.side==="center"?"in the middle":`${loc.side} of the fairway`}.</div>}
                 </>:<div style={{textAlign:"center",color:MUTE,fontSize:13,margin:"8px 0"}}>This hole isn't mapped yet — continue and enter your distance on the next shot.</div>}
                 <button className="tapbtn" onClick={confirm} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:17,fontWeight:800,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4,marginTop:14}}>{dropPos||!mapped?"Confirm the drop":"Skip — no exact spot"}</button>
