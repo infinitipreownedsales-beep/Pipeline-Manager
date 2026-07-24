@@ -402,7 +402,36 @@ function fleetFlowRender(res){
     H.push("<tr><td>Retiring</td>"+cad.map(c=>"<td class='r'>"+(c.releasing||0)+"</td>").join("")+"</tr>");
     H.push("<tr><td><b>Place</b></td>"+cad.map(c=>"<td class='r'><b>"+(c.place||0)+"</b></td>").join("")+"</tr></tbody></table>");
   }
+  H.push(outcomesRender(res));
   H.push("</div>");
+  return H.join("");
+}
+// Forecast scorecard — predicted vs. actual on loaners that have sold. Tells us
+// whether the front-end call is running high or low so the model can be tuned.
+function outcomesRender(res){
+  let o=res.loanerOutcomes; if(!o||!o.rows||!o.rows.length) return "";
+  let a=o.agg, anyBorrowed=o.rows.some(r=>!r.exact);
+  let H=["<details class='retsched' open style='margin-top:8px'><summary class='mixh'>Forecast vs. actual <span class='dim' style='font-weight:400'>— "+o.matched+" sold loaner"+(o.matched===1?"":"s")+" scored"+(o.unmatched?(" · "+o.unmatched+" sold row"+(o.unmatched===1?"":"s")+" had no VIN match"):"")+"</span></summary>"];
+  if(a){
+    let rb=a.retailBias, gb=a.grossBias;
+    let call=g=>g==null?"":(g>0?("actuals ran <b style='color:var(--good)'>$"+Math.abs(g).toLocaleString()+" above</b> forecast"):(g<0?("actuals ran <b style='color:var(--bad)'>$"+Math.abs(g).toLocaleString()+" below</b> forecast"):"actuals matched forecast"));
+    H.push("<div class='warn' style='background:rgba(76,141,255,.08);border-color:rgba(76,141,255,.30)'>"+
+      "On "+a.n+" sold loaner"+(a.n===1?"":"s")+", resale "+call(rb)+" (avg miss $"+(a.retailMAE!=null?a.retailMAE.toLocaleString():"—")+"). "+
+      (rb!=null&&Math.abs(rb)>=750?("<b>The resale model is running "+(rb>0?"low — it under-values these; nudge expected retail up.":"high — it over-values these; trim expected retail down.")+"</b> "):"The resale model is tracking close — no change needed. ")+
+      ((a.grossN)?("Front gross "+call(gb)+" (avg miss $"+(a.grossMAE!=null?a.grossMAE.toLocaleString():"—")+", on "+a.grossN+" with a real cost basis)."):"")+
+      "</div>");
+  }
+  H.push("<table class='mos'><thead><tr><th>Sold</th><th>Vehicle</th><th class='r'>In svc</th><th class='r'>Miles</th><th class='r'>Predicted retail</th><th class='r'>Actual</th><th class='r'>Miss</th><th class='r'>Pred. gross</th><th class='r'>Actual gross</th></tr></thead><tbody>");
+  o.rows.forEach(r=>{
+    H.push("<tr><td>"+esc(r.sold||"—")+"</td><td>"+esc((r.model||"")+" "+String(r.ext||"").toLowerCase())+" · "+esc(String(r.stock||r.vin||"").slice(-6))+(r.exact?"":" <span class='dim' title='no exact cost basis in inventory — front gross not scored'>·est</span>")+"</td>"+
+      "<td class='r'>"+r.months+"mo</td><td class='r'>"+(r.miles!=null?r.miles.toLocaleString():"—")+"</td>"+
+      "<td class='r'>"+money0(r.predRetail)+"</td><td class='r'>"+(r.actualPrice!=null?money0(r.actualPrice):"—")+"</td>"+
+      "<td class='r'>"+(r.retailErr!=null?diffCell(r.retailErr):"—")+"</td>"+
+      "<td class='r'>"+(r.exact?diffCell(r.predDiff):"<span class='dim'>—</span>")+"</td><td class='r'>"+(r.actualGross!=null?diffCell(r.actualGross):"—")+"</td></tr>"); });
+  H.push("</tbody></table>");
+  H.push("<div class='basis' style='margin-top:4px'>Predicted resale is recomputed at the age and mileage each unit actually sold at, with its entry-month ICV — a clean read on the model, not on timing. “Miss” is actual minus predicted resale (green = we were conservative)."+
+    (anyBorrowed?" Rows marked <b>·est</b> aren't stocked in current inventory, so there's no real cost basis — their front gross is left out of the scoring.":"")+"</div>");
+  H.push("</details>");
   return H.join("");
 }
 function monLabel(ym){ let m=String(ym||"").split("-"); if(m.length<2) return esc(ym||"");

@@ -753,7 +753,11 @@ function _retailAt(res, ui, months){
 function unitDifference(res, ui, months, policy, milesRate){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, year=ui.year||res.tb.today.getFullYear();
   let ret=_retailAt(res, ui, months);
-  let icv=incentive(s,ui.model,year,curMonth,"icv");
+  // ICV is captured the month the unit was PLACED into service — a unit already in
+  // the fleet keeps the allowance from its entry month (ui.icvMonth), not today's.
+  // A new unit being placed now has no icvMonth, so it uses the current month.
+  let icvMonth=(ui.icvMonth!=null?ui.icvMonth:curMonth), icvYear=(ui.icvYear!=null?ui.icvYear:year);
+  let icv=incentive(s,ui.model,icvYear,icvMonth,"icv");
   let veloAmt=incentive(s,ui.model,year,ret.month,"velocity_bonus");
   // velocity is earned only if the unit RETAILS within the program window —
   // service months + its real used turn (days-to-sell) must clear max months,
@@ -888,8 +892,8 @@ function _fleetCostInfo(res){
   function med(a){ if(!a.length) return 0; let v=a.slice().sort((x,y)=>x-y); return v[Math.floor(v.length/2)]; }
   return function(model, code){
     let cd=String(code||"").slice(0,4), k=model+"|"+cd;
-    if(byCode[k]&&(byCode[k].cost>0||byCode[k].msrp>0)) return {cost:byCode[k].cost, msrp:byCode[k].msrp, trim:byCode[k].trim||rosterTrim[k]||""};
-    let m=byModel[model]; if(m&&(m.costs.length||m.msrps.length)) return {cost:med(m.costs), msrp:med(m.msrps), trim:rosterTrim[k]||""};
+    if(byCode[k]&&(byCode[k].cost>0||byCode[k].msrp>0)) return {cost:byCode[k].cost, msrp:byCode[k].msrp, trim:byCode[k].trim||rosterTrim[k]||"", exact:true};
+    let m=byModel[model]; if(m&&(m.costs.length||m.msrps.length)) return {cost:med(m.costs), msrp:med(m.msrps), trim:rosterTrim[k]||"", exact:false};
     return null; };
 }
 // Best month to RETIRE a specific in-service unit for profitability. Walk the
@@ -905,7 +909,8 @@ function _retireTiming(res, unit, costFn, policy){
   let m0=unit.months||0, miles0=unit.miles||0;
   let mpm=parseFloat(s.loaner_miles_per_month)||1500, maxMo=parseFloat(s.loaner_max_months)||7;
   let rate=(miles0>0&&m0>0.4)?(miles0/m0):mpm;
-  let ui={model:unit.model, trim:info.trim||"", ext:unit.ext||"", year:unit.year||res.tb.today.getFullYear(), cost:info.cost, msrp:info.msrp||info.cost};
+  let ui={model:unit.model, trim:info.trim||"", ext:unit.ext||"", year:unit.year||res.tb.today.getFullYear(), cost:info.cost, msrp:info.msrp||info.cost,
+    icvMonth:(unit.entryMonth!=null?unit.entryMonth:null), icvYear:(unit.entryYear!=null?unit.entryYear:null)};
   // baseline = retail it TODAY at its current age; candidates = hold to each whole
   // month out to the ceiling. The lift is the value of waiting vs. retailing now.
   let nowD=unitDifference(res, ui, Math.max(0.5,m0), policy, rate).difference;
@@ -934,11 +939,13 @@ function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], rele
     let ext=u?u.ext:String(e.ext||"").trim(), grp=ext2grp(ext);
     let uyear=u?parseInt(u.myear||u.my||0,10):(parseInt(e.year||0,10)||0);
     let code=u?u.code:(e.code||"");
-    let icv=incentive(s,model,uyear,today.getMonth()+1,"icv");
+    // the month/year this unit was PLACED into service — locks its ICV allowance
+    let entryMonth=hasStart?(start.getMonth()+1):null, entryYear=hasStart?start.getFullYear():null;
+    let icv=incentive(s,model,uyear,entryMonth!=null?entryMonth:(today.getMonth()+1),"icv");
     // Ask the engine for the PROFIT-OPTIMAL retire month for THIS unit (uses its
-    // own mileage pace). Hard limits still force it out: past 7 months or over the
-    // mile cap, it goes regardless of what the profit curve wants.
-    let rt=_retireTiming(res, {model:model,code:code,ext:ext,miles:miles,months:months,year:uyear}, costFn, policy);
+    // own mileage pace, and its entry-month ICV). Hard limits still force it out:
+    // past 7 months or over the mile cap, it goes regardless of the profit curve.
+    let rt=_retireTiming(res, {model:model,code:code,ext:ext,miles:miles,months:months,year:uyear,entryMonth:entryMonth,entryYear:uyear}, costFn, policy);
     let overCap=miles>=cap, over=months>=maxMo;
     let eligibleMin=months>=minMo, status, why, releaseAt=null, moTo;
     if(overCap||over){ status="🔴 RETIRE NOW"; why=overCap?"over "+cap.toLocaleString()+" mi":"past "+maxMo+"-mo window"; releasing++; moTo=0; releaseAt=today; }
@@ -977,6 +984,56 @@ function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], rele
   return {target:target,in_service:inService,releasing_now:releasing,to_add:toAdd,shortfall:shortfall,
     rows:rows,cadence:cadence,color_mix:colorMix}; }
 
+// Score the forecast against reality. Each row of the weekly used-car-sold upload
+// is matched (by VIN, else stock) to a loaner in the ledger, then we recompute what
+// we WOULD have predicted for it at the age & mileage it actually sold at — using
+// its entry-month ICV — and compare to what it actually brought. That tells us if
+// the model runs high or low so the write-down / resale assumptions can be tuned.
+function loanerOutcomes(res){
+  let s=res.settings, sold=s.sold_units||[], ledgerArr=s.loaner_ledger||[];
+  if(!sold.length||!ledgerArr.length) return {rows:[], agg:null, unmatched:0, matched:0};
+  let byVin={}, byStock={};
+  ledgerArr.forEach(e=>{ if(e.vin) byVin[String(e.vin).toUpperCase()]=e; if(e.stock) byStock[String(e.stock).toUpperCase()]=e; });
+  let costFn=_fleetCostInfo(res), policy=_currentPolicy(s);
+  let mpm=parseFloat(s.loaner_miles_per_month)||1500, today=res.tb.today;
+  let rows=[], unmatched=0;
+  sold.forEach(x=>{
+    let e=(x.vin&&byVin[String(x.vin).toUpperCase()])||(x.stock&&byStock[String(x.stock).toUpperCase()])||null;
+    if(!e){ unmatched++; return; }
+    let entryD=e.entry?new Date(e.entry+"T00:00:00"):null; if(!entryD||isNaN(entryD.getTime())){ unmatched++; return; }
+    let soldD=x.date?new Date(x.date+"T00:00:00"):today; if(isNaN(soldD.getTime())) soldD=today;
+    let svcMonths=Math.max(0.5,(soldD-entryD)/86400000/DPM);
+    let info=costFn(e.model, e.code); if(!info||!(info.cost>0)){ unmatched++; return; }
+    let miles=(x.miles!=null?x.miles:null), rate=(miles!=null&&svcMonths>0.3)?(miles/svcMonths):mpm;
+    let myear=parseInt(e.year||0,10)||today.getFullYear();
+    let ui={model:e.model, trim:info.trim||"", ext:e.ext||"", year:myear, cost:info.cost, msrp:info.msrp||info.cost,
+      icvMonth:entryD.getMonth()+1, icvYear:myear};
+    let pred=unitDifference(res, ui, svcMonths, policy, rate);
+    let actualPrice=(x.price!=null?x.price:null);
+    let actualGross=(x.gross!=null?x.gross:null);
+    // actual cost basis is only known when the export gives BOTH price and gross
+    let actualCost=(actualPrice!=null&&actualGross!=null)?Math.round(actualPrice-actualGross):null;
+    let retailErr=(actualPrice!=null)?Math.round(actualPrice-pred.expectedRetail):null;   // + = sold above forecast
+    // front-gross error is only meaningful when we have a REAL cost basis for this
+    // config (exact code match) — otherwise the borrowed cost makes it noise.
+    let grossErr=(info.exact&&actualGross!=null)?Math.round(actualGross-pred.difference):null;
+    let costErr=(info.exact&&actualCost!=null)?Math.round(actualCost-pred.expectedCost):null;
+    rows.push({vin:e.vin, stock:e.stock||x.stock||"", model:e.model, ext:e.ext||"", entry:e.entry, sold:x.date||"",
+      months:Math.round(svcMonths*10)/10, miles:(miles!=null?Math.round(miles):null), days:x.days, exact:!!info.exact,
+      predRetail:pred.expectedRetail, predCost:pred.expectedCost, predDiff:pred.difference,
+      actualPrice:actualPrice, actualGross:actualGross, actualCost:actualCost, retailErr:retailErr, grossErr:grossErr, costErr:costErr,
+      bonusEligible:pred.eligible}); });
+  if(!rows.length) return {rows:[], agg:null, unmatched:unmatched, matched:0};
+  let mean=a=>a.length?a.reduce((s,x)=>s+x,0)/a.length:null;
+  let rE=rows.filter(r=>r.retailErr!=null).map(r=>r.retailErr), gE=rows.filter(r=>r.grossErr!=null).map(r=>r.grossErr);
+  let agg={n:rows.length, grossN:gE.length,
+    retailBias:rE.length?Math.round(mean(rE)):null, retailMAE:rE.length?Math.round(mean(rE.map(Math.abs))):null,
+    grossBias:gE.length?Math.round(mean(gE)):null, grossMAE:gE.length?Math.round(mean(gE.map(Math.abs))):null,
+    predRetail:Math.round(mean(rows.map(r=>r.predRetail))), actualPrice:(rows.some(r=>r.actualPrice!=null)?Math.round(mean(rows.filter(r=>r.actualPrice!=null).map(r=>r.actualPrice))):null)};
+  rows.sort((a,b)=>String(b.sold).localeCompare(String(a.sold)));
+  return {rows:rows, agg:agg, unmatched:unmatched, matched:rows.length};
+}
+
 function runEngine(inv,sales,s,today){
   let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,effectiveRoster(s),s), seas=computeSeasonality(sales,tb,(s.seasonality_shrink_k!==undefined?s.seasonality_shrink_k:6));
   let loanerPrefixes=loanerStockPrefixes(s), positions=computePositions(inv,metrics,s,today,loanerPrefixes);
@@ -996,6 +1053,7 @@ function runEngine(inv,sales,s,today){
   res.acquisitionRecs=acquisitionRecs(res);
   res.serviceRecs=serviceLoanerRecs(res);
   res.loanerFleetPlan=loanerFleet(res);        // fleet flow first — the selection sizes itself from it
+  res.loanerOutcomes=loanerOutcomes(res);      // predicted-vs-actual on units that have sold
   res.selection=serviceSelection(res);
   res.policyExplorer=policyExplorer(res);
   res.buildSeq=buildSequence(res);

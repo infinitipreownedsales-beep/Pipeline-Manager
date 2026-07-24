@@ -512,6 +512,11 @@
         <div id="fleetRows"></div>
         <button class="ghost" id="addFleet" style="margin-top:8px">＋ Add loaner unit</button>
       </div>
+      <div style="margin-top:12px">
+        <div class="dc-sub" style="margin:2px 0 6px">📈 Used cars sold — weekly actuals <span class="dc-note">score the forecast: how close predicted loss/gain was to what these loaners actually sold for</span></div>
+        <label class="top" style="margin:2px 0 5px;text-transform:none;letter-spacing:0;color:var(--muted)">Paste your weekly used-car-sold export (with its header row). Rows are matched to loaners by <b>VIN</b> (from the fleet uploads you've already done), then predicted vs. actual is shown in the Service Loaner view. Wants columns like VIN, Sale Price, Gross Profit, Days to Sell, and (if present) Odometer and Sale Date.</label>
+        <textarea id="soldImport" placeholder="Paste the used-car-sold export here (with its header row) — VIN, Sale Price, Gross Profit, Days to Sell, Odometer, Sale Date…" style="height:70px"></textarea>
+      </div>
     </div>
     <div style="margin-top:14px;border-top:1px solid var(--line2);padding-top:12px">
       <label class="top">Depreciation history <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— your 10-year used-car sales export. This is what lets the tool estimate a loaner candidate's <b>real resale value</b> (from your own history, by model/trim/age) instead of a flat 80% guess, so the Loaner board picks units that actually hold value. <b>Pre-loaded</b> — re-import to refresh with newer sales.</span></label>
@@ -1639,7 +1644,11 @@ function _retailAt(res, ui, months){
 function unitDifference(res, ui, months, policy, milesRate){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, year=ui.year||res.tb.today.getFullYear();
   let ret=_retailAt(res, ui, months);
-  let icv=incentive(s,ui.model,year,curMonth,"icv");
+  // ICV is captured the month the unit was PLACED into service — a unit already in
+  // the fleet keeps the allowance from its entry month (ui.icvMonth), not today's.
+  // A new unit being placed now has no icvMonth, so it uses the current month.
+  let icvMonth=(ui.icvMonth!=null?ui.icvMonth:curMonth), icvYear=(ui.icvYear!=null?ui.icvYear:year);
+  let icv=incentive(s,ui.model,icvYear,icvMonth,"icv");
   let veloAmt=incentive(s,ui.model,year,ret.month,"velocity_bonus");
   // velocity is earned only if the unit RETAILS within the program window —
   // service months + its real used turn (days-to-sell) must clear max months,
@@ -1774,8 +1783,8 @@ function _fleetCostInfo(res){
   function med(a){ if(!a.length) return 0; let v=a.slice().sort((x,y)=>x-y); return v[Math.floor(v.length/2)]; }
   return function(model, code){
     let cd=String(code||"").slice(0,4), k=model+"|"+cd;
-    if(byCode[k]&&(byCode[k].cost>0||byCode[k].msrp>0)) return {cost:byCode[k].cost, msrp:byCode[k].msrp, trim:byCode[k].trim||rosterTrim[k]||""};
-    let m=byModel[model]; if(m&&(m.costs.length||m.msrps.length)) return {cost:med(m.costs), msrp:med(m.msrps), trim:rosterTrim[k]||""};
+    if(byCode[k]&&(byCode[k].cost>0||byCode[k].msrp>0)) return {cost:byCode[k].cost, msrp:byCode[k].msrp, trim:byCode[k].trim||rosterTrim[k]||"", exact:true};
+    let m=byModel[model]; if(m&&(m.costs.length||m.msrps.length)) return {cost:med(m.costs), msrp:med(m.msrps), trim:rosterTrim[k]||"", exact:false};
     return null; };
 }
 // Best month to RETIRE a specific in-service unit for profitability. Walk the
@@ -1791,7 +1800,8 @@ function _retireTiming(res, unit, costFn, policy){
   let m0=unit.months||0, miles0=unit.miles||0;
   let mpm=parseFloat(s.loaner_miles_per_month)||1500, maxMo=parseFloat(s.loaner_max_months)||7;
   let rate=(miles0>0&&m0>0.4)?(miles0/m0):mpm;
-  let ui={model:unit.model, trim:info.trim||"", ext:unit.ext||"", year:unit.year||res.tb.today.getFullYear(), cost:info.cost, msrp:info.msrp||info.cost};
+  let ui={model:unit.model, trim:info.trim||"", ext:unit.ext||"", year:unit.year||res.tb.today.getFullYear(), cost:info.cost, msrp:info.msrp||info.cost,
+    icvMonth:(unit.entryMonth!=null?unit.entryMonth:null), icvYear:(unit.entryYear!=null?unit.entryYear:null)};
   // baseline = retail it TODAY at its current age; candidates = hold to each whole
   // month out to the ceiling. The lift is the value of waiting vs. retailing now.
   let nowD=unitDifference(res, ui, Math.max(0.5,m0), policy, rate).difference;
@@ -1820,11 +1830,13 @@ function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], rele
     let ext=u?u.ext:String(e.ext||"").trim(), grp=ext2grp(ext);
     let uyear=u?parseInt(u.myear||u.my||0,10):(parseInt(e.year||0,10)||0);
     let code=u?u.code:(e.code||"");
-    let icv=incentive(s,model,uyear,today.getMonth()+1,"icv");
+    // the month/year this unit was PLACED into service — locks its ICV allowance
+    let entryMonth=hasStart?(start.getMonth()+1):null, entryYear=hasStart?start.getFullYear():null;
+    let icv=incentive(s,model,uyear,entryMonth!=null?entryMonth:(today.getMonth()+1),"icv");
     // Ask the engine for the PROFIT-OPTIMAL retire month for THIS unit (uses its
-    // own mileage pace). Hard limits still force it out: past 7 months or over the
-    // mile cap, it goes regardless of what the profit curve wants.
-    let rt=_retireTiming(res, {model:model,code:code,ext:ext,miles:miles,months:months,year:uyear}, costFn, policy);
+    // own mileage pace, and its entry-month ICV). Hard limits still force it out:
+    // past 7 months or over the mile cap, it goes regardless of the profit curve.
+    let rt=_retireTiming(res, {model:model,code:code,ext:ext,miles:miles,months:months,year:uyear,entryMonth:entryMonth,entryYear:uyear}, costFn, policy);
     let overCap=miles>=cap, over=months>=maxMo;
     let eligibleMin=months>=minMo, status, why, releaseAt=null, moTo;
     if(overCap||over){ status="🔴 RETIRE NOW"; why=overCap?"over "+cap.toLocaleString()+" mi":"past "+maxMo+"-mo window"; releasing++; moTo=0; releaseAt=today; }
@@ -1863,6 +1875,56 @@ function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], rele
   return {target:target,in_service:inService,releasing_now:releasing,to_add:toAdd,shortfall:shortfall,
     rows:rows,cadence:cadence,color_mix:colorMix}; }
 
+// Score the forecast against reality. Each row of the weekly used-car-sold upload
+// is matched (by VIN, else stock) to a loaner in the ledger, then we recompute what
+// we WOULD have predicted for it at the age & mileage it actually sold at — using
+// its entry-month ICV — and compare to what it actually brought. That tells us if
+// the model runs high or low so the write-down / resale assumptions can be tuned.
+function loanerOutcomes(res){
+  let s=res.settings, sold=s.sold_units||[], ledgerArr=s.loaner_ledger||[];
+  if(!sold.length||!ledgerArr.length) return {rows:[], agg:null, unmatched:0, matched:0};
+  let byVin={}, byStock={};
+  ledgerArr.forEach(e=>{ if(e.vin) byVin[String(e.vin).toUpperCase()]=e; if(e.stock) byStock[String(e.stock).toUpperCase()]=e; });
+  let costFn=_fleetCostInfo(res), policy=_currentPolicy(s);
+  let mpm=parseFloat(s.loaner_miles_per_month)||1500, today=res.tb.today;
+  let rows=[], unmatched=0;
+  sold.forEach(x=>{
+    let e=(x.vin&&byVin[String(x.vin).toUpperCase()])||(x.stock&&byStock[String(x.stock).toUpperCase()])||null;
+    if(!e){ unmatched++; return; }
+    let entryD=e.entry?new Date(e.entry+"T00:00:00"):null; if(!entryD||isNaN(entryD.getTime())){ unmatched++; return; }
+    let soldD=x.date?new Date(x.date+"T00:00:00"):today; if(isNaN(soldD.getTime())) soldD=today;
+    let svcMonths=Math.max(0.5,(soldD-entryD)/86400000/DPM);
+    let info=costFn(e.model, e.code); if(!info||!(info.cost>0)){ unmatched++; return; }
+    let miles=(x.miles!=null?x.miles:null), rate=(miles!=null&&svcMonths>0.3)?(miles/svcMonths):mpm;
+    let myear=parseInt(e.year||0,10)||today.getFullYear();
+    let ui={model:e.model, trim:info.trim||"", ext:e.ext||"", year:myear, cost:info.cost, msrp:info.msrp||info.cost,
+      icvMonth:entryD.getMonth()+1, icvYear:myear};
+    let pred=unitDifference(res, ui, svcMonths, policy, rate);
+    let actualPrice=(x.price!=null?x.price:null);
+    let actualGross=(x.gross!=null?x.gross:null);
+    // actual cost basis is only known when the export gives BOTH price and gross
+    let actualCost=(actualPrice!=null&&actualGross!=null)?Math.round(actualPrice-actualGross):null;
+    let retailErr=(actualPrice!=null)?Math.round(actualPrice-pred.expectedRetail):null;   // + = sold above forecast
+    // front-gross error is only meaningful when we have a REAL cost basis for this
+    // config (exact code match) — otherwise the borrowed cost makes it noise.
+    let grossErr=(info.exact&&actualGross!=null)?Math.round(actualGross-pred.difference):null;
+    let costErr=(info.exact&&actualCost!=null)?Math.round(actualCost-pred.expectedCost):null;
+    rows.push({vin:e.vin, stock:e.stock||x.stock||"", model:e.model, ext:e.ext||"", entry:e.entry, sold:x.date||"",
+      months:Math.round(svcMonths*10)/10, miles:(miles!=null?Math.round(miles):null), days:x.days, exact:!!info.exact,
+      predRetail:pred.expectedRetail, predCost:pred.expectedCost, predDiff:pred.difference,
+      actualPrice:actualPrice, actualGross:actualGross, actualCost:actualCost, retailErr:retailErr, grossErr:grossErr, costErr:costErr,
+      bonusEligible:pred.eligible}); });
+  if(!rows.length) return {rows:[], agg:null, unmatched:unmatched, matched:0};
+  let mean=a=>a.length?a.reduce((s,x)=>s+x,0)/a.length:null;
+  let rE=rows.filter(r=>r.retailErr!=null).map(r=>r.retailErr), gE=rows.filter(r=>r.grossErr!=null).map(r=>r.grossErr);
+  let agg={n:rows.length, grossN:gE.length,
+    retailBias:rE.length?Math.round(mean(rE)):null, retailMAE:rE.length?Math.round(mean(rE.map(Math.abs))):null,
+    grossBias:gE.length?Math.round(mean(gE)):null, grossMAE:gE.length?Math.round(mean(gE.map(Math.abs))):null,
+    predRetail:Math.round(mean(rows.map(r=>r.predRetail))), actualPrice:(rows.some(r=>r.actualPrice!=null)?Math.round(mean(rows.filter(r=>r.actualPrice!=null).map(r=>r.actualPrice))):null)};
+  rows.sort((a,b)=>String(b.sold).localeCompare(String(a.sold)));
+  return {rows:rows, agg:agg, unmatched:unmatched, matched:rows.length};
+}
+
 function runEngine(inv,sales,s,today){
   let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,effectiveRoster(s),s), seas=computeSeasonality(sales,tb,(s.seasonality_shrink_k!==undefined?s.seasonality_shrink_k:6));
   let loanerPrefixes=loanerStockPrefixes(s), positions=computePositions(inv,metrics,s,today,loanerPrefixes);
@@ -1882,6 +1944,7 @@ function runEngine(inv,sales,s,today){
   res.acquisitionRecs=acquisitionRecs(res);
   res.serviceRecs=serviceLoanerRecs(res);
   res.loanerFleetPlan=loanerFleet(res);        // fleet flow first — the selection sizes itself from it
+  res.loanerOutcomes=loanerOutcomes(res);      // predicted-vs-actual on units that have sold
   res.selection=serviceSelection(res);
   res.policyExplorer=policyExplorer(res);
   res.buildSeq=buildSequence(res);
@@ -2291,7 +2354,36 @@ function fleetFlowRender(res){
     H.push("<tr><td>Retiring</td>"+cad.map(c=>"<td class='r'>"+(c.releasing||0)+"</td>").join("")+"</tr>");
     H.push("<tr><td><b>Place</b></td>"+cad.map(c=>"<td class='r'><b>"+(c.place||0)+"</b></td>").join("")+"</tr></tbody></table>");
   }
+  H.push(outcomesRender(res));
   H.push("</div>");
+  return H.join("");
+}
+// Forecast scorecard — predicted vs. actual on loaners that have sold. Tells us
+// whether the front-end call is running high or low so the model can be tuned.
+function outcomesRender(res){
+  let o=res.loanerOutcomes; if(!o||!o.rows||!o.rows.length) return "";
+  let a=o.agg, anyBorrowed=o.rows.some(r=>!r.exact);
+  let H=["<details class='retsched' open style='margin-top:8px'><summary class='mixh'>Forecast vs. actual <span class='dim' style='font-weight:400'>— "+o.matched+" sold loaner"+(o.matched===1?"":"s")+" scored"+(o.unmatched?(" · "+o.unmatched+" sold row"+(o.unmatched===1?"":"s")+" had no VIN match"):"")+"</span></summary>"];
+  if(a){
+    let rb=a.retailBias, gb=a.grossBias;
+    let call=g=>g==null?"":(g>0?("actuals ran <b style='color:var(--good)'>$"+Math.abs(g).toLocaleString()+" above</b> forecast"):(g<0?("actuals ran <b style='color:var(--bad)'>$"+Math.abs(g).toLocaleString()+" below</b> forecast"):"actuals matched forecast"));
+    H.push("<div class='warn' style='background:rgba(76,141,255,.08);border-color:rgba(76,141,255,.30)'>"+
+      "On "+a.n+" sold loaner"+(a.n===1?"":"s")+", resale "+call(rb)+" (avg miss $"+(a.retailMAE!=null?a.retailMAE.toLocaleString():"—")+"). "+
+      (rb!=null&&Math.abs(rb)>=750?("<b>The resale model is running "+(rb>0?"low — it under-values these; nudge expected retail up.":"high — it over-values these; trim expected retail down.")+"</b> "):"The resale model is tracking close — no change needed. ")+
+      ((a.grossN)?("Front gross "+call(gb)+" (avg miss $"+(a.grossMAE!=null?a.grossMAE.toLocaleString():"—")+", on "+a.grossN+" with a real cost basis)."):"")+
+      "</div>");
+  }
+  H.push("<table class='mos'><thead><tr><th>Sold</th><th>Vehicle</th><th class='r'>In svc</th><th class='r'>Miles</th><th class='r'>Predicted retail</th><th class='r'>Actual</th><th class='r'>Miss</th><th class='r'>Pred. gross</th><th class='r'>Actual gross</th></tr></thead><tbody>");
+  o.rows.forEach(r=>{
+    H.push("<tr><td>"+esc(r.sold||"—")+"</td><td>"+esc((r.model||"")+" "+String(r.ext||"").toLowerCase())+" · "+esc(String(r.stock||r.vin||"").slice(-6))+(r.exact?"":" <span class='dim' title='no exact cost basis in inventory — front gross not scored'>·est</span>")+"</td>"+
+      "<td class='r'>"+r.months+"mo</td><td class='r'>"+(r.miles!=null?r.miles.toLocaleString():"—")+"</td>"+
+      "<td class='r'>"+money0(r.predRetail)+"</td><td class='r'>"+(r.actualPrice!=null?money0(r.actualPrice):"—")+"</td>"+
+      "<td class='r'>"+(r.retailErr!=null?diffCell(r.retailErr):"—")+"</td>"+
+      "<td class='r'>"+(r.exact?diffCell(r.predDiff):"<span class='dim'>—</span>")+"</td><td class='r'>"+(r.actualGross!=null?diffCell(r.actualGross):"—")+"</td></tr>"); });
+  H.push("</tbody></table>");
+  H.push("<div class='basis' style='margin-top:4px'>Predicted resale is recomputed at the age and mileage each unit actually sold at, with its entry-month ICV — a clean read on the model, not on timing. “Miss” is actual minus predicted resale (green = we were conservative)."+
+    (anyBorrowed?" Rows marked <b>·est</b> aren't stocked in current inventory, so there's no real cost basis — their front gross is left out of the scoring.":"")+"</div>");
+  H.push("</details>");
   return H.join("");
 }
 function monLabel(ym){ let m=String(ym||"").split("-"); if(m.length<2) return esc(ym||"");
@@ -2787,7 +2879,8 @@ function getSettings(){
     writedown_method:(document.getElementById("lwdmethod")||{}).value||"pct", writedown_flat:numVal("lwdflat",0),
     color_map:readColorMap(),
     service_need:((document.getElementById("serviceNeed")||{}).value||"").trim()===""?null:numVal("serviceNeed",0), new_retail_gross:numVal("lnewgross",1500),
-    loaner_units:readFleet(), preowned_sales:readPreowned() }; }
+    loaner_units:readFleet(), preowned_sales:readPreowned(),
+    loaner_ledger:ledgerArray(), sold_units:readSold() }; }
 function numVal(id,def){ let el=document.getElementById(id); if(!el) return def; let v=parseFloat(el.value); return isNaN(v)?def:v; }
 const LOANCFG_IDS=["lfleet","licv80","licv60","licv65","reb80","reb60","reb65","ldepr","lwdmethod","lwdflat","lbase","lmin","lmax","lsvc","lcap","lbonus","lmpm","lrecon","lret","ldecay","lhold","lnewgross"];
 function persistLoanCfg(){ try{ let o={}; LOANCFG_IDS.forEach(id=>o[id]=document.getElementById(id).value); localStorage.setItem("pm_loancfg",JSON.stringify(o)); }catch(e){} }
@@ -2887,13 +2980,11 @@ function importFleet(){
     ext:pk("exterior code","exterior_code","ext code","exterior color","ext"),year:pk("year","my"),
     program:pk("program"),status:pk("status"),miles:pk("odometer_value","odometer","miles"),
     start:pk("in_service_date","in service date","in_service","in-service start","start")};
-  let added=0, skipped=0;
+  let added=0, skipped=0, ledger=readLedger(), logged=0;
   document.getElementById("fleetRows").innerHTML="";
   for(let r=hi+1;r<rows.length;r++){ let row=rows[r]; if(!row||!row.length) continue;
     let prog=ci.program!=null?String(row[ci.program]||"").toLowerCase():"courtesy";
     if(prog && !/courtes|loaner|service|demo/.test(prog)){ skipped++; continue; }
-    let stat=ci.status!=null?String(row[ci.status]||"").toLowerCase():"";
-    if(/dispos|sold|wholesal/.test(stat)){ skipped++; continue; }   // already gone
     let stock=ci.stock!=null?String(row[ci.stock]||"").trim():"";
     let vin=ci.vin!=null?String(row[ci.vin]||"").trim():"";
     if(!stock && vin) stock=vin.slice(-8);
@@ -2907,11 +2998,56 @@ function importFleet(){
     if(!model && code) model=modelFromCode(digitsOnly(code));
     let ext=ci.ext!=null?String(row[ci.ext]||"").trim().toUpperCase():"";
     let year=ci.year!=null?String(row[ci.year]||"").trim():"";
+    // Ledger: remember every loaner we've ever seen by VIN with its entry date, so
+    // when it later shows up in a used-car-sold upload we can score the forecast —
+    // even though a sold unit drops off the DMS fleet export.
+    if(vin){ let k=vin.toUpperCase(), prev=ledger[k]||{};
+      ledger[k]={vin:vin,stock:stock||prev.stock,model:model||prev.model,code:code||prev.code,ext:ext||prev.ext,year:year||prev.year,
+        entry:(prev.entry&&(!start||prev.entry<start))?prev.entry:(start||prev.entry||""),
+        first_seen:prev.first_seen||todayISO(),last_seen:todayISO()}; logged++; }
+    let stat=ci.status!=null?String(row[ci.status]||"").toLowerCase():"";
+    if(/dispos|sold|wholesal/.test(stat)){ skipped++; continue; }   // out of service — ledgered, not shown
     let note=(vin?("VIN "+vin.slice(-6)):"")+(prog&&prog!=="courtesy"?(" · "+prog):"");
     addFleetRow({stock:stock,model:model,ext:ext,start:start,miles:miles,note:note,code:code,year:year}); added++; }
-  persistFleet(); if(HAS_RUN) liveRecompute();
-  if(st){ st.className="foot okmsg"; st.textContent="✓ imported "+added+" loaner unit"+(added===1?"":"s")+(skipped?(" ("+skipped+" non-loaner rows skipped)"):""); }
+  saveLedger(ledger); persistFleet(); if(HAS_RUN) liveRecompute();
+  if(st){ st.className="foot okmsg"; st.textContent="✓ imported "+added+" loaner unit"+(added===1?"":"s")+(skipped?(" ("+skipped+" non-loaner/disposed skipped)"):"")+" · ledger "+Object.keys(ledger).length; }
 }
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+/* ---- loaner ledger: VIN -> entry facts, persisted across weekly uploads ---- */
+function readLedger(){ try{ return JSON.parse(localStorage.getItem("pm_loaner_ledger")||"{}")||{}; }catch(e){ return {}; } }
+function saveLedger(l){ try{ localStorage.setItem("pm_loaner_ledger",JSON.stringify(l)); }catch(e){} }
+function ledgerArray(){ let l=readLedger(); return Object.keys(l).map(function(k){ return l[k]; }); }
+/* ---- used cars sold (weekly) — the ACTUALS we score the forecast against ---- */
+function readSold(){
+  let text=(document.getElementById("soldImport")||{}).value||""; if(!text.trim()) return [];
+  let rows; try{ rows=parseTable(text); }catch(e){ return []; }
+  if(!rows.length) return [];
+  let hi=-1,cm=null;
+  for(let i=0;i<rows.length;i++){ let m={}; rows[i].forEach((c,j)=>{ let k=String(c==null?"":c).trim().toLowerCase(); if(k) m[k]=j; });
+    if(("vin" in m)||("stock" in m)||("stock #" in m)||("stock#" in m)||("stock number" in m)){ hi=i; cm=m; break; } }
+  if(hi<0) return [];
+  function pk(){ for(let i=0;i<arguments.length;i++){ let n=arguments[i].toLowerCase(); if(n in cm) return cm[n]; } return null; }
+  let ci={vin:pk("vin"),stock:pk("stock number","stock #","stock#","stock"),model:pk("model"),
+    price:pk("sale price","sold price","sales price","price","retail"),gross:pk("gross profit","front gross","gross","total gross"),
+    days:pk("days to sell","days","days in stock"),miles:pk("odometer","odometer_value","miles","mileage"),
+    date:pk("sales date","sale date","sold date","date")};
+  let out=[];
+  for(let r=hi+1;r<rows.length;r++){ let row=rows[r]; if(!row||!row.length) continue;
+    let vin=ci.vin!=null?String(row[ci.vin]||"").trim():"";
+    let stock=ci.stock!=null?String(row[ci.stock]||"").trim():"";
+    if(!vin && !stock) continue;
+    let num=(x)=>{ let v=String(x==null?"":x).replace(/[^0-9.\-]/g,""); return v===""?null:parseFloat(v); };
+    let dt=ci.date!=null?String(row[ci.date]||"").trim():"";
+    let dm=dt.match(/(\d{4})-(\d{2})-(\d{2})/); if(dm) dt=dm[1]+"-"+dm[2]+"-"+dm[3];
+    else { let d2=dt.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/); if(d2) dt=d2[3]+"-"+("0"+d2[1]).slice(-2)+"-"+("0"+d2[2]).slice(-2);
+      else { let d8=dt.match(/^(\d{4})(\d{2})(\d{2})$/); if(d8) dt=d8[1]+"-"+d8[2]+"-"+d8[3]; else dt=""; } }
+    out.push({vin:vin,stock:stock,model:ci.model!=null?String(row[ci.model]||"").trim().toUpperCase():"",
+      price:ci.price!=null?num(row[ci.price]):null,gross:ci.gross!=null?num(row[ci.gross]):null,
+      days:ci.days!=null?num(row[ci.days]):null,miles:ci.miles!=null?num(row[ci.miles]):null,date:dt}); }
+  return out;
+}
+function persistSold(){ try{ localStorage.setItem("pm_sold",(document.getElementById("soldImport")||{}).value||""); }catch(e){} }
+function restoreSold(){ try{ let v=localStorage.getItem("pm_sold"); if(v!=null&&document.getElementById("soldImport")) document.getElementById("soldImport").value=v; }catch(e){} }
 
 /* ---- preowned sales paste (optional) ---- */
 function readPreowned(){
@@ -3254,6 +3390,7 @@ window.addEventListener("DOMContentLoaded",function(){
   document.getElementById("addLoaner").addEventListener("click",function(){ addLoanerRow(); persistLoaners(); });
   { let ib=document.getElementById("importFleetBtn"); if(ib) ib.addEventListener("click",importFleet);
     let fi=document.getElementById("fleetImport"); if(fi) fi.addEventListener("change",function(){ try{ localStorage.setItem("pm_fleetimport",fi.value); }catch(e){} }); }
+  { let si=document.getElementById("soldImport"); if(si) si.addEventListener("change",function(){ persistSold(); if(HAS_RUN) liveRecompute(); }); restoreSold(); }
   restoreLoaners();
   document.getElementById("addSup").addEventListener("click",function(){ addSupRow(); persistSuppress(); });
   restoreSuppress();
