@@ -366,10 +366,41 @@ function stkRow(label,val,cls){
   if(cls==="tot"||cls==="") disp="$"+Math.abs(Math.round(val)).toLocaleString();
   else disp=(val<0?"− $":"+ $")+Math.abs(Math.round(val)).toLocaleString();
   return "<tr class='"+cls+"'><td>"+label+"</td><td class='r'>"+disp+"</td></tr>"; }
+// The fleet-flow header: hold N at all times, and let the program move the flow.
+// This is what the service-loaner page leads with — current fleet, what's aging
+// out, how many to place now, and the month-by-month cadence.
+function fleetFlowRender(res){
+  let plan=res.loanerFleetPlan; if(!plan) return "";
+  let H=["<div class='flowbox'>"];
+  let manual=(res.settings.service_need!=null && res.settings.service_need!=="");
+  H.push("<div class='flowkpis'>");
+  H.push("<div class='fk'><div class='fkl'>In service now</div><div class='fkv'>"+plan.in_service+"</div><div class='fkn'>target "+plan.target+" held at all times</div></div>");
+  H.push("<div class='fk'><div class='fkl'>Aging out now</div><div class='fkv' style='color:"+(plan.releasing_now?"var(--bad)":"var(--muted)")+"'>"+plan.releasing_now+"</div><div class='fkn'>past 7 mo or near 10k mi</div></div>");
+  let placeNote=manual?"manual override set":(plan.releasing_now?("to hold "+plan.target+" once "+plan.releasing_now+" age out"):(plan.shortfall?(plan.shortfall+" under target"):"at target — nothing to place"));
+  H.push("<div class='fk'><div class='fkl'>Place now</div><div class='fkv' style='color:"+(plan.to_add?"var(--orange)":"var(--good)")+"'>"+plan.to_add+"</div><div class='fkn'>"+placeNote+"</div></div>");
+  H.push("</div>");
+  // color mix of the current fleet
+  let mix=plan.color_mix||{}, mk=Object.keys(mix).sort((a,b)=>mix[b]-mix[a]);
+  if(mk.length) H.push("<div class='basis' style='margin:2px 0 6px'>Current fleet colors: "+mk.map(k=>"<b>"+esc(String(k).toLowerCase())+"</b> "+mix[k]).join(" · ")+".</div>");
+  // forward cadence
+  let cad=(plan.cadence||[]).filter(c=>c.releasing>0 || c.place>0);
+  if(cad.length){
+    H.push("<div class='basis' style='margin:4px 0 4px'>The flow to hold "+plan.target+" at all times — place as units age out:</div>");
+    H.push("<table class='mos'><thead><tr><th>Month</th>"+cad.map(c=>"<th class='r'>"+monLabel(c.month)+"</th>").join("")+"</tr></thead><tbody>");
+    H.push("<tr><td>Aging out</td>"+cad.map(c=>"<td class='r'>"+(c.releasing||0)+"</td>").join("")+"</tr>");
+    H.push("<tr><td><b>Place</b></td>"+cad.map(c=>"<td class='r'><b>"+(c.place||0)+"</b></td>").join("")+"</tr></tbody></table>");
+  }
+  H.push("</div>");
+  return H.join("");
+}
+function monLabel(ym){ let m=String(ym||"").split("-"); if(m.length<2) return esc(ym||"");
+  let n=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(m[1],10)-1]||m[1];
+  return n+" "+m[0].slice(2); }
 function serviceSelectionRender(res){
   let sel=res.selection, s=res.settings, H=[];
-  if(!sel||!sel.units.length) return "<div class='empty'>No candidate units in stock — paste inventory with unit cost, then set incentives in Data.</div>";
-  let units=sel.units, p=sel.policy, need=Math.max(1,parseInt(s.service_need,10)||1);
+  H.push(fleetFlowRender(res));   // the fleet-flow header — this is the part that "talks"
+  if(!sel||!sel.units.length) return H.join("")+"<div class='empty'>No orderable candidate units in stock — paste inventory with unit cost (and check that the config isn't suppressed), then set incentives in Data.</div>";
+  let units=sel.units, p=sel.policy, need=Math.max(1,(typeof _placeNeed==="function"?_placeNeed(res):1));
   // On-the-fly levers — adjust and the whole list re-ranks. These proxy the
   // canonical Data-panel inputs so there is still one source of truth.
   let methodSel="<select onchange=\"setLever('lwdmethod',this.value)\">"+
@@ -387,7 +418,8 @@ function serviceSelectionRender(res){
   if(second) lead += margin>0 ? (", <span style='color:var(--good);font-weight:700'>$"+margin.toLocaleString()+"</span> better than the next unit.")
                               : ", tied with the next unit.";
   else lead += ".";
-  if(need>1) lead+=" Service needs "+need+" — the diversified mix below is the pick.";
+  if(need>1) lead+=" You need to place <b>"+need+"</b> to hold your fleet target — the diversified mix below is the pick.";
+  else if(need===1) lead+=" That's the one to place to hold your fleet target.";
   H.push("<div class='lead'>"+lead+"</div>");
   if(need>1) H.push(placementMixRender(sel, need));
   H.push(idealOrderRender(res));

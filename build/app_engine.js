@@ -240,11 +240,20 @@ function dtsBand(dts){ if(dts===null) return 0; if(dts<=20)return 4; if(dts<=40)
 function matchesDemote(e,model,ext,intr,key){ function ok(fv,act){ fv=String(fv||"").trim(); return fv===""||fv===act; }
   let has=["model","code","ext","int"].some(f=>String(e[f]||"").trim()), code=key.indexOf("|")>=0?key.split("|")[1]:"";
   return has && ok(e.model,model)&&ok(e.code,code)&&ok(e.ext,ext)&&ok(e.int,intr); }
-function suppressed(code,ext,intr,s){ if(code==="8461") return true;
-  return (s.suppress||[]).some(function(e){ var ec=digitsOnly(e.code).slice(0,4);
-    if(!ec||ec!==code) return false;
+function suppressed(code,ext,intr,s,model,trim){ if(code==="8461") return true;
+  var hay=(String(model||"")+" "+String(trim||"")).toUpperCase();
+  return (s.suppress||[]).some(function(e){
+    var raw=String(e.code||"").trim(); if(!raw) return false;
     var ee=String(e.ext||"").trim(), ei=String(e.int||"").trim();
-    return (ee===""||ee===ext) && (ei===""||ei===intr); }); }
+    var extOk=(ee===""||ee===ext), intOk=(ei===""||ei===intr);
+    var ec=digitsOnly(raw).slice(0,4);
+    if(ec){                                   // numeric → match the model code (a single year)
+      if(ec!==code) return false; return extOk&&intOk; }
+    // non-numeric → treat as a trim/model NAME so "PURE" (or "QX60 PURE") kills
+    // every matching config regardless of model-year code
+    var toks=raw.toUpperCase().replace(/[^A-Z0-9 ]/g," ").split(/\s+/).filter(function(t){return t&&!/^\d+$/.test(t);});
+    if(!toks.length) return false;
+    return toks.every(function(t){return hay.indexOf(t)>=0;}) && extOk && intOk; }); }
 function effectiveRoster(s){ if(!s.roster_add||!s.roster_add.length) return ROSTER;
   var seen={}; ROSTER.forEach(function(c){ seen[c.model+"|"+c.code+"|"+c.ext+"|"+c.int]=1; });
   var out=ROSTER.slice();
@@ -265,7 +274,7 @@ function buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demo
     let seasArr=interpSeas(seas[model].index, s.order_month, win);
     let returns=demoReturns[key]||[];
     let pj=projectAtArrival(model,pos,metric,seas,s,win,returns), proj=pj[0], chain=pj[1];
-    let sup=suppressed(code,ext,intr,s), dem=s.demote.some(e=>matchesDemote(e,model,ext,intr,key));
+    let sup=suppressed(code,ext,intr,s,model,c.trim), dem=s.demote.some(e=>matchesDemote(e,model,ext,intr,key));
     let r90=metric?metric.r90:0, effDem=dem&&r90<s.prove_bar, blocked=sup||effDem;
     let needFloor=base===0?0:1;
     let orderTarget=Math.max(needFloor,xround(base*(1+(seasArr-1)*mf),0)), overstockTarget=Math.max(needFloor,xround(base*seasOrder,0));
@@ -458,7 +467,7 @@ function allCandidates(res){ let s=res.settings, rm=repMaps(res.inv), pre=res.pr
     let score=loanerScore(econ,ps,metric)+(units.length?4:0);
     out.push({model:model,trim:l.trim,ext:l.ext,int:l.int,key:l.key,year:candYear,usedDts:usedDts,usedPrice:econ.usedPrice,
       modeled:ps.modeled,usedSrc:usedSrc,histResale:hist,score:Math.round(score*10)/10,netValue:econ.usedGross,econ:econ,newDts:l.dts,
-      onlot:l.onlot,inStock:units.length>0,units:units,reason:loanerCandReason(econ,ps,l)}); });
+      onlot:l.onlot,inStock:units.length>0,units:units,suppressed:!!l.suppressed,reason:loanerCandReason(econ,ps,l)}); });
   out.sort((a,b)=>b.score-a.score); return out; }
 function loanerCandidates(res){ let s=res.settings, n=(s.loaner_picks_per_model!==undefined?s.loaner_picks_per_model:6), out={}; MODELS.forEach(m=>out[m]=[]);
   allCandidates(res).forEach(p=>out[p.model].push(p));
@@ -767,10 +776,19 @@ function _currentPolicy(s){
     flat:parseFloat(s.writedown_flat)||0, base:(String(s.loaner_depr_base).toLowerCase()==="msrp")?"msrp":"cost",
     months:Math.max(1,parseInt(s.loaner_service_months,10)||3)}; }
 function _trimHead(t){ return String(t||"").trim().toUpperCase().split(/\s+/)[0]; }
+// How many to place now: an explicit manual override if given, otherwise the
+// fleet plan's shortfall-to-target plus whatever is releasing right now.
+function _placeNeed(res){
+  let s=res.settings;
+  if(s.service_need!=null && s.service_need!=="" && parseInt(s.service_need,10)>=0) return Math.max(0,parseInt(s.service_need,10));
+  let plan=res.loanerFleetPlan; if(plan && plan.to_add!=null) return Math.max(0,plan.to_add);
+  return 1;
+}
 function serviceSelection(res, policyOverride, skipByMonth){
   let s=res.settings, policy=policyOverride||_currentPolicy(s), months=policy.months;
   let units=[];
-  (res.loanerAll||[]).forEach(p=>{ (p.units||[]).forEach(u=>{
+  (res.loanerAll||[]).forEach(p=>{ if(p.suppressed) return;   // can't order it — don't recommend it
+    (p.units||[]).forEach(u=>{
     let uid=(u.stock&&u.stock!=="—")?u.stock:("VIN "+(u.vin_last6||"?"));
     let ui={model:p.model, trim:p.trim, ext:p.ext, int:p.int, year:u.year||p.year||res.tb.today.getFullYear(),
       stock:u.stock, vin6:u.vin_last6, uid:uid, cost:(u.cost>0?u.cost:p.econ.cost), msrp:(u.msrp>0?u.msrp:p.econ.msrp)};
@@ -789,7 +807,7 @@ function serviceSelection(res, policyOverride, skipByMonth){
 // ~2-month release window), so we don't line the used lot with five identical cars.
 function _diversify(res, units, s){
   if(!units.length) return null;
-  let need=Math.max(1,parseInt(s.service_need,10)||1);
+  let need=Math.max(1,_placeNeed(res));
   let D=(typeof window!=="undefined")?window.DEPR:null;
   let cfg=u=>u.model+" "+_trimHead(u.trim);
   let absorb={};
@@ -831,10 +849,13 @@ function acquisitionRecs(res){
   // only models we actually sell new today can be ordered — never surface a
   // discontinued line (Q50, Q70L, …) as a unit to "order and keep in".
   let curModels={}; (res.inv||[]).forEach(u=>{ if(u.model) curModels[String(u.model).toUpperCase()]=1; });
+  // configs we've suppressed (can't order) — never surface them as things to order
+  let supSet={}; (res.lines||[]).forEach(l=>{ if(l.suppressed) supSet[l.model+"|"+firstWord(l.trim)]=1; });
   let recs=[];
   Object.keys(res.depr.trim).forEach(model=>{ if(!curModels[String(model).toUpperCase()]) return; res.depr.trim[model].forEach(t=>{
     if(t.n<8||t.gross==null) return;                      // need real history + a gross read
     let head=firstWord(t.trim), onlot=cov[model+"|"+head]||0;
+    if(supSet[model+"|"+head]) return;                    // suppressed config — skip
     let turn=t.dts||45, speed=Math.max(0,(60-turn)/60);   // 0..1 fast
     let score=t.gross*(0.6+0.4*speed)-onlot*250;          // reward gross+speed, penalize we already own it
     recs.push({model:model,trim:t.trim,gross:t.gross,dts:turn,n:t.n,price:t.price,in_stock:onlot,score:Math.round(score)}); }); });
@@ -851,26 +872,57 @@ function acquisitionRecs(res){
   return out;
 }
 function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], releasing=0;
+  let maxMo=parseFloat(s.loaner_max_months)||7, cap=parseFloat(s.loaner_mile_cap)||10000, mpm=parseFloat(s.loaner_miles_per_month)||1500;
+  let colorMix={}, relBucket={};   // release cadence: yyyy-mm -> count
+  let ext2grp=(ex)=>{ let g=(s.color_map||{})[String(ex||"").toUpperCase()]; if(g) return g;
+    return (typeof window!=="undefined"&&window.DEPR&&window.DEPR.a&&window.DEPR.a.colorGroup)?window.DEPR.a.colorGroup(ex):(String(ex||"").toUpperCase()||"—"); };
   (s.loaner_units||[]).forEach(e=>{ let stock=String(e.stock||"").trim(); if(!stock) return;
     let start=new Date(e.start), hasStart=!isNaN(start.getTime());
     let months=hasStart?((today-start)/86400000/DPM):0, miles=loanerNum(e.miles);
-    if(miles===null) miles=s.loaner_miles_per_month*months;
+    if(miles===null) miles=mpm*months;
     let u=loanerMatchUnit(stock,res.inv), model=u?u.model:String(e.model||"").trim().toUpperCase();
-    let uyear=u?parseInt(u.myear||u.my||0,10):0;
+    let ext=u?u.ext:String(e.ext||"").trim(), grp=ext2grp(ext);
+    let uyear=u?parseInt(u.myear||u.my||0,10):(parseInt(e.year||0,10)||0);
     let icv=incentive(s,model,uyear,today.getMonth()+1,"icv");
-    let releaseAt=hasStart?new Date(start.getTime()+Math.round(s.loaner_max_months*DPM)*86400000):null;
-    let eligible=months>=s.loaner_min_months, nearCap=miles>=s.loaner_mile_cap*0.9, nearTime=months>=s.loaner_max_months-1, status;
-    if(!eligible) status="🅗 HOLD · "+Math.max(0,Math.ceil((s.loaner_min_months-months)*DPM))+"d to ICV";
-    else if(nearCap||nearTime){ status="🔴 RELEASE NOW"; releasing++; }
+    // the PROGRAM clock: whichever comes first — 7 months in service, or the mile
+    // cap given how fast this unit is racking up miles. That's when it must retail.
+    let moToTime=Math.max(0,maxMo-months);
+    let rate=months>0.3?(miles/months):mpm;                 // miles/month, real if we can
+    let moToMiles=rate>0?Math.max(0,(cap-miles)/rate):99;
+    let moToRelease=Math.min(moToTime,moToMiles);
+    let releaseAt=hasStart?new Date(today.getTime()+Math.round(moToRelease*DPM)*86400000):null;
+    let overCap=miles>=cap, nearCap=miles>=cap*0.9, nearTime=months>=maxMo-1, over=months>=maxMo;
+    let eligible=months>=(parseFloat(s.loaner_min_months)||3), status, why;
+    if(overCap||over){ status="🔴 RELEASE NOW"; why=overCap?"over "+cap.toLocaleString()+" mi":"past "+maxMo+" mo"; releasing++; }
+    else if(nearCap||nearTime){ status="🔴 RELEASE NOW"; why=nearCap?Math.round(cap-miles).toLocaleString()+" mi left":"<1 mo left"; releasing++; }
+    else if(!eligible) status="🅗 HOLD · "+Math.max(0,Math.ceil((s.loaner_min_months-months)*DPM))+"d to ICV";
     else status="🟢 READY";
+    // bucket the projected release month for the cadence. Units already flagged
+    // "release now" are counted in the current month below, so don't bucket them
+    // again here (avoids double counting and keeps the cadence tied to the KPI).
+    let flaggedNow=(status.indexOf("RELEASE NOW")>=0);
+    if(releaseAt && !flaggedNow){ let k=releaseAt.toISOString().slice(0,7); relBucket[k]=(relBucket[k]||0)+1; }
+    colorMix[grp]=(colorMix[grp]||0)+1;
     let timing=(u&&hasStart)?loanerTiming(res,u,months,model,uyear):null;
-    rows.push({stock:stock,model:model,vehicle:u?u.desc:"",ext_int:u?(u.ext+"/"+u.int):"",
-      months:Math.round(months*10)/10,miles:Math.round(miles),icv_secured:eligible?Math.round(icv):0,icv:Math.round(icv),
-      eligible:eligible,status:status,release_by:releaseAt?releaseAt.toISOString().slice(0,10):"",note:String(e.note||"").trim(),
-      timing:timing}); });
-  rows.sort((a,b)=>b.months-a.months);
-  let inService=rows.length, afterRelease=inService-releasing, toAdd=Math.max(0,s.loaner_fleet_target-afterRelease);
-  return {target:s.loaner_fleet_target,in_service:inService,releasing_now:releasing,to_add:toAdd,rows:rows}; }
+    rows.push({stock:stock,model:model,vehicle:u?u.desc:"",ext:ext,color:grp,ext_int:u?(u.ext+"/"+u.int):(ext||""),
+      months:Math.round(months*10)/10,miles:Math.round(miles),mo_to_release:Math.round(moToRelease*10)/10,
+      icv_secured:eligible?Math.round(icv):0,icv:Math.round(icv),
+      eligible:eligible,status:status,release_why:why||"",release_by:releaseAt?releaseAt.toISOString().slice(0,10):"",
+      note:String(e.note||"").trim(),timing:timing}); });
+  rows.sort((a,b)=>a.mo_to_release-b.mo_to_release);
+  let inService=rows.length, target=parseInt(s.loaner_fleet_target,10)||0;
+  // place now = what it takes to hold the target once the units aging out leave.
+  // After they release, the fleet is (in_service − releasing); top it back up to
+  // target. If you're already over target, that number is smaller (or zero).
+  let afterRelease=inService-releasing, toAdd=Math.max(0,target-afterRelease), shortfall=Math.max(0,target-inService);
+  // forward cadence: for each of the next 6 months, how many release and therefore
+  // how many to place that month to keep the fleet at target.
+  let cadence=[]; let base=new Date(today.getFullYear(),today.getMonth(),1);
+  for(let i=0;i<6;i++){ let d=new Date(base.getFullYear(),base.getMonth()+i,1), k=d.toISOString().slice(0,7);
+    let rel=(i===0?releasing:(relBucket[k]||0));   // current month = what's flagged now
+    cadence.push({month:k, releasing:rel, place:(i===0?toAdd:rel)}); }
+  return {target:target,in_service:inService,releasing_now:releasing,to_add:toAdd,shortfall:shortfall,
+    rows:rows,cadence:cadence,color_mix:colorMix}; }
 
 function runEngine(inv,sales,s,today){
   let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,effectiveRoster(s),s), seas=computeSeasonality(sales,tb,(s.seasonality_shrink_k!==undefined?s.seasonality_shrink_k:6));
@@ -890,8 +942,8 @@ function runEngine(inv,sales,s,today){
   res.loanerBoard=loanerCandidates(res);
   res.acquisitionRecs=acquisitionRecs(res);
   res.serviceRecs=serviceLoanerRecs(res);
+  res.loanerFleetPlan=loanerFleet(res);        // fleet flow first — the selection sizes itself from it
   res.selection=serviceSelection(res);
   res.policyExplorer=policyExplorer(res);
-  res.loanerFleetPlan=loanerFleet(res);
   res.buildSeq=buildSequence(res);
   return res; }

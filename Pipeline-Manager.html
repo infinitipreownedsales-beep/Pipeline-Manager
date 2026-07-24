@@ -181,7 +181,7 @@
   /* loaner / ICV program */
   .loancfg{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:10px;margin:8px 0 4px}
   .loancfg .fld input,.loancfg .fld select{width:100%}
-  .fleetrow{display:grid;grid-template-columns:130px 140px 110px 1fr auto;gap:8px;align-items:center;margin-bottom:6px}
+  .fleetrow{display:grid;grid-template-columns:110px 84px 78px 132px 88px 1fr auto;gap:8px;align-items:center;margin-bottom:6px}
   .fleetrow.thead span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
   .fleetrow input{width:100%}
   .fleetrow .del{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:13px;justify-self:start;white-space:nowrap}
@@ -314,6 +314,13 @@
   details.mixbox>summary::-webkit-details-marker{display:none}
   .mixh{font-size:13.5px;font-weight:700;margin-bottom:6px}
   .warn{font-size:13px;color:var(--ink);background:rgba(245,158,11,.09);border:1px solid rgba(245,158,11,.30);border-radius:7px;padding:8px 10px;margin:4px 0 8px}
+  .flowbox{background:var(--panel2);border:1px solid var(--line2);border-radius:8px;padding:10px 12px;margin:0 0 12px}
+  .flowkpis{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+  .flowkpis .fk{flex:1;min-width:130px;background:var(--panel3);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+  .flowkpis .fkl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+  .flowkpis .fkv{font-size:24px;font-weight:800;line-height:1.1;margin:2px 0}
+  .flowkpis .fkn{font-size:11px;color:var(--muted)}
+  @media print{.flowbox{break-inside:avoid}}
   @media print{ details.unit,details.explorer,.mixbox{break-inside:avoid} .toprow td{background:#eee!important} }
   .hr-plan{font-size:12.5px;color:var(--ink2);margin-bottom:6px}
   .hr-plan .pos{color:var(--good)}
@@ -372,7 +379,7 @@
     <div class="sub">Recomputes everything from your two exports · every run · offline</div>
   </div>
   <div class="ctrls">
-    <div class="fld need-fld"><label>Service loaner need</label><input type="number" id="serviceNeed" value="3" min="0" style="width:74px" title="How many vehicles Service is requesting. The list highlights the best that many to place."></div>
+    <div class="fld need-fld"><label>Place now (override)</label><input type="number" id="serviceNeed" value="" min="0" placeholder="auto" style="width:74px" title="Optional. Leave blank to let the program decide how many to place from your fleet target and what's aging out. Type a number only to force a specific count."></div>
     <div class="fld"><label>Order month</label><select id="ordmonth"></select></div>
     <div class="fld"><label>Order basis</label><select id="mode" title="What inventory this order is measured against">
       <option value="CPO">🏭 CPO — factory order (future arrival)</option>
@@ -472,7 +479,7 @@
         <div class="fld"><label>Miles/mo</label><input type="number" id="lmpm" value="1200"></div>
         <div class="fld"><label>Recon $</label><input type="number" id="lrecon" value="0"></div>
         <div class="fld"><label>Used % of cheapest-new</label><input type="number" id="lret" value="0.80" step="0.01" title="modeled used price as a share of the cheapest new price (invoice − rebate), until real used data is pasted"></div>
-        <div class="fld"><label>Fleet target</label><input type="number" id="lfleet" value="20"></div>
+        <div class="fld"><label>Fleet held at all times</label><input type="number" id="lfleet" value="20" title="The number of service loaners you keep in service at all times. The program backfills this as units age out at 7 months / 10k miles."></div>
         <div class="fld"><label>Holding $/day</label><input type="number" id="lhold" value="0" title="floorplan + holding cost per day; used for projected NET profit (0 = ignore)"></div>
         <div class="fld"><label>New-retail profit (opp. cost)</label><input type="number" id="lnewgross" value="1500" title="expected profit if the unit is sold as a NEW retail deal instead — the opportunity cost the loaner outcome must beat"></div>
         <div class="fld"><label>Order decay</label><input type="number" id="ldecay" value="1.0" step="0.5" title="how fast each extra unit of a combo yields to the next in the build sequence (0 = order a whole combo before the next)"></div>
@@ -494,8 +501,11 @@
         <textarea id="pre" placeholder="Paste a preowned/CPO sales export here (with its header row) — optional…" style="height:88px"></textarea>
       </div>
       <div style="margin-top:12px">
-        <div class="dc-sub" style="margin:2px 0 6px">🚗 In-service loaner fleet <span class="dc-note">pulled from sellable inventory · staggered (cascading) release</span></div>
-        <div id="fleetHead" class="fleetrow thead"><span>Stock #</span><span>In-service start</span><span>Miles (opt.)</span><span>Note</span><span></span></div>
+        <div class="dc-sub" style="margin:2px 0 6px">🚗 Current service loaner fleet <span class="dc-note">the units in service right now · release is driven by the 7-month / 10k-mile clock</span></div>
+        <label class="top" style="margin:2px 0 5px;text-transform:none;letter-spacing:0;color:var(--muted)">Import your fleet — paste the DMS vehicle export (with its header row). Courtesy/loaner units are picked up automatically with their stock #, VIN, model code, color and in-service date. This replaces the rows below.</label>
+        <textarea id="fleetImport" placeholder="Paste the DMS &quot;vehicles&quot; export here (with its header row) — stock_number, vin, model code, exterior code, in_service_date, odometer_value…" style="height:70px"></textarea>
+        <button class="ghost" id="importFleetBtn" style="margin:6px 0 10px">⇪ Import fleet from paste</button>
+        <div id="fleetHead" class="fleetrow thead"><span>Stock #</span><span>Model</span><span>Color</span><span>In-service start</span><span>Miles</span><span>Note</span><span></span></div>
         <div id="fleetRows"></div>
         <button class="ghost" id="addFleet" style="margin-top:8px">＋ Add loaner unit</button>
       </div>
@@ -1113,11 +1123,20 @@ function dtsBand(dts){ if(dts===null) return 0; if(dts<=20)return 4; if(dts<=40)
 function matchesDemote(e,model,ext,intr,key){ function ok(fv,act){ fv=String(fv||"").trim(); return fv===""||fv===act; }
   let has=["model","code","ext","int"].some(f=>String(e[f]||"").trim()), code=key.indexOf("|")>=0?key.split("|")[1]:"";
   return has && ok(e.model,model)&&ok(e.code,code)&&ok(e.ext,ext)&&ok(e.int,intr); }
-function suppressed(code,ext,intr,s){ if(code==="8461") return true;
-  return (s.suppress||[]).some(function(e){ var ec=digitsOnly(e.code).slice(0,4);
-    if(!ec||ec!==code) return false;
+function suppressed(code,ext,intr,s,model,trim){ if(code==="8461") return true;
+  var hay=(String(model||"")+" "+String(trim||"")).toUpperCase();
+  return (s.suppress||[]).some(function(e){
+    var raw=String(e.code||"").trim(); if(!raw) return false;
     var ee=String(e.ext||"").trim(), ei=String(e.int||"").trim();
-    return (ee===""||ee===ext) && (ei===""||ei===intr); }); }
+    var extOk=(ee===""||ee===ext), intOk=(ei===""||ei===intr);
+    var ec=digitsOnly(raw).slice(0,4);
+    if(ec){                                   // numeric → match the model code (a single year)
+      if(ec!==code) return false; return extOk&&intOk; }
+    // non-numeric → treat as a trim/model NAME so "PURE" (or "QX60 PURE") kills
+    // every matching config regardless of model-year code
+    var toks=raw.toUpperCase().replace(/[^A-Z0-9 ]/g," ").split(/\s+/).filter(function(t){return t&&!/^\d+$/.test(t);});
+    if(!toks.length) return false;
+    return toks.every(function(t){return hay.indexOf(t)>=0;}) && extOk && intOk; }); }
 function effectiveRoster(s){ if(!s.roster_add||!s.roster_add.length) return ROSTER;
   var seen={}; ROSTER.forEach(function(c){ seen[c.model+"|"+c.code+"|"+c.ext+"|"+c.int]=1; });
   var out=ROSTER.slice();
@@ -1138,7 +1157,7 @@ function buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demo
     let seasArr=interpSeas(seas[model].index, s.order_month, win);
     let returns=demoReturns[key]||[];
     let pj=projectAtArrival(model,pos,metric,seas,s,win,returns), proj=pj[0], chain=pj[1];
-    let sup=suppressed(code,ext,intr,s), dem=s.demote.some(e=>matchesDemote(e,model,ext,intr,key));
+    let sup=suppressed(code,ext,intr,s,model,c.trim), dem=s.demote.some(e=>matchesDemote(e,model,ext,intr,key));
     let r90=metric?metric.r90:0, effDem=dem&&r90<s.prove_bar, blocked=sup||effDem;
     let needFloor=base===0?0:1;
     let orderTarget=Math.max(needFloor,xround(base*(1+(seasArr-1)*mf),0)), overstockTarget=Math.max(needFloor,xround(base*seasOrder,0));
@@ -1331,7 +1350,7 @@ function allCandidates(res){ let s=res.settings, rm=repMaps(res.inv), pre=res.pr
     let score=loanerScore(econ,ps,metric)+(units.length?4:0);
     out.push({model:model,trim:l.trim,ext:l.ext,int:l.int,key:l.key,year:candYear,usedDts:usedDts,usedPrice:econ.usedPrice,
       modeled:ps.modeled,usedSrc:usedSrc,histResale:hist,score:Math.round(score*10)/10,netValue:econ.usedGross,econ:econ,newDts:l.dts,
-      onlot:l.onlot,inStock:units.length>0,units:units,reason:loanerCandReason(econ,ps,l)}); });
+      onlot:l.onlot,inStock:units.length>0,units:units,suppressed:!!l.suppressed,reason:loanerCandReason(econ,ps,l)}); });
   out.sort((a,b)=>b.score-a.score); return out; }
 function loanerCandidates(res){ let s=res.settings, n=(s.loaner_picks_per_model!==undefined?s.loaner_picks_per_model:6), out={}; MODELS.forEach(m=>out[m]=[]);
   allCandidates(res).forEach(p=>out[p.model].push(p));
@@ -1640,10 +1659,19 @@ function _currentPolicy(s){
     flat:parseFloat(s.writedown_flat)||0, base:(String(s.loaner_depr_base).toLowerCase()==="msrp")?"msrp":"cost",
     months:Math.max(1,parseInt(s.loaner_service_months,10)||3)}; }
 function _trimHead(t){ return String(t||"").trim().toUpperCase().split(/\s+/)[0]; }
+// How many to place now: an explicit manual override if given, otherwise the
+// fleet plan's shortfall-to-target plus whatever is releasing right now.
+function _placeNeed(res){
+  let s=res.settings;
+  if(s.service_need!=null && s.service_need!=="" && parseInt(s.service_need,10)>=0) return Math.max(0,parseInt(s.service_need,10));
+  let plan=res.loanerFleetPlan; if(plan && plan.to_add!=null) return Math.max(0,plan.to_add);
+  return 1;
+}
 function serviceSelection(res, policyOverride, skipByMonth){
   let s=res.settings, policy=policyOverride||_currentPolicy(s), months=policy.months;
   let units=[];
-  (res.loanerAll||[]).forEach(p=>{ (p.units||[]).forEach(u=>{
+  (res.loanerAll||[]).forEach(p=>{ if(p.suppressed) return;   // can't order it — don't recommend it
+    (p.units||[]).forEach(u=>{
     let uid=(u.stock&&u.stock!=="—")?u.stock:("VIN "+(u.vin_last6||"?"));
     let ui={model:p.model, trim:p.trim, ext:p.ext, int:p.int, year:u.year||p.year||res.tb.today.getFullYear(),
       stock:u.stock, vin6:u.vin_last6, uid:uid, cost:(u.cost>0?u.cost:p.econ.cost), msrp:(u.msrp>0?u.msrp:p.econ.msrp)};
@@ -1662,7 +1690,7 @@ function serviceSelection(res, policyOverride, skipByMonth){
 // ~2-month release window), so we don't line the used lot with five identical cars.
 function _diversify(res, units, s){
   if(!units.length) return null;
-  let need=Math.max(1,parseInt(s.service_need,10)||1);
+  let need=Math.max(1,_placeNeed(res));
   let D=(typeof window!=="undefined")?window.DEPR:null;
   let cfg=u=>u.model+" "+_trimHead(u.trim);
   let absorb={};
@@ -1704,10 +1732,13 @@ function acquisitionRecs(res){
   // only models we actually sell new today can be ordered — never surface a
   // discontinued line (Q50, Q70L, …) as a unit to "order and keep in".
   let curModels={}; (res.inv||[]).forEach(u=>{ if(u.model) curModels[String(u.model).toUpperCase()]=1; });
+  // configs we've suppressed (can't order) — never surface them as things to order
+  let supSet={}; (res.lines||[]).forEach(l=>{ if(l.suppressed) supSet[l.model+"|"+firstWord(l.trim)]=1; });
   let recs=[];
   Object.keys(res.depr.trim).forEach(model=>{ if(!curModels[String(model).toUpperCase()]) return; res.depr.trim[model].forEach(t=>{
     if(t.n<8||t.gross==null) return;                      // need real history + a gross read
     let head=firstWord(t.trim), onlot=cov[model+"|"+head]||0;
+    if(supSet[model+"|"+head]) return;                    // suppressed config — skip
     let turn=t.dts||45, speed=Math.max(0,(60-turn)/60);   // 0..1 fast
     let score=t.gross*(0.6+0.4*speed)-onlot*250;          // reward gross+speed, penalize we already own it
     recs.push({model:model,trim:t.trim,gross:t.gross,dts:turn,n:t.n,price:t.price,in_stock:onlot,score:Math.round(score)}); }); });
@@ -1724,26 +1755,57 @@ function acquisitionRecs(res){
   return out;
 }
 function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], releasing=0;
+  let maxMo=parseFloat(s.loaner_max_months)||7, cap=parseFloat(s.loaner_mile_cap)||10000, mpm=parseFloat(s.loaner_miles_per_month)||1500;
+  let colorMix={}, relBucket={};   // release cadence: yyyy-mm -> count
+  let ext2grp=(ex)=>{ let g=(s.color_map||{})[String(ex||"").toUpperCase()]; if(g) return g;
+    return (typeof window!=="undefined"&&window.DEPR&&window.DEPR.a&&window.DEPR.a.colorGroup)?window.DEPR.a.colorGroup(ex):(String(ex||"").toUpperCase()||"—"); };
   (s.loaner_units||[]).forEach(e=>{ let stock=String(e.stock||"").trim(); if(!stock) return;
     let start=new Date(e.start), hasStart=!isNaN(start.getTime());
     let months=hasStart?((today-start)/86400000/DPM):0, miles=loanerNum(e.miles);
-    if(miles===null) miles=s.loaner_miles_per_month*months;
+    if(miles===null) miles=mpm*months;
     let u=loanerMatchUnit(stock,res.inv), model=u?u.model:String(e.model||"").trim().toUpperCase();
-    let uyear=u?parseInt(u.myear||u.my||0,10):0;
+    let ext=u?u.ext:String(e.ext||"").trim(), grp=ext2grp(ext);
+    let uyear=u?parseInt(u.myear||u.my||0,10):(parseInt(e.year||0,10)||0);
     let icv=incentive(s,model,uyear,today.getMonth()+1,"icv");
-    let releaseAt=hasStart?new Date(start.getTime()+Math.round(s.loaner_max_months*DPM)*86400000):null;
-    let eligible=months>=s.loaner_min_months, nearCap=miles>=s.loaner_mile_cap*0.9, nearTime=months>=s.loaner_max_months-1, status;
-    if(!eligible) status="🅗 HOLD · "+Math.max(0,Math.ceil((s.loaner_min_months-months)*DPM))+"d to ICV";
-    else if(nearCap||nearTime){ status="🔴 RELEASE NOW"; releasing++; }
+    // the PROGRAM clock: whichever comes first — 7 months in service, or the mile
+    // cap given how fast this unit is racking up miles. That's when it must retail.
+    let moToTime=Math.max(0,maxMo-months);
+    let rate=months>0.3?(miles/months):mpm;                 // miles/month, real if we can
+    let moToMiles=rate>0?Math.max(0,(cap-miles)/rate):99;
+    let moToRelease=Math.min(moToTime,moToMiles);
+    let releaseAt=hasStart?new Date(today.getTime()+Math.round(moToRelease*DPM)*86400000):null;
+    let overCap=miles>=cap, nearCap=miles>=cap*0.9, nearTime=months>=maxMo-1, over=months>=maxMo;
+    let eligible=months>=(parseFloat(s.loaner_min_months)||3), status, why;
+    if(overCap||over){ status="🔴 RELEASE NOW"; why=overCap?"over "+cap.toLocaleString()+" mi":"past "+maxMo+" mo"; releasing++; }
+    else if(nearCap||nearTime){ status="🔴 RELEASE NOW"; why=nearCap?Math.round(cap-miles).toLocaleString()+" mi left":"<1 mo left"; releasing++; }
+    else if(!eligible) status="🅗 HOLD · "+Math.max(0,Math.ceil((s.loaner_min_months-months)*DPM))+"d to ICV";
     else status="🟢 READY";
+    // bucket the projected release month for the cadence. Units already flagged
+    // "release now" are counted in the current month below, so don't bucket them
+    // again here (avoids double counting and keeps the cadence tied to the KPI).
+    let flaggedNow=(status.indexOf("RELEASE NOW")>=0);
+    if(releaseAt && !flaggedNow){ let k=releaseAt.toISOString().slice(0,7); relBucket[k]=(relBucket[k]||0)+1; }
+    colorMix[grp]=(colorMix[grp]||0)+1;
     let timing=(u&&hasStart)?loanerTiming(res,u,months,model,uyear):null;
-    rows.push({stock:stock,model:model,vehicle:u?u.desc:"",ext_int:u?(u.ext+"/"+u.int):"",
-      months:Math.round(months*10)/10,miles:Math.round(miles),icv_secured:eligible?Math.round(icv):0,icv:Math.round(icv),
-      eligible:eligible,status:status,release_by:releaseAt?releaseAt.toISOString().slice(0,10):"",note:String(e.note||"").trim(),
-      timing:timing}); });
-  rows.sort((a,b)=>b.months-a.months);
-  let inService=rows.length, afterRelease=inService-releasing, toAdd=Math.max(0,s.loaner_fleet_target-afterRelease);
-  return {target:s.loaner_fleet_target,in_service:inService,releasing_now:releasing,to_add:toAdd,rows:rows}; }
+    rows.push({stock:stock,model:model,vehicle:u?u.desc:"",ext:ext,color:grp,ext_int:u?(u.ext+"/"+u.int):(ext||""),
+      months:Math.round(months*10)/10,miles:Math.round(miles),mo_to_release:Math.round(moToRelease*10)/10,
+      icv_secured:eligible?Math.round(icv):0,icv:Math.round(icv),
+      eligible:eligible,status:status,release_why:why||"",release_by:releaseAt?releaseAt.toISOString().slice(0,10):"",
+      note:String(e.note||"").trim(),timing:timing}); });
+  rows.sort((a,b)=>a.mo_to_release-b.mo_to_release);
+  let inService=rows.length, target=parseInt(s.loaner_fleet_target,10)||0;
+  // place now = what it takes to hold the target once the units aging out leave.
+  // After they release, the fleet is (in_service − releasing); top it back up to
+  // target. If you're already over target, that number is smaller (or zero).
+  let afterRelease=inService-releasing, toAdd=Math.max(0,target-afterRelease), shortfall=Math.max(0,target-inService);
+  // forward cadence: for each of the next 6 months, how many release and therefore
+  // how many to place that month to keep the fleet at target.
+  let cadence=[]; let base=new Date(today.getFullYear(),today.getMonth(),1);
+  for(let i=0;i<6;i++){ let d=new Date(base.getFullYear(),base.getMonth()+i,1), k=d.toISOString().slice(0,7);
+    let rel=(i===0?releasing:(relBucket[k]||0));   // current month = what's flagged now
+    cadence.push({month:k, releasing:rel, place:(i===0?toAdd:rel)}); }
+  return {target:target,in_service:inService,releasing_now:releasing,to_add:toAdd,shortfall:shortfall,
+    rows:rows,cadence:cadence,color_mix:colorMix}; }
 
 function runEngine(inv,sales,s,today){
   let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,effectiveRoster(s),s), seas=computeSeasonality(sales,tb,(s.seasonality_shrink_k!==undefined?s.seasonality_shrink_k:6));
@@ -1763,9 +1825,9 @@ function runEngine(inv,sales,s,today){
   res.loanerBoard=loanerCandidates(res);
   res.acquisitionRecs=acquisitionRecs(res);
   res.serviceRecs=serviceLoanerRecs(res);
+  res.loanerFleetPlan=loanerFleet(res);        // fleet flow first — the selection sizes itself from it
   res.selection=serviceSelection(res);
   res.policyExplorer=policyExplorer(res);
-  res.loanerFleetPlan=loanerFleet(res);
   res.buildSeq=buildSequence(res);
   return res; }
 
@@ -2137,10 +2199,41 @@ function stkRow(label,val,cls){
   if(cls==="tot"||cls==="") disp="$"+Math.abs(Math.round(val)).toLocaleString();
   else disp=(val<0?"− $":"+ $")+Math.abs(Math.round(val)).toLocaleString();
   return "<tr class='"+cls+"'><td>"+label+"</td><td class='r'>"+disp+"</td></tr>"; }
+// The fleet-flow header: hold N at all times, and let the program move the flow.
+// This is what the service-loaner page leads with — current fleet, what's aging
+// out, how many to place now, and the month-by-month cadence.
+function fleetFlowRender(res){
+  let plan=res.loanerFleetPlan; if(!plan) return "";
+  let H=["<div class='flowbox'>"];
+  let manual=(res.settings.service_need!=null && res.settings.service_need!=="");
+  H.push("<div class='flowkpis'>");
+  H.push("<div class='fk'><div class='fkl'>In service now</div><div class='fkv'>"+plan.in_service+"</div><div class='fkn'>target "+plan.target+" held at all times</div></div>");
+  H.push("<div class='fk'><div class='fkl'>Aging out now</div><div class='fkv' style='color:"+(plan.releasing_now?"var(--bad)":"var(--muted)")+"'>"+plan.releasing_now+"</div><div class='fkn'>past 7 mo or near 10k mi</div></div>");
+  let placeNote=manual?"manual override set":(plan.releasing_now?("to hold "+plan.target+" once "+plan.releasing_now+" age out"):(plan.shortfall?(plan.shortfall+" under target"):"at target — nothing to place"));
+  H.push("<div class='fk'><div class='fkl'>Place now</div><div class='fkv' style='color:"+(plan.to_add?"var(--orange)":"var(--good)")+"'>"+plan.to_add+"</div><div class='fkn'>"+placeNote+"</div></div>");
+  H.push("</div>");
+  // color mix of the current fleet
+  let mix=plan.color_mix||{}, mk=Object.keys(mix).sort((a,b)=>mix[b]-mix[a]);
+  if(mk.length) H.push("<div class='basis' style='margin:2px 0 6px'>Current fleet colors: "+mk.map(k=>"<b>"+esc(String(k).toLowerCase())+"</b> "+mix[k]).join(" · ")+".</div>");
+  // forward cadence
+  let cad=(plan.cadence||[]).filter(c=>c.releasing>0 || c.place>0);
+  if(cad.length){
+    H.push("<div class='basis' style='margin:4px 0 4px'>The flow to hold "+plan.target+" at all times — place as units age out:</div>");
+    H.push("<table class='mos'><thead><tr><th>Month</th>"+cad.map(c=>"<th class='r'>"+monLabel(c.month)+"</th>").join("")+"</tr></thead><tbody>");
+    H.push("<tr><td>Aging out</td>"+cad.map(c=>"<td class='r'>"+(c.releasing||0)+"</td>").join("")+"</tr>");
+    H.push("<tr><td><b>Place</b></td>"+cad.map(c=>"<td class='r'><b>"+(c.place||0)+"</b></td>").join("")+"</tr></tbody></table>");
+  }
+  H.push("</div>");
+  return H.join("");
+}
+function monLabel(ym){ let m=String(ym||"").split("-"); if(m.length<2) return esc(ym||"");
+  let n=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(m[1],10)-1]||m[1];
+  return n+" "+m[0].slice(2); }
 function serviceSelectionRender(res){
   let sel=res.selection, s=res.settings, H=[];
-  if(!sel||!sel.units.length) return "<div class='empty'>No candidate units in stock — paste inventory with unit cost, then set incentives in Data.</div>";
-  let units=sel.units, p=sel.policy, need=Math.max(1,parseInt(s.service_need,10)||1);
+  H.push(fleetFlowRender(res));   // the fleet-flow header — this is the part that "talks"
+  if(!sel||!sel.units.length) return H.join("")+"<div class='empty'>No orderable candidate units in stock — paste inventory with unit cost (and check that the config isn't suppressed), then set incentives in Data.</div>";
+  let units=sel.units, p=sel.policy, need=Math.max(1,(typeof _placeNeed==="function"?_placeNeed(res):1));
   // On-the-fly levers — adjust and the whole list re-ranks. These proxy the
   // canonical Data-panel inputs so there is still one source of truth.
   let methodSel="<select onchange=\"setLever('lwdmethod',this.value)\">"+
@@ -2158,7 +2251,8 @@ function serviceSelectionRender(res){
   if(second) lead += margin>0 ? (", <span style='color:var(--good);font-weight:700'>$"+margin.toLocaleString()+"</span> better than the next unit.")
                               : ", tied with the next unit.";
   else lead += ".";
-  if(need>1) lead+=" Service needs "+need+" — the diversified mix below is the pick.";
+  if(need>1) lead+=" You need to place <b>"+need+"</b> to hold your fleet target — the diversified mix below is the pick.";
+  else if(need===1) lead+=" That's the one to place to hold your fleet target.";
   H.push("<div class='lead'>"+lead+"</div>");
   if(need>1) H.push(placementMixRender(sel, need));
   H.push(idealOrderRender(res));
@@ -2624,7 +2718,7 @@ function getSettings(){
     loaner_hold_per_day:numVal("lhold",0), incentives:readIncentives(),
     writedown_method:(document.getElementById("lwdmethod")||{}).value||"pct", writedown_flat:numVal("lwdflat",0),
     color_map:readColorMap(),
-    service_need:numVal("serviceNeed",3), new_retail_gross:numVal("lnewgross",1500),
+    service_need:((document.getElementById("serviceNeed")||{}).value||"").trim()===""?null:numVal("serviceNeed",0), new_retail_gross:numVal("lnewgross",1500),
     loaner_units:readFleet(), preowned_sales:readPreowned() }; }
 function numVal(id,def){ let el=document.getElementById(id); if(!el) return def; let v=parseFloat(el.value); return isNaN(v)?def:v; }
 const LOANCFG_IDS=["lfleet","licv80","licv60","licv65","reb80","reb60","reb65","ldepr","lwdmethod","lwdflat","lbase","lmin","lmax","lsvc","lcap","lbonus","lmpm","lrecon","lret","ldecay","lhold","lnewgross"];
@@ -2685,13 +2779,19 @@ function restoreInc(){ try{ JSON.parse(localStorage.getItem("pm_inc")||"[]").for
 function rawFleet(){ let out=[];
   document.querySelectorAll("#fleetRows .fleetrow").forEach(row=>{
     if(row.classList.contains("thead")) return;
-    out.push({stock:row.querySelector(".f-stock").value.trim(), start:row.querySelector(".f-start").value,
-              miles:row.querySelector(".f-miles").value.trim(), note:row.querySelector(".f-note").value.trim()}); });
+    out.push({stock:row.querySelector(".f-stock").value.trim(), model:row.querySelector(".f-model").value.trim(),
+              ext:row.querySelector(".f-ext").value.trim(), start:row.querySelector(".f-start").value,
+              miles:row.querySelector(".f-miles").value.trim(), note:row.querySelector(".f-note").value.trim(),
+              code:row.getAttribute("data-code")||"", year:row.getAttribute("data-year")||""}); });
   return out; }
 function addFleetRow(d){ d=d||{};
   let row=document.createElement("div"); row.className="fleetrow";
+  if(d.code) row.setAttribute("data-code",d.code);
+  if(d.year) row.setAttribute("data-year",d.year);
   row.innerHTML =
     "<input class='f-stock' placeholder='Stock#' value=\""+attrq(d.stock)+"\">"+
+    "<input class='f-model' placeholder='Model' value=\""+attrq(d.model||"")+"\">"+
+    "<input class='f-ext' placeholder='color' title='exterior color or paint code' value=\""+attrq(d.ext||"")+"\">"+
     "<input type='date' class='f-start' title='date it went into service' value='"+(d.start||"")+"'>"+
     "<input type='number' class='f-miles' min='0' placeholder='miles' value='"+(d.miles!=null?attrq(d.miles):"")+"'>"+
     "<input class='f-note' placeholder='reason / assignment' value=\""+attrq(d.note)+"\">"+
@@ -2699,9 +2799,51 @@ function addFleetRow(d){ d=d||{};
   row.querySelector(".del").addEventListener("click",function(){ row.remove(); liveRecompute(); persistFleet(); });
   row.querySelectorAll("input").forEach(inp=>inp.addEventListener("change",function(){ liveRecompute(); persistFleet(); }));
   document.getElementById("fleetRows").appendChild(row); return row; }
-function readFleet(){ let out=[]; rawFleet().forEach(r=>{ if(r.stock) out.push({stock:r.stock,start:r.start,miles:r.miles,note:r.note}); }); return out; }
+function readFleet(){ let out=[]; rawFleet().forEach(r=>{ if(r.stock) out.push({stock:r.stock,model:(r.model||"").toUpperCase(),ext:r.ext,start:r.start,miles:r.miles,note:r.note,code:r.code,year:r.year}); }); return out; }
 function persistFleet(){ try{ localStorage.setItem("pm_fleet",JSON.stringify(rawFleet())); }catch(e){} }
 function restoreFleet(){ try{ JSON.parse(localStorage.getItem("pm_fleet")||"[]").forEach(addFleetRow); }catch(e){} }
+// Import a DMS "vehicles" export as the current service loaner fleet. Forgiving on
+// column names/case; only Courtesy/loaner-program rows are taken. Replaces the table.
+function importFleet(){
+  let ta=document.getElementById("fleetImport"), st=document.getElementById("status");
+  let text=(ta&&ta.value)||""; if(!text.trim()){ if(st){st.className="foot err";st.textContent="Paste the DMS vehicle export first.";} return; }
+  let rows; try{ rows=parseTable(text); }catch(e){ if(st){st.className="foot err";st.textContent="Couldn't read that paste.";} return; }
+  if(!rows.length) return;
+  // header
+  let hi=-1,cm=null;
+  for(let i=0;i<rows.length;i++){ let m={}; rows[i].forEach((c,j)=>{ let k=String(c==null?"":c).trim().toLowerCase(); if(k) m[k]=j; });
+    if(("vin" in m)||("stock_number" in m)||("stock #" in m)||("stock#" in m)){ hi=i; cm=m; break; } }
+  if(hi<0){ if(st){st.className="foot err";st.textContent="No header row with VIN / stock number found.";} return; }
+  function pk(){ for(let i=0;i<arguments.length;i++){ let n=arguments[i].toLowerCase(); if(n in cm) return cm[n]; } return null; }
+  let ci={stock:pk("stock_number","stock #","stock#","stock"),vin:pk("vin"),model:pk("model"),code:pk("model code","model_code","modelcode"),
+    ext:pk("exterior code","exterior_code","ext code","exterior color","ext"),year:pk("year","my"),
+    program:pk("program"),status:pk("status"),miles:pk("odometer_value","odometer","miles"),
+    start:pk("in_service_date","in service date","in_service","in-service start","start")};
+  let added=0, skipped=0;
+  document.getElementById("fleetRows").innerHTML="";
+  for(let r=hi+1;r<rows.length;r++){ let row=rows[r]; if(!row||!row.length) continue;
+    let prog=ci.program!=null?String(row[ci.program]||"").toLowerCase():"courtesy";
+    if(prog && !/courtes|loaner|service|demo/.test(prog)){ skipped++; continue; }
+    let stat=ci.status!=null?String(row[ci.status]||"").toLowerCase():"";
+    if(/dispos|sold|wholesal/.test(stat)){ skipped++; continue; }   // already gone
+    let stock=ci.stock!=null?String(row[ci.stock]||"").trim():"";
+    let vin=ci.vin!=null?String(row[ci.vin]||"").trim():"";
+    if(!stock && vin) stock=vin.slice(-8);
+    if(!stock && !vin) continue;
+    let start=ci.start!=null?String(row[ci.start]||"").trim():"";
+    let d=start.match(/(\d{4})-(\d{2})-(\d{2})/); if(d) start=d[1]+"-"+d[2]+"-"+d[3];
+    else { let d2=start.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/); if(d2) start=d2[3]+"-"+("0"+d2[1]).slice(-2)+"-"+("0"+d2[2]).slice(-2); else start=""; }
+    let miles=ci.miles!=null?String(row[ci.miles]||"").replace(/[^0-9.]/g,""):"";
+    let model=ci.model!=null?String(row[ci.model]||"").trim().toUpperCase():"";
+    let code=ci.code!=null?String(row[ci.code]||"").trim():"";
+    if(!model && code) model=modelFromCode(digitsOnly(code));
+    let ext=ci.ext!=null?String(row[ci.ext]||"").trim().toUpperCase():"";
+    let year=ci.year!=null?String(row[ci.year]||"").trim():"";
+    let note=(vin?("VIN "+vin.slice(-6)):"")+(prog&&prog!=="courtesy"?(" · "+prog):"");
+    addFleetRow({stock:stock,model:model,ext:ext,start:start,miles:miles,note:note,code:code,year:year}); added++; }
+  persistFleet(); if(HAS_RUN) liveRecompute();
+  if(st){ st.className="foot okmsg"; st.textContent="✓ imported "+added+" loaner unit"+(added===1?"":"s")+(skipped?(" ("+skipped+" non-loaner rows skipped)"):""); }
+}
 
 /* ---- preowned sales paste (optional) ---- */
 function readPreowned(){
@@ -2887,7 +3029,7 @@ function rawSuppress(){ let out=[];
 function addSupRow(d){ d=d||{};
   let row=document.createElement("div"); row.className="suprow";
   row.innerHTML =
-    "<input class='s-code' placeholder='e.g. 8411' value=\""+attrq(d.code)+"\">"+
+    "<input class='s-code' placeholder='code or trim (e.g. PURE)' value=\""+attrq(d.code)+"\">"+
     "<input class='s-ext' placeholder='any' value=\""+attrq(d.ext)+"\">"+
     "<input class='s-int' placeholder='any' value=\""+attrq(d.int)+"\">"+
     "<button class='del' title='remove'>✕</button>";
@@ -3042,6 +3184,8 @@ window.addEventListener("DOMContentLoaded",function(){
   document.getElementById("addDemo").addEventListener("click",function(){ addDemoRow(); persistDemos(); });
   restoreDemos();
   document.getElementById("addLoaner").addEventListener("click",function(){ addLoanerRow(); persistLoaners(); });
+  { let ib=document.getElementById("importFleetBtn"); if(ib) ib.addEventListener("click",importFleet);
+    let fi=document.getElementById("fleetImport"); if(fi) fi.addEventListener("change",function(){ try{ localStorage.setItem("pm_fleetimport",fi.value); }catch(e){} }); }
   restoreLoaners();
   document.getElementById("addSup").addEventListener("click",function(){ addSupRow(); persistSuppress(); });
   restoreSuppress();
@@ -3049,6 +3193,7 @@ window.addEventListener("DOMContentLoaded",function(){
   restoreAdds();
   document.getElementById("addFleet").addEventListener("click",function(){ addFleetRow(); persistFleet(); });
   restoreFleet();
+  try{ let fv=localStorage.getItem("pm_fleetimport"); if(fv!=null&&document.getElementById("fleetImport")) document.getElementById("fleetImport").value=fv; }catch(e){}
   document.getElementById("addInc").addEventListener("click",function(){ addIncentiveRow(); persistInc(); });
   restoreInc();
   document.getElementById("addColor").addEventListener("click",function(){ addColorRow(); persistColorMap(); });

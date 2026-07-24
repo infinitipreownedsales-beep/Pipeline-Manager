@@ -680,19 +680,31 @@ def _matches(entry: dict, model, ext, interior, key) -> bool:
         and ok(entry.get("ext"), ext) and ok(entry.get("int"), interior)
 
 
-def _suppressed(key, model, code, ext, interior, s: Settings) -> bool:
-    """Discontinued / no-longer-orderable. Ext and Int are optional: a bare code
-    (e.g. 8411) suppresses every combo of that code; add ext/int to target one."""
+def _suppressed(key, model, code, ext, interior, s: Settings, trim="") -> bool:
+    """Discontinued / no-longer-orderable. The 'code' field takes either a model
+    code (e.g. 8411 — one model year) or a trim/model NAME (e.g. PURE, or
+    'QX60 PURE') which suppresses every matching config regardless of year code.
+    Ext and Int are optional wildcards to narrow either kind."""
+    import re
     from .keys import digits_only
     if code == "8461":  # hardcoded discontinued (brief §17)
         return True
+    hay = f"{model or ''} {trim or ''}".upper()
     for e in s.suppress:
-        ec = digits_only(e.get("code", ""))[:4]
-        if not ec or ec != code:
+        raw = str(e.get("code", "")).strip()
+        if not raw:
             continue
         ee = str(e.get("ext", "")).strip()
         ei = str(e.get("int", "")).strip()
-        if (ee == "" or ee == ext) and (ei == "" or ei == interior):
+        ext_ok = ee == "" or ee == ext
+        int_ok = ei == "" or ei == interior
+        ec = digits_only(raw)[:4]
+        if ec:
+            if ec == code and ext_ok and int_ok:
+                return True
+            continue
+        toks = [t for t in re.sub(r"[^A-Z0-9 ]", " ", raw.upper()).split() if t and not t.isdigit()]
+        if toks and all(t in hay for t in toks) and ext_ok and int_ok:
             return True
     return False
 
@@ -760,7 +772,7 @@ def build_lines(s, metrics, seas, positions, aged_brakes, override_map, windows,
         returns = demo_returns.get(key, [])
         proj_at_arr, chain = project_at_arrival(model, pos, metric, seas, s, window, returns)
 
-        suppressed = _suppressed(key, model, code, ext, interior, s)
+        suppressed = _suppressed(key, model, code, ext, interior, s, cfg.get("trim", ""))
         demoted = any(_matches(e, model, ext, interior, key) for e in s.demote)
         r90 = metric.r90 if metric else 0
         eff_demote = demoted and r90 < s.prove_bar
