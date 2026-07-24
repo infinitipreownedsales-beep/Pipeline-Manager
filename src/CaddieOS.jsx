@@ -408,7 +408,7 @@ const teeYardOf=(h,t)=>(h&&h.tees&&t&&h.tees[t]!=null)?h.tees[t]:(h?h.y:0);
 // read for angle-aware decisions. Falls back to hz text for un-mapped holes.
 // When onPlace is given, the map becomes tappable: a tap drops the ball marker and
 // reports normalized (d,x) back so the engine learns where the shot finished.
-const HoleView=({h,P,ball,onPlace,shots,target,tee})=>{
+const HoleView=({h,P,ball,onPlace,shots,target,tee,compact})=>{
   const HZ=(h.hz||"").toUpperCase();
   const W=220,Ht=300,L=28,Rr=192,uw=Rr-L,teeY=254,greenY=48,span=teeY-greenY;
   const yAt=d=>teeY-Math.max(0,Math.min(1,d))*span;                 // d 0..1 (tee→green) → y
@@ -478,7 +478,7 @@ const HoleView=({h,P,ball,onPlace,shots,target,tee})=>{
   // record of the hole as it actually played out.
   const shotPts=(shots||[]).filter(s=>s.atD!=null).map(s=>[xAt(s.atX),yAt(s.atD)]);
   const pathPts=[[tx,ty],...shotPts]; if(ball) pathPts.push([bx,by]);
-  return (<svg viewBox={`0 0 ${W} ${Ht}`} onClick={handleTap} style={{width:"100%",maxWidth:300,display:"block",margin:"0 auto",cursor:onPlace?"crosshair":"default"}}>
+  return (<svg viewBox={`0 0 ${W} ${Ht}`} onClick={handleTap} style={{width:"100%",maxWidth:compact?176:300,maxHeight:compact?"38vh":"none",display:"block",margin:"0 auto",cursor:onPlace?"crosshair":"default"}}>
     <rect x={0} y={0} width={W} height={Ht} rx={18} fill="#eef1ea"/>
     {/* bending fairway corridor */}
     <path d={smoothPath(px)} fill="none" stroke="#cddbc9" strokeWidth={fwW+11} strokeLinecap="round" strokeLinejoin="round"/>
@@ -919,55 +919,50 @@ export default function CaddieOS(){
                     <button className="tapbtn" onClick={()=>saveLive({...live,dismiss:[...(live.dismiss||[]),c]})} style={{flex:1,border:"none",borderRadius:12,padding:"12px",background:"#f1efe9",color:INK,fontWeight:700,cursor:"pointer"}}>No, it's fine</button>
                   </div>
                 </div>;})()}
-              {/* Hole header — number + par/yardage, with quick prev/next hole nav so
-                  you can flip holes and know which is which by the overview, not by reading. */}
-              {(()=>{const navBtn=en=>({border:"none",background:en?"#fff":"transparent",color:en?INK:"#cfcabf",width:44,height:44,borderRadius:22,fontSize:26,fontWeight:400,lineHeight:1,cursor:en?"pointer":"default",boxShadow:en?"0 1px 4px rgba(0,0,0,.06)":"none"});
+              {/* Hole header — compact, with quick prev/next nav. */}
+              {(()=>{const navBtn=en=>({border:"none",background:en?"#fff":"transparent",color:en?INK:"#cfcabf",width:36,height:36,borderRadius:18,fontSize:22,fontWeight:400,lineHeight:1,cursor:en?"pointer":"default",boxShadow:en?"0 1px 3px rgba(0,0,0,.06)":"none"});
                 const canL=live.hole>0,canR=live.hole<CH.length-1;
-                return <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                return <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
                   <button className="tapbtn" onClick={()=>goHole(live.hole-1)} disabled={!canL} style={navBtn(canL)}>‹</button>
                   <div style={{textAlign:"center"}}>
-                    <div style={{fontFamily:SERIF,fontSize:25,color:INK,fontWeight:700,lineHeight:1.1}}>Hole {H.n||live.hole+1}</div>
-                    <div style={{color:MUTE,fontSize:12,letterSpacing:.4}}>Par {H.par} · {teeYardOf(H,live.tee)} yds · Shot {live.strokes+1}{live.strokes===0?" (tee)":""}</div>
+                    <div style={{fontFamily:SERIF,fontSize:20,color:INK,fontWeight:700,lineHeight:1.05}}>Hole {H.n||live.hole+1}</div>
+                    <div style={{color:MUTE,fontSize:11,letterSpacing:.3}}>Par {H.par} · {teeYardOf(H,live.tee)} yds · Shot {live.strokes+1}{live.strokes===0?" (tee)":""}</div>
                   </div>
                   <button className="tapbtn" onClick={()=>goHole(live.hole+1)} disabled={!canR} style={navBtn(canR)}>›</button>
                 </div>;})()}
               {/* Tee picker on the tee shot — set the day's tee; the distance re-defaults. */}
-              {live.strokes===0&&H.tees&&<div style={{display:"flex",gap:5,justifyContent:"center",marginBottom:12,flexWrap:"wrap"}}>
+              {live.strokes===0&&H.tees&&<div style={{display:"flex",gap:4,justifyContent:"center",marginBottom:6,flexWrap:"wrap"}}>
                 {TEES.filter(([k])=>H.tees[k]!=null).map(([k,lab])=>{const on=(live.tee||teeSel)===k;
-                  return <button key={k} className="tapbtn" onClick={()=>{setTeeSel(k);saveLive({...live,tee:k,rem:teeYardOf(H,k)});setQYards("");}} style={{border:"none",borderRadius:14,padding:"6px 10px",fontSize:11,fontWeight:700,cursor:"pointer",background:on?INK:"#fff",color:on?PAPER:MUTE,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.05)"}}>{lab} <span style={{opacity:.7}}>{H.tees[k]}</span></button>;})}
+                  return <button key={k} className="tapbtn" onClick={()=>{setTeeSel(k);saveLive({...live,tee:k,rem:teeYardOf(H,k)});setQYards("");}} style={{border:"none",borderRadius:12,padding:"5px 9px",fontSize:11,fontWeight:700,cursor:"pointer",background:on?INK:"#fff",color:on?PAPER:MUTE,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.05)"}}>{lab} <span style={{opacity:.7}}>{H.tees[k]}</span></button>;})}
               </div>}
-              {/* Hole overview — the clean landing graphic; once you're playing, it's the
-                  tappable placement map so you can mark where the ball finished. */}
+              {/* Hole overview — compact tappable map (fits without scrolling). */}
               {Array.isArray(H.path)&&(live.strokes===0
-                ? <HoleView h={H} P={P} tee={live.tee}/>
+                ? <HoleView h={H} P={P} tee={live.tee} compact/>
                 : (()=>{const loc=live.ballX!=null?holeContext(H,live.ballD,live.ballX):null;
                     const est=live.ballX!=null?Math.max(1,Math.min(H.y,Math.round((1-live.ballD)*H.y))):null;
-                    const where=loc?(loc.blocked?`blocked ${loc.side} — trees on your line`:loc.side==="center"?"in the middle — clean angle":`${loc.side} of the fairway${loc.off?"":" — clean angle"}`):null;
-                    // Map FIRST: a tap sets the ball, estimates the number, and reads the
-                    // lie — but does NOT jump ahead. You then confirm the yardage and tap
-                    // for the read, so the map is always filled before the call.
+                    const where=loc?(loc.blocked?`blocked ${loc.side} — trees on your line`:loc.side==="center"?"middle — clean angle":`${loc.side}${loc.off?"":" — clean angle"}`):null;
+                    // Map FIRST: a tap sets the ball + number + lie, but does NOT jump ahead.
                     const placeFromMap=(d,x)=>{buzz();
                       const remA=Math.max(1,Math.min(H.y,Math.round((1-d)*H.y)));const det=lieAt(H,d,x);
                       setQYards(String(remA));setLie(det.lie);setLieLabel(det.label);
                       saveLive({...live,rem:remA,ballD:d,ballX:x});};
-                    return <><div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>{live.ballX!=null?"Your spot — tap to move it · then the number below":"First, tap where your ball is — I'll read the number & lie"}</div>
-                      <HoleView h={H} P={P} tee={live.tee} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)} onPlace={placeFromMap}/>
-                      {where&&<div style={{textAlign:"center",fontFamily:SERIF,fontSize:15,color:INK,marginTop:8}}>You're {where}{est!=null?` · about ${est} to the flag`:""}.</div>}</>;})())}
-              {live.strokes===0&&<div style={{fontFamily:SERIF,fontSize:16,color:MUTE,lineHeight:1.5,margin:"10px 0 16px",textAlign:"center"}}>{teeWhisper(H,teeYardOf(H,live.tee))}</div>}
-              <div style={{textAlign:"center",marginBottom:6,color:MUTE,fontSize:12,letterSpacing:2,textTransform:"uppercase"}}>How far?</div>
-              <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:14,marginBottom:18}}>
-                <button onClick={()=>setQYards(String(Math.max(1,y-1)))} style={{border:"none",background:"#fff",width:52,height:52,borderRadius:26,fontSize:24,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>–</button>
-                <input inputMode="numeric" value={qYards} placeholder={String(live.rem)} onChange={e=>setQYards(e.target.value.replace(/[^0-9]/g,"").slice(0,3))} style={{width:150,textAlign:"center",fontSize:74,fontWeight:800,color:INK,border:"none",background:"transparent",fontVariantNumeric:"tabular-nums",outline:"none"}}/>
-                <button onClick={()=>setQYards(String(y+1))} style={{border:"none",background:"#fff",width:52,height:52,borderRadius:26,fontSize:24,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>+</button>
+                    return <><div style={{textAlign:"center",color:MUTE,fontSize:11,marginBottom:3}}>{live.ballX!=null?"Tap to move your ball":"First — tap where your ball is"}</div>
+                      <HoleView h={H} P={P} tee={live.tee} compact ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)} onPlace={placeFromMap}/>
+                      {where&&<div style={{textAlign:"center",fontFamily:SERIF,fontSize:13,color:INK,marginTop:4}}>You're {where}{est!=null?` · ~${est} in`:""}.</div>}</>;})())}
+              {live.strokes===0&&<div style={{fontFamily:SERIF,fontSize:13,color:MUTE,lineHeight:1.35,margin:"5px 0 6px",textAlign:"center"}}>{teeWhisper(H,teeYardOf(H,live.tee))}</div>}
+              <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:12,margin:"4px 0 2px"}}>
+                <button onClick={()=>setQYards(String(Math.max(1,y-1)))} style={{border:"none",background:"#fff",width:42,height:42,borderRadius:21,fontSize:22,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>–</button>
+                <input inputMode="numeric" value={qYards} placeholder={String(live.rem)} onChange={e=>setQYards(e.target.value.replace(/[^0-9]/g,"").slice(0,3))} style={{width:118,textAlign:"center",fontSize:50,fontWeight:800,color:INK,border:"none",background:"transparent",fontVariantNumeric:"tabular-nums",outline:"none"}}/>
+                <button onClick={()=>setQYards(String(y+1))} style={{border:"none",background:"#fff",width:42,height:42,borderRadius:21,fontSize:22,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>+</button>
               </div>
-              <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:16}}>{courses[live.course]&&courses[live.course].ref==="flag"?"yards to the flag":"yards to the middle"}{live.strokes>0&&Array.isArray(H.path)?" · from your tap, or your rangefinder":""}</div>
-              <div style={{display:"flex",gap:7,justifyContent:"center",flexWrap:"wrap",marginBottom:16}}>
+              <div style={{textAlign:"center",color:MUTE,fontSize:11,marginBottom:8}}>{courses[live.course]&&courses[live.course].ref==="flag"?"yards to the flag":"yards to the middle"}{live.strokes>0&&Array.isArray(H.path)?" · tap or rangefinder":""}</div>
+              <div style={{display:"flex",gap:4,justifyContent:"center",flexWrap:"wrap",marginBottom:8}}>
                 {[["Tee","FW"],["Fairway","FW"],["Fringe","FRINGE"],["First cut","FIRST"],["Rough","ROUGH"],["Deep","DEEP"],["Bunker","FBUNK"],["Recovery","TREES"]].map(([lab,v])=>{const on=lieLabel===lab;
-                  return <button key={lab} className="tapbtn" onClick={()=>{setLie(v);setLieLabel(lab);}} style={{border:"none",borderRadius:20,padding:"10px 14px",fontSize:13,fontWeight:600,cursor:"pointer",background:on?PINE:"#fff",color:on?PAPER:INK,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.06)"}}>{lab}</button>;})}
+                  return <button key={lab} className="tapbtn" onClick={()=>{setLie(v);setLieLabel(lab);}} style={{border:"none",borderRadius:16,padding:"6px 10px",fontSize:12,fontWeight:600,cursor:"pointer",background:on?PINE:"#fff",color:on?PAPER:INK,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.06)"}}>{lab}</button>;})}
               </div>
-              <div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:22}}>
+              <div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:10}}>
                 {[["NONE","calm"],["INTO","into"],["DOWN","down"],["CROSS","cross"]].map(([k,l])=>(
-                  <button key={k} onClick={()=>setWind(k)} style={{border:"none",borderRadius:14,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer",background:wind===k?INK:"transparent",color:wind===k?PAPER:MUTE}}>{l}</button>))}
+                  <button key={k} onClick={()=>setWind(k)} style={{border:"none",borderRadius:14,padding:"5px 11px",fontSize:12,fontWeight:600,cursor:"pointer",background:wind===k?INK:"transparent",color:wind===k?PAPER:MUTE}}>{l}</button>))}
               </div>
               {(()=>{const needPlace=live.strokes>0&&Array.isArray(H.path)&&live.ballX==null;
                 return <button className="tapbtn" disabled={needPlace} onClick={()=>{if(needPlace)return;buzz();const v=parseInt(qYards)||live.rem;
