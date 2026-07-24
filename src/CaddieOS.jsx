@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { whisper, humanClub, teeWhisper, puttWhisper, benchWhisper, clubConfidence } from "./whisper.js";
 import { MAPPED } from "./holes/index.js";
 import { recoveryPlan, isRecoveryLie } from "./recovery.js";
@@ -564,6 +564,7 @@ export default function CaddieOS(){
   const [newCarry,setNewCarry]=useState("");
   const [courseSel,setCourseSel]=useState("bp");
   const [teeSel,setTeeSel]=useState("white");   // chosen tee set (applies to the whole round)
+  const undoRef=useRef(false);                   // Back-button undo sets this so the reset effect skips
   const [viewHole,setViewHole]=useState(null);
   const [teeIn,setTeeIn]=useState("");
   const [tourn,setTourn]=useState(false);
@@ -595,6 +596,23 @@ export default function CaddieOS(){
   const playHoleNow=i=>{saveLive({...live,hole:i,strokes:0,rem:(live.teeAdj&&live.teeAdj[i])||teeYardOf(CH[i],live.tee),onGreen:false,putts:0,pen:0,i35At:null,teeAck:false});setViewHole(null);};
   // Quick hole change from the landing header — jump straight to that hole's tee.
   const goHole=i=>{if(!live||i<0||i>=CH.length||i===live.hole)return;buzz();playHoleNow(i);};
+  // Universal Back — always steps to the previous screen. From the fresh question
+  // screen it UNDOES the last shot and reopens its result, so a too-fast tap (wrong
+  // lie/direction) is recoverable.
+  const goBack=()=>{buzz();
+    if(awaitDrop){setAwaitDrop(null);setDropPos(null);return;}
+    if(awaitResult){setAwaitResult(false);return;}       // result → the read
+    if(asked){setAsked(false);setShowAlt(false);return;} // read → question
+    let ns=[...((live&&live.shots)||[])];
+    if(ns.length&&ns[ns.length-1].pen) ns=ns.slice(0,-1);   // strip a trailing penalty
+    const last=ns[ns.length-1];
+    if(last&&!last.pen&&last.h===live.hole+1){              // undo the last struck shot, reopen its result
+      ns=ns.slice(0,-1); undoRef.current=true; setSel(last.c); setResDir(last.dir==="L"?"left":last.dir==="R"?"right":"line");
+      saveLive({...live,shots:ns,strokes:Math.max(0,live.strokes-1),rem:last.from,onGreen:false,ballX:last.atX!=null?last.atX:null,ballD:last.atD!=null?last.atD:null});
+      setAwaitResult(true);
+    }};
+  const canGoBack=()=>{if(!live)return false;if(awaitDrop||awaitResult||asked)return true;
+    return ((live.shots||[]).some(s=>s.h===live.hole+1&&!s.pen));};
   const endSave=()=>{const idx=live.scores.map((sc,i)=>sc!==null?i:-1).filter(i=>i>=0);
     if(idx.length){const rd={date:new Date().toLocaleDateString(),course:courses[live.course]?courses[live.course].name:"",holes:idx.length,total:idx.reduce((a,i)=>a+live.scores[i],0),plan:idx.reduce((a,i)=>a+CH[i].tgt,0),scores:live.scores.map(sc=>sc===null?0:sc),putts:live.puttsArr.reduce((a,b)=>a+(b||0),0),convMade:live.convs.filter(c=>c===true).length,convTried:live.convs.filter(c=>c!==null).length,benched:live.bench||[],shots:live.shots||[]};saveRounds([...rounds,rd]);}
     saveLive(null);store.set("caddie:live",null);setEndArm(false);setTab("trends");};
@@ -725,7 +743,8 @@ export default function CaddieOS(){
   const R=live&&!live.onGreen?E.rec(effRem):null;
   const L=live&&!live.onGreen&&(!R||R.zone==="adv")?E.layup(live.rem).filter(o=>o.r.zone!=="adv"):null;
 
-  useEffect(()=>{ setAsked(false);setAwaitResult(false);setAwaitDrop(null);setDropPos(null);setShowAlt(false);setQYards("");setResDir("line");
+  useEffect(()=>{ if(undoRef.current){undoRef.current=false;return;}   // Back-undo: keep the reopened result state
+    setAsked(false);setAwaitResult(false);setAwaitDrop(null);setDropPos(null);setShowAlt(false);setQYards("");setResDir("line");
     if(!live||live.onGreen){setSel(null);return;}
     const hp=getPlan(CH[live.hole]);
     const bk=(!learned&&live.strokes<hp.length)?bookChipOf(hp[live.strokes].c,P):null;
@@ -877,7 +896,9 @@ export default function CaddieOS(){
           }
           const phase=live.onGreen?"putt":awaitDrop?"drop":awaitResult?"result":asked?"whisper":"question";
           const y=parseInt(qYards)||live.rem;
-          return <div style={{padding:"16px 16px 28px"}}>
+          return <div style={{padding:"12px 16px 28px"}}>
+            {/* Universal Back — steps to the previous screen; undoes a too-fast tap. */}
+            {canGoBack()&&<button className="tapbtn" onClick={goBack} style={{border:"none",background:"transparent",color:MUTE,fontSize:14,fontWeight:700,cursor:"pointer",padding:"2px 0 8px",display:"flex",alignItems:"center",gap:4}}>‹ Back</button>}
 
             {phase==="question"&&<div style={arrive}>
               {(()=>{const c=coldAlert[0];if(!c)return null;const cc=confOf(c);
@@ -913,17 +934,14 @@ export default function CaddieOS(){
                 : (()=>{const loc=live.ballX!=null?holeContext(H,live.ballD,live.ballX):null;
                     const est=live.ballX!=null?Math.max(1,Math.min(H.y,Math.round((1-live.ballD)*H.y))):null;
                     const where=loc?(loc.blocked?`blocked ${loc.side} — trees on your line`:loc.side==="center"?"in the middle — clean angle":`${loc.side} of the fairway${loc.off?"":" — clean angle"}`):null;
-                    // ONE tap does it all: sets the ball, estimates the number, reads the
-                    // lie, AND gives the club read — so the whole shot is tap → HIT IT →
-                    // result (3 clicks). No rangefinder needed; refine from the read if wanted.
+                    // Map FIRST: a tap sets the ball, estimates the number, and reads the
+                    // lie — but does NOT jump ahead. You then confirm the yardage and tap
+                    // for the read, so the map is always filled before the call.
                     const placeFromMap=(d,x)=>{buzz();
                       const remA=Math.max(1,Math.min(H.y,Math.round((1-d)*H.y)));const det=lieAt(H,d,x);
-                      const loc=holeContext(H,d,x);
                       setQYards(String(remA));setLie(det.lie);setLieLabel(det.label);
-                      if(isRecoveryLie(det.lie)){const plan=recoveryPlan(remA,det.lie,{bag:recoBag(),wedgeDist,side:loc.side,blocked:loc.blocked});setSel(plan.best?plan.best.club:Object.keys(P.carries)[0]);}
-                      else {const ev=Math.round(remA*windMul*lieFactor(det.lie));const pk=E.pick(ev,reliability);setSel(pk.chip);}
-                      saveLive({...live,rem:remA,ballD:d,ballX:x});setShowAlt(false);setAsked(true);};
-                    return <><div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>{live.ballX!=null?"Your spot — tap to move it":"Tap where your ball is — number, lie & club in one tap"}</div>
+                      saveLive({...live,rem:remA,ballD:d,ballX:x});};
+                    return <><div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>{live.ballX!=null?"Your spot — tap to move it · then the number below":"First, tap where your ball is — I'll read the number & lie"}</div>
                       <HoleView h={H} P={P} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)} onPlace={placeFromMap}/>
                       {where&&<div style={{textAlign:"center",fontFamily:SERIF,fontSize:15,color:INK,marginTop:8}}>You're {where}{est!=null?` · about ${est} to the flag`:""}.</div>}</>;})())}
               {live.strokes===0&&<div style={{fontFamily:SERIF,fontSize:16,color:MUTE,lineHeight:1.5,margin:"10px 0 16px",textAlign:"center"}}>{teeWhisper(H,teeYardOf(H,live.tee))}</div>}
@@ -942,10 +960,11 @@ export default function CaddieOS(){
                 {[["NONE","calm"],["INTO","into"],["DOWN","down"],["CROSS","cross"]].map(([k,l])=>(
                   <button key={k} onClick={()=>setWind(k)} style={{border:"none",borderRadius:14,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer",background:wind===k?INK:"transparent",color:wind===k?PAPER:MUTE}}>{l}</button>))}
               </div>
-              <button className="tapbtn" onClick={()=>{buzz();const v=parseInt(qYards)||live.rem;
+              {(()=>{const needPlace=live.strokes>0&&Array.isArray(H.path)&&live.ballX==null;
+                return <button className="tapbtn" disabled={needPlace} onClick={()=>{if(needPlace)return;buzz();const v=parseInt(qYards)||live.rem;
                 if(isRecoveryLie(lie)){const loc=live.ballX!=null?holeContext(H,live.ballD,live.ballX):{};const plan=recoveryPlan(v,lie,{bag:recoBag(),wedgeDist,side:loc.side,blocked:loc.blocked});saveLive({...live,rem:v});setSel(plan.best?plan.best.club:Object.keys(P.carries)[0]);}
                 else {const ev=Math.round(v*windMul*lieFactor(lie));const pk=E.pick(ev,reliability);saveLive({...live,rem:v});setSel(pk.chip);}
-                setAsked(true);setShowAlt(false);}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:17,fontWeight:700,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4}}>{live.strokes===0?"Tee off":"Read it"}</button>
+                setAsked(true);setShowAlt(false);}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:17,fontWeight:700,cursor:needPlace?"default":"pointer",background:needPlace?"#d9d5cc":PINE,color:needPlace?"#8a8578":PAPER,letterSpacing:.4}}>{needPlace?"Tap your ball on the map first":live.strokes===0?"Tee off":"Read it"}</button>;})()}
               {(()=>{const hs=(live.shots||[]).map((x,gi)=>({x,gi})).filter(o=>o.x.h===live.hole+1);if(!hs.length)return null;
                 return <div style={{marginTop:20,background:"#fff",borderRadius:16,padding:12,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
                   <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8}}>Shots this hole — tap to review or fix</div>
