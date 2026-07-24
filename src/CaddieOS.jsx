@@ -1077,6 +1077,20 @@ export default function CaddieOS(){
                     : cs ? "Backed by your own carry history with it."
                     : "Your best match for the number.";
                   return <div style={{color:MUTE,fontSize:13,fontStyle:"italic",fontFamily:SERIF,margin:"10px 4px 0"}}>Why — {reason}</div>;})()}
+                {(()=>{ // Pinched/water green: attack only with a high-confidence number, else lay up.
+                  const pinch=H.green&&(H.green.pinch||/pond|creek|water/i.test(H.green.guard||""));
+                  if(!pinch||!reach||live.rem<=34||live.strokes===0) return null;   // approach shots only
+                  const gp=greenProb(fam),d=disp(fam),rel=reliability(fam),haveData=gp!=null||d!=null;
+                  const confident=(gp!=null&&gp>=55)||(d&&d.sd<=8&&rel>=62);
+                  const lay=E.layup(live.rem)[0];
+                  if(confident||!haveData) return <div style={{marginTop:12,background:"#eef1ea",borderRadius:14,padding:"10px 12px",border:"1px solid #d6ddd0"}}>
+                    <div style={{fontSize:13,fontWeight:800,color:INK}}>Green's pinched — but this is a high-percentage number.</div>
+                    <div style={{fontSize:12,color:MUTE,marginTop:2}}>{gp!=null?`~${gp}% on-target with your ${fam}${d?`, ±${d.sd}y`:""} — commit and go at it, center is plenty.`:`Nothing in your data says lay up — go at it, but aim center.`}</div></div>;
+                  return <div style={{marginTop:12,background:"#fbf3ea",borderRadius:14,padding:"11px 12px",border:"1px solid #ecd9c0"}}>
+                    <div style={{fontSize:13,fontWeight:800,color:"#8a5a1a"}}>⚠ Pinched green — not a high-percentage number.</div>
+                    <div style={{fontSize:12,color:MUTE,marginTop:2,marginBottom:lay?8:0}}>{gp!=null?`Only ~${gp}% on-target with your ${fam}${d?` (±${d.sd}y)`:""} into a green squeezed by water. `:``}The percentage play is to lay back to your number.</div>
+                    {lay&&<button className="tapbtn" onClick={()=>{buzz();setSel(lay.k);}} style={{border:"none",borderRadius:12,padding:"10px 12px",background:PINE,color:PAPER,fontSize:13,fontWeight:800,cursor:"pointer"}}>Lay up — {lay.k} to leave {lay.rem}</button>}
+                  </div>;})()}
                 <button onClick={()=>{buzz();setAwaitResult(true);}} style={{width:"100%",border:"none",borderRadius:18,padding:"20px",fontSize:19,fontWeight:800,cursor:"pointer",background:GOLD,color:PINE,letterSpacing:1,marginTop:18}}>HIT IT</button>
                 <button onClick={()=>setShowAlt(!showAlt)} style={{width:"100%",border:"none",background:"transparent",color:MUTE,fontSize:14,cursor:"pointer",marginTop:12,fontFamily:SERIF,fontStyle:"italic"}}>{showAlt?"never mind":"something else?"}</button>
                 {showAlt&&(()=>{
