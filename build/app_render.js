@@ -375,19 +375,31 @@ function fleetFlowRender(res){
   let manual=(res.settings.service_need!=null && res.settings.service_need!=="");
   H.push("<div class='flowkpis'>");
   H.push("<div class='fk'><div class='fkl'>In service now</div><div class='fkv'>"+plan.in_service+"</div><div class='fkn'>target "+plan.target+" held at all times</div></div>");
-  H.push("<div class='fk'><div class='fkl'>Aging out now</div><div class='fkv' style='color:"+(plan.releasing_now?"var(--bad)":"var(--muted)")+"'>"+plan.releasing_now+"</div><div class='fkn'>past 7 mo or near 10k mi</div></div>");
-  let placeNote=manual?"manual override set":(plan.releasing_now?("to hold "+plan.target+" once "+plan.releasing_now+" age out"):(plan.shortfall?(plan.shortfall+" under target"):"at target — nothing to place"));
+  H.push("<div class='fk'><div class='fkl'>Retire now</div><div class='fkv' style='color:"+(plan.releasing_now?"var(--bad)":"var(--muted)")+"'>"+plan.releasing_now+"</div><div class='fkn'>at their best profit point (or forced by 7 mo / 10k mi)</div></div>");
+  let placeNote=manual?"manual override set":(plan.releasing_now?("to hold "+plan.target+" once "+plan.releasing_now+" retire"):(plan.shortfall?(plan.shortfall+" under target"):"at target — nothing to place"));
   H.push("<div class='fk'><div class='fkl'>Place now</div><div class='fkv' style='color:"+(plan.to_add?"var(--orange)":"var(--good)")+"'>"+plan.to_add+"</div><div class='fkn'>"+placeNote+"</div></div>");
   H.push("</div>");
   // color mix of the current fleet
   let mix=plan.color_mix||{}, mk=Object.keys(mix).sort((a,b)=>mix[b]-mix[a]);
   if(mk.length) H.push("<div class='basis' style='margin:2px 0 6px'>Current fleet colors: "+mk.map(k=>"<b>"+esc(String(k).toLowerCase())+"</b> "+mix[k]).join(" · ")+".</div>");
+  // per-unit retirement schedule — the engine's best time to retire each vehicle
+  let rows=plan.rows||[];
+  if(rows.length){
+    H.push("<details class='retsched' open><summary class='mixh'>When to retire each unit <span class='dim' style='font-weight:400'>— engine-timed for best profit, within the 7-month / 10k-mile window</span></summary>");
+    H.push("<table class='mos'><thead><tr><th>Stock</th><th>Vehicle</th><th>Color</th><th class='r'>In svc</th><th class='r'>Miles</th><th>Best retire</th><th>Why</th></tr></thead><tbody>");
+    rows.forEach(r=>{ let now=(r.status.indexOf("RETIRE NOW")>=0);
+      H.push("<tr"+(now?" class='toprow'":"")+"><td>"+esc(r.stock)+"</td><td>"+esc(r.vehicle||r.model)+"</td><td>"+esc(String(r.color||"").toLowerCase())+"</td>"+
+        "<td class='r'>"+r.months+"mo</td><td class='r'>"+r.miles.toLocaleString()+"</td>"+
+        "<td>"+(now?"<b style='color:var(--bad)'>now</b>":("<b>"+esc(monLabel((r.release_by||"").slice(0,7)))+"</b>"))+"</td>"+
+        "<td class='dim'>"+esc(r.release_why||"")+"</td></tr>"); });
+    H.push("</tbody></table></details>");
+  }
   // forward cadence
   let cad=(plan.cadence||[]).filter(c=>c.releasing>0 || c.place>0);
   if(cad.length){
-    H.push("<div class='basis' style='margin:4px 0 4px'>The flow to hold "+plan.target+" at all times — place as units age out:</div>");
+    H.push("<div class='basis' style='margin:6px 0 4px'>The flow to hold "+plan.target+" at all times — place as units hit their best retire month:</div>");
     H.push("<table class='mos'><thead><tr><th>Month</th>"+cad.map(c=>"<th class='r'>"+monLabel(c.month)+"</th>").join("")+"</tr></thead><tbody>");
-    H.push("<tr><td>Aging out</td>"+cad.map(c=>"<td class='r'>"+(c.releasing||0)+"</td>").join("")+"</tr>");
+    H.push("<tr><td>Retiring</td>"+cad.map(c=>"<td class='r'>"+(c.releasing||0)+"</td>").join("")+"</tr>");
     H.push("<tr><td><b>Place</b></td>"+cad.map(c=>"<td class='r'><b>"+(c.place||0)+"</b></td>").join("")+"</tr></tbody></table>");
   }
   H.push("</div>");

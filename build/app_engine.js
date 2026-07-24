@@ -750,14 +750,17 @@ function _retailAt(res, ui, months){
   let mp=Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8));
   return {price:mp, base:mp, n:0, dts:null, low:null, high:null, month:saleMonthIdx, color:null, colorPrem:0, colorDtsDelta:null, src:"modeled"};
 }
-function unitDifference(res, ui, months, policy){
+function unitDifference(res, ui, months, policy, milesRate){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, year=ui.year||res.tb.today.getFullYear();
   let ret=_retailAt(res, ui, months);
   let icv=incentive(s,ui.model,year,curMonth,"icv");
   let veloAmt=incentive(s,ui.model,year,ret.month,"velocity_bonus");
   // velocity is earned only if the unit RETAILS within the program window —
-  // service months + its real used turn (days-to-sell) must clear max months.
-  let turnMo=(ret.dts!=null?ret.dts:45)/DPM, saleAge=months+turnMo, miles=(parseFloat(s.loaner_miles_per_month)||0)*months;
+  // service months + its real used turn (days-to-sell) must clear max months,
+  // and it must still be under the mile cap. A known per-unit mileage pace
+  // (milesRate) overrides the fleet-average assumption.
+  let turnMo=(ret.dts!=null?ret.dts:45)/DPM, saleAge=months+turnMo;
+  let miles=(milesRate!=null?milesRate:(parseFloat(s.loaner_miles_per_month)||0))*months;
   let eligible=(saleAge<=(parseFloat(s.loaner_max_months)||7))&&(miles<(parseFloat(s.loaner_mile_cap)||1e9));
   let velo=eligible?veloAmt:0;
   let wd=_writedownAmt(ui.cost, ui.msrp, policy, months);
@@ -871,9 +874,56 @@ function acquisitionRecs(res){
     out.push(r); if(out.length>=5) break; }
   return out;
 }
+function _monShort(d){ if(!d||isNaN(d.getTime())) return "";
+  return ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getMonth()]+" '"+String(d.getFullYear()).slice(2); }
+// Borrow a cost basis for an in-service unit (which isn't in sellable inventory)
+// from the same config we DO stock — by model+code, else the model's median.
+function _fleetCostInfo(res){
+  let byCode={}, byModel={};
+  (res.inv||[]).forEach(u=>{ if(!(u.cost>0)&&!(u.msrp>0)) return;
+    let cd=String(u.code||"").slice(0,4), trim=String(u.desc||"").toUpperCase().replace(String(u.model||"").toUpperCase(),"").trim();
+    if(cd){ let k=u.model+"|"+cd; if(!byCode[k]) byCode[k]={cost:u.cost||0,msrp:u.msrp||0,trim:trim}; }
+    let m=byModel[u.model]||(byModel[u.model]={costs:[],msrps:[],trim:trim}); if(u.cost>0)m.costs.push(u.cost); if(u.msrp>0)m.msrps.push(u.msrp); });
+  let rosterTrim={}; (typeof ROSTER!=="undefined"?ROSTER:[]).forEach(c=>{ let k=c.model+"|"+String(c.code).slice(0,4); if(!rosterTrim[k]) rosterTrim[k]=c.trim; });
+  function med(a){ if(!a.length) return 0; let v=a.slice().sort((x,y)=>x-y); return v[Math.floor(v.length/2)]; }
+  return function(model, code){
+    let cd=String(code||"").slice(0,4), k=model+"|"+cd;
+    if(byCode[k]&&(byCode[k].cost>0||byCode[k].msrp>0)) return {cost:byCode[k].cost, msrp:byCode[k].msrp, trim:byCode[k].trim||rosterTrim[k]||""};
+    let m=byModel[model]; if(m&&(m.costs.length||m.msrps.length)) return {cost:med(m.costs), msrp:med(m.msrps), trim:rosterTrim[k]||""};
+    return null; };
+}
+// Best month to RETIRE a specific in-service unit for profitability. Walk the
+// same comps-rooted difference (expected retail − expected cost) forward from the
+// unit's current age to the program ceiling, using the unit's OWN mileage pace for
+// the velocity gate, and pick the month with the highest difference. Holding longer
+// banks more write-down but ages the car and risks the 7-month / 10k-mile bonus —
+// the peak of that trade-off is the answer, and it differs per unit by mileage.
+function _retireTiming(res, unit, costFn, policy){
+  let s=res.settings, D=(typeof window!=="undefined")?window.DEPR:null;
+  if(!D||!D.active||!D.a) return null;
+  let info=costFn(unit.model, unit.code); if(!info||!(info.cost>0)) return null;
+  let m0=unit.months||0, miles0=unit.miles||0;
+  let mpm=parseFloat(s.loaner_miles_per_month)||1500, maxMo=parseFloat(s.loaner_max_months)||7;
+  let rate=(miles0>0&&m0>0.4)?(miles0/m0):mpm;
+  let ui={model:unit.model, trim:info.trim||"", ext:unit.ext||"", year:unit.year||res.tb.today.getFullYear(), cost:info.cost, msrp:info.msrp||info.cost};
+  // baseline = retail it TODAY at its current age; candidates = hold to each whole
+  // month out to the ceiling. The lift is the value of waiting vs. retailing now.
+  let nowD=unitDifference(res, ui, Math.max(0.5,m0), policy, rate).difference;
+  let lo=Math.max(1,Math.ceil(m0-0.001)), hi=Math.max(lo,Math.floor(maxMo+0.5));
+  let best=null;
+  for(let M=lo;M<=hi;M++){ let d=unitDifference(res, ui, M, policy, rate);
+    if(!best || d.difference>best.diff) best={M:M, diff:d.difference, eligible:d.eligible}; }
+  if(!best) return null;
+  let moToRetire=Math.max(0, best.M-m0);
+  let retireDate=new Date(res.tb.today.getTime()+Math.round(moToRetire*DPM)*86400000);
+  return {bestM:best.M, moToRetire:Math.round(moToRetire*10)/10, retireDate:retireDate,
+    diffBest:best.diff, diffNow:(nowD!=null?nowD:best.diff), eligible:best.eligible, rate:Math.round(rate), trim:info.trim||""};
+}
 function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], releasing=0;
+  let costFn=_fleetCostInfo(res);
   let maxMo=parseFloat(s.loaner_max_months)||7, cap=parseFloat(s.loaner_mile_cap)||10000, mpm=parseFloat(s.loaner_miles_per_month)||1500;
-  let colorMix={}, relBucket={};   // release cadence: yyyy-mm -> count
+  let colorMix={}, relBucket={}, policy=_currentPolicy(s);   // release cadence: yyyy-mm -> count
+  let minMo=parseFloat(s.loaner_min_months)||3;
   let ext2grp=(ex)=>{ let g=(s.color_map||{})[String(ex||"").toUpperCase()]; if(g) return g;
     return (typeof window!=="undefined"&&window.DEPR&&window.DEPR.a&&window.DEPR.a.colorGroup)?window.DEPR.a.colorGroup(ex):(String(ex||"").toUpperCase()||"—"); };
   (s.loaner_units||[]).forEach(e=>{ let stock=String(e.stock||"").trim(); if(!stock) return;
@@ -883,31 +933,34 @@ function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], rele
     let u=loanerMatchUnit(stock,res.inv), model=u?u.model:String(e.model||"").trim().toUpperCase();
     let ext=u?u.ext:String(e.ext||"").trim(), grp=ext2grp(ext);
     let uyear=u?parseInt(u.myear||u.my||0,10):(parseInt(e.year||0,10)||0);
+    let code=u?u.code:(e.code||"");
     let icv=incentive(s,model,uyear,today.getMonth()+1,"icv");
-    // the PROGRAM clock: whichever comes first — 7 months in service, or the mile
-    // cap given how fast this unit is racking up miles. That's when it must retail.
-    let moToTime=Math.max(0,maxMo-months);
-    let rate=months>0.3?(miles/months):mpm;                 // miles/month, real if we can
-    let moToMiles=rate>0?Math.max(0,(cap-miles)/rate):99;
-    let moToRelease=Math.min(moToTime,moToMiles);
-    let releaseAt=hasStart?new Date(today.getTime()+Math.round(moToRelease*DPM)*86400000):null;
-    let overCap=miles>=cap, nearCap=miles>=cap*0.9, nearTime=months>=maxMo-1, over=months>=maxMo;
-    let eligible=months>=(parseFloat(s.loaner_min_months)||3), status, why;
-    if(overCap||over){ status="🔴 RELEASE NOW"; why=overCap?"over "+cap.toLocaleString()+" mi":"past "+maxMo+" mo"; releasing++; }
-    else if(nearCap||nearTime){ status="🔴 RELEASE NOW"; why=nearCap?Math.round(cap-miles).toLocaleString()+" mi left":"<1 mo left"; releasing++; }
-    else if(!eligible) status="🅗 HOLD · "+Math.max(0,Math.ceil((s.loaner_min_months-months)*DPM))+"d to ICV";
-    else status="🟢 READY";
-    // bucket the projected release month for the cadence. Units already flagged
-    // "release now" are counted in the current month below, so don't bucket them
-    // again here (avoids double counting and keeps the cadence tied to the KPI).
-    let flaggedNow=(status.indexOf("RELEASE NOW")>=0);
+    // Ask the engine for the PROFIT-OPTIMAL retire month for THIS unit (uses its
+    // own mileage pace). Hard limits still force it out: past 7 months or over the
+    // mile cap, it goes regardless of what the profit curve wants.
+    let rt=_retireTiming(res, {model:model,code:code,ext:ext,miles:miles,months:months,year:uyear}, costFn, policy);
+    let overCap=miles>=cap, over=months>=maxMo;
+    let eligibleMin=months>=minMo, status, why, releaseAt=null, moTo;
+    if(overCap||over){ status="🔴 RETIRE NOW"; why=overCap?"over "+cap.toLocaleString()+" mi":"past "+maxMo+"-mo window"; releasing++; moTo=0; releaseAt=today; }
+    else if(!eligibleMin){ status="🅗 HOLD · "+Math.max(0,Math.ceil((minMo-months)*DPM))+"d to ICV"; moTo=(rt?rt.moToRetire:Math.max(0,maxMo-months)); releaseAt=rt?rt.retireDate:(hasStart?new Date(today.getTime()+Math.round(moTo*DPM)*86400000):null);
+      why=releaseAt?("secure ICV, then retire "+_monShort(releaseAt)):"secure ICV first"; }
+    else if(rt){ moTo=rt.moToRetire; releaseAt=rt.retireDate;
+      if(rt.moToRetire<=0.4){ status="🔴 RETIRE NOW"; let lift=rt.diffBest-rt.diffNow; why="at its best point"+(lift>50?"":" — holding earns no more"); releasing++; }
+      else { status="🟢 HOLD to "+_monShort(rt.retireDate); let lift=Math.round(rt.diffBest-rt.diffNow); why=(lift>0?("+$"+lift.toLocaleString()+" vs. retailing now"):"best window"); } }
+    else { // no cost basis to optimize — fall back to the hard clock
+      let rate=months>0.3?(miles/months):mpm, moToMiles=rate>0?Math.max(0,(cap-miles)/rate):99;
+      moTo=Math.min(Math.max(0,maxMo-months),moToMiles); releaseAt=hasStart?new Date(today.getTime()+Math.round(moTo*DPM)*86400000):null;
+      if(moTo<=0.4||months>=maxMo-1){ status="🔴 RETIRE NOW"; why="near the "+maxMo+"-mo / "+cap.toLocaleString()+"-mi limit"; releasing++; }
+      else status="🟢 READY"; }
+    let flaggedNow=(status.indexOf("RETIRE NOW")>=0);
     if(releaseAt && !flaggedNow){ let k=releaseAt.toISOString().slice(0,7); relBucket[k]=(relBucket[k]||0)+1; }
     colorMix[grp]=(colorMix[grp]||0)+1;
     let timing=(u&&hasStart)?loanerTiming(res,u,months,model,uyear):null;
-    rows.push({stock:stock,model:model,vehicle:u?u.desc:"",ext:ext,color:grp,ext_int:u?(u.ext+"/"+u.int):(ext||""),
-      months:Math.round(months*10)/10,miles:Math.round(miles),mo_to_release:Math.round(moToRelease*10)/10,
-      icv_secured:eligible?Math.round(icv):0,icv:Math.round(icv),
-      eligible:eligible,status:status,release_why:why||"",release_by:releaseAt?releaseAt.toISOString().slice(0,10):"",
+    rows.push({stock:stock,model:model,vehicle:u?u.desc:(rt&&rt.trim?(model+" "+rt.trim):model),ext:ext,color:grp,ext_int:u?(u.ext+"/"+u.int):(ext||""),
+      months:Math.round(months*10)/10,miles:Math.round(miles),mo_to_release:Math.round((moTo||0)*10)/10,
+      best_retire_mo:(rt?rt.bestM:null),profit_lift:(rt?Math.round(rt.diffBest-rt.diffNow):null),
+      icv_secured:eligibleMin?Math.round(icv):0,icv:Math.round(icv),
+      eligible:eligibleMin,status:status,release_why:why||"",release_by:releaseAt?releaseAt.toISOString().slice(0,10):"",
       note:String(e.note||"").trim(),timing:timing}); });
   rows.sort((a,b)=>a.mo_to_release-b.mo_to_release);
   let inService=rows.length, target=parseInt(s.loaner_fleet_target,10)||0;
