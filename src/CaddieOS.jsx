@@ -478,7 +478,7 @@ const HoleView=({h,P,ball,onPlace,shots,target,tee,compact})=>{
   // record of the hole as it actually played out.
   const shotPts=(shots||[]).filter(s=>s.atD!=null).map(s=>[xAt(s.atX),yAt(s.atD)]);
   const pathPts=[[tx,ty],...shotPts]; if(ball) pathPts.push([bx,by]);
-  return (<svg viewBox={`0 0 ${W} ${Ht}`} onClick={handleTap} style={{width:"100%",maxWidth:compact?176:300,maxHeight:compact?"38vh":"none",display:"block",margin:"0 auto",cursor:onPlace?"crosshair":"default"}}>
+  return (<svg viewBox={`0 0 ${W} ${Ht}`} onClick={handleTap} style={{width:"100%",maxWidth:compact?150:300,maxHeight:compact?"128px":"none",display:"block",margin:"0 auto",cursor:onPlace?"crosshair":"default"}}>
     <rect x={0} y={0} width={W} height={Ht} rx={18} fill="#eef1ea"/>
     {/* bending fairway corridor */}
     <path d={smoothPath(px)} fill="none" stroke="#cddbc9" strokeWidth={fwW+11} strokeLinecap="round" strokeLinejoin="round"/>
@@ -829,7 +829,7 @@ export default function CaddieOS(){
   const inspecting=live&&viewHole!==null&&viewHole!==live.hole;
 
   return (
-    <div style={{background:PAPER,minHeight:"100vh",width:"100%",maxWidth:430,margin:"0 auto",overflowX:"hidden",fontFamily:"-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif",paddingBottom:76,boxSizing:"border-box"}}>
+    <div style={{background:PAPER,minHeight:"100vh",width:"100%",maxWidth:430,margin:"0 auto",overflowX:"hidden",fontFamily:"-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif",paddingBottom:58,boxSizing:"border-box"}}>
       <div style={{background:"#1a3a2e",padding:"12px 14px 9px",position:"sticky",top:0,zIndex:50}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
@@ -905,7 +905,7 @@ export default function CaddieOS(){
           }
           const phase=live.onGreen?"putt":awaitDrop?"drop":awaitResult?"result":asked?"whisper":"question";
           const y=parseInt(qYards)||live.rem;
-          return <div style={{padding:"12px 16px 28px"}}>
+          return <div style={{padding:"8px 16px 14px"}}>
             {/* Universal Back — steps to the previous screen; undoes a too-fast tap. */}
             {canGoBack()&&<button className="tapbtn" onClick={goBack} style={{border:"none",background:"transparent",color:MUTE,fontSize:14,fontWeight:700,cursor:"pointer",padding:"2px 0 8px",display:"flex",alignItems:"center",gap:4}}>‹ Back</button>}
 
@@ -956,9 +956,9 @@ export default function CaddieOS(){
                 <button onClick={()=>setQYards(String(y+1))} style={{border:"none",background:"#fff",width:42,height:42,borderRadius:21,fontSize:22,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>+</button>
               </div>
               <div style={{textAlign:"center",color:MUTE,fontSize:11,marginBottom:8}}>{courses[live.course]&&courses[live.course].ref==="flag"?"yards to the flag":"yards to the middle"}{live.strokes>0&&Array.isArray(H.path)?" · tap or rangefinder":""}</div>
-              <div style={{display:"flex",gap:4,justifyContent:"center",flexWrap:"wrap",marginBottom:8}}>
+              <div style={{display:"flex",gap:4,justifyContent:"flex-start",flexWrap:"nowrap",overflowX:"auto",marginBottom:8,padding:"0 2px 2px",WebkitOverflowScrolling:"touch"}}>
                 {[["Tee","FW"],["Fairway","FW"],["Fringe","FRINGE"],["First cut","FIRST"],["Rough","ROUGH"],["Deep","DEEP"],["Bunker","FBUNK"],["Recovery","TREES"]].map(([lab,v])=>{const on=lieLabel===lab;
-                  return <button key={lab} className="tapbtn" onClick={()=>{setLie(v);setLieLabel(lab);}} style={{border:"none",borderRadius:16,padding:"6px 10px",fontSize:12,fontWeight:600,cursor:"pointer",background:on?PINE:"#fff",color:on?PAPER:INK,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.06)"}}>{lab}</button>;})}
+                  return <button key={lab} className="tapbtn" onClick={()=>{setLie(v);setLieLabel(lab);}} style={{flexShrink:0,border:"none",borderRadius:16,padding:"6px 11px",fontSize:12,fontWeight:600,cursor:"pointer",background:on?PINE:"#fff",color:on?PAPER:INK,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.06)"}}>{lab}</button>;})}
               </div>
               <div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:10}}>
                 {[["NONE","calm"],["INTO","into"],["DOWN","down"],["CROSS","cross"]].map(([k,l])=>(
@@ -1187,7 +1187,7 @@ export default function CaddieOS(){
               </div>
             </div>}
 
-            {!tourn&&<div style={{display:"flex",justifyContent:"center",gap:20,marginTop:28}}>
+            {!tourn&&<div style={{display:"flex",justifyContent:"center",gap:20,marginTop:8}}>
               <button onClick={()=>setShowRep(!showRep)} style={{border:"none",background:"transparent",color:MUTE,fontSize:12,cursor:"pointer"}}>round so far</button>
               <button onClick={()=>setEndArm(!endArm)} style={{border:"none",background:"transparent",color:MUTE,fontSize:12,cursor:"pointer"}}>end round</button>
             </div>}
