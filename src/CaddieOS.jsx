@@ -478,7 +478,7 @@ const HoleView=({h,P,ball,onPlace,shots,target,tee,compact})=>{
   // record of the hole as it actually played out.
   const shotPts=(shots||[]).filter(s=>s.atD!=null).map(s=>[xAt(s.atX),yAt(s.atD)]);
   const pathPts=[[tx,ty],...shotPts]; if(ball) pathPts.push([bx,by]);
-  return (<svg viewBox={`0 0 ${W} ${Ht}`} onClick={handleTap} style={{width:"100%",maxWidth:compact?150:300,maxHeight:compact?"128px":"none",display:"block",margin:"0 auto",cursor:onPlace?"crosshair":"default"}}>
+  return (<svg viewBox={`0 0 ${W} ${Ht}`} onClick={handleTap} style={{width:"100%",maxWidth:compact?190:300,maxHeight:compact?"min(184px,29vh)":"none",display:"block",margin:"0 auto",cursor:onPlace?"crosshair":"default"}}>
     <rect x={0} y={0} width={W} height={Ht} rx={18} fill="#eef1ea"/>
     {/* bending fairway corridor */}
     <path d={smoothPath(px)} fill="none" stroke="#cddbc9" strokeWidth={fwW+11} strokeLinecap="round" strokeLinejoin="round"/>
@@ -829,7 +829,7 @@ export default function CaddieOS(){
   const inspecting=live&&viewHole!==null&&viewHole!==live.hole;
 
   return (
-    <div style={{background:PAPER,minHeight:"100vh",width:"100%",maxWidth:430,margin:"0 auto",overflowX:"hidden",fontFamily:"-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif",paddingBottom:58,boxSizing:"border-box"}}>
+    <div style={{background:PAPER,minHeight:"100vh",width:"100%",maxWidth:430,margin:"0 auto",overflowX:"hidden",fontFamily:"-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif",paddingBottom:46,boxSizing:"border-box"}}>
       <div style={{background:"#1a3a2e",padding:"12px 14px 9px",position:"sticky",top:0,zIndex:50}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
@@ -863,7 +863,7 @@ export default function CaddieOS(){
           {(()=>{const ch=(courses[courseSel]||COURSES.bp).holes;const t0=ch&&ch[0]&&ch[0].tees;if(!t0)return null;
             return <div style={{marginBottom:12}}>
               <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:6,textAlign:"center"}}>Playing from</div>
-              <div style={{display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap"}}>
+              <div style={{display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap",marginTop:0}}>
                 {TEES.filter(([k])=>t0[k]!=null).map(([k,lab])=>{const on=teeSel===k;
                   return <button key={k} onClick={()=>setTeeSel(k)} style={{border:"none",borderRadius:14,padding:"9px 13px",fontSize:13,fontWeight:700,cursor:"pointer",background:on?PINE:"#fff",color:on?PAPER:INK,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.06)"}}>{lab}</button>;})}
               </div>
@@ -907,7 +907,7 @@ export default function CaddieOS(){
           const y=parseInt(qYards)||live.rem;
           return <div style={{padding:"8px 16px 14px"}}>
             {/* Universal Back — steps to the previous screen; undoes a too-fast tap. */}
-            {canGoBack()&&<button className="tapbtn" onClick={goBack} style={{border:"none",background:"transparent",color:MUTE,fontSize:14,fontWeight:700,cursor:"pointer",padding:"2px 0 8px",display:"flex",alignItems:"center",gap:4}}>‹ Back</button>}
+            {canGoBack()&&<button className="tapbtn" onClick={goBack} style={{border:"none",background:"transparent",color:MUTE,fontSize:13,fontWeight:700,cursor:"pointer",padding:"0 0 2px",display:"flex",alignItems:"center",gap:3}}>‹ Back</button>}
 
             {phase==="question"&&<div style={arrive}>
               {(()=>{const c=coldAlert[0];if(!c)return null;const cc=confOf(c);
@@ -922,7 +922,7 @@ export default function CaddieOS(){
               {/* Hole header — compact, with quick prev/next nav. */}
               {(()=>{const navBtn=en=>({border:"none",background:en?"#fff":"transparent",color:en?INK:"#cfcabf",width:36,height:36,borderRadius:18,fontSize:22,fontWeight:400,lineHeight:1,cursor:en?"pointer":"default",boxShadow:en?"0 1px 3px rgba(0,0,0,.06)":"none"});
                 const canL=live.hole>0,canR=live.hole<CH.length-1;
-                return <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+                return <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:3}}>
                   <button className="tapbtn" onClick={()=>goHole(live.hole-1)} disabled={!canL} style={navBtn(canL)}>‹</button>
                   <div style={{textAlign:"center"}}>
                     <div style={{fontFamily:SERIF,fontSize:20,color:INK,fontWeight:700,lineHeight:1.05}}>Hole {H.n||live.hole+1}</div>
@@ -931,7 +931,7 @@ export default function CaddieOS(){
                   <button className="tapbtn" onClick={()=>goHole(live.hole+1)} disabled={!canR} style={navBtn(canR)}>›</button>
                 </div>;})()}
               {/* Tee picker on the tee shot — set the day's tee; the distance re-defaults. */}
-              {live.strokes===0&&H.tees&&<div style={{display:"flex",gap:4,justifyContent:"center",marginBottom:6,flexWrap:"wrap"}}>
+              {live.strokes===0&&H.tees&&<div style={{display:"flex",gap:4,justifyContent:"center",marginBottom:6,flexWrap:"wrap",marginTop:0}}>
                 {TEES.filter(([k])=>H.tees[k]!=null).map(([k,lab])=>{const on=(live.tee||teeSel)===k;
                   return <button key={k} className="tapbtn" onClick={()=>{setTeeSel(k);saveLive({...live,tee:k,rem:teeYardOf(H,k)});setQYards("");}} style={{border:"none",borderRadius:12,padding:"5px 9px",fontSize:11,fontWeight:700,cursor:"pointer",background:on?INK:"#fff",color:on?PAPER:MUTE,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.05)"}}>{lab} <span style={{opacity:.7}}>{H.tees[k]}</span></button>;})}
               </div>}
@@ -949,26 +949,26 @@ export default function CaddieOS(){
                     return <><div style={{textAlign:"center",color:MUTE,fontSize:11,marginBottom:3}}>{live.ballX!=null?"Tap to move your ball":"First — tap where your ball is"}</div>
                       <HoleView h={H} P={P} tee={live.tee} compact ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)} onPlace={placeFromMap}/>
                       {where&&<div style={{textAlign:"center",fontFamily:SERIF,fontSize:13,color:INK,marginTop:4}}>You're {where}{est!=null?` · ~${est} in`:""}.</div>}</>;})())}
-              {live.strokes===0&&<div style={{fontFamily:SERIF,fontSize:13,color:MUTE,lineHeight:1.35,margin:"5px 0 6px",textAlign:"center"}}>{teeWhisper(H,teeYardOf(H,live.tee))}</div>}
-              <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:12,margin:"4px 0 2px"}}>
-                <button onClick={()=>setQYards(String(Math.max(1,y-1)))} style={{border:"none",background:"#fff",width:42,height:42,borderRadius:21,fontSize:22,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>–</button>
-                <input inputMode="numeric" value={qYards} placeholder={String(live.rem)} onChange={e=>setQYards(e.target.value.replace(/[^0-9]/g,"").slice(0,3))} style={{width:118,textAlign:"center",fontSize:50,fontWeight:800,color:INK,border:"none",background:"transparent",fontVariantNumeric:"tabular-nums",outline:"none"}}/>
-                <button onClick={()=>setQYards(String(y+1))} style={{border:"none",background:"#fff",width:42,height:42,borderRadius:21,fontSize:22,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>+</button>
+              {live.strokes===0&&<div style={{fontFamily:SERIF,fontSize:12,color:MUTE,lineHeight:1.3,margin:"3px 8px 2px",textAlign:"center",maxHeight:32,overflow:"hidden"}}>{teeWhisper(H,teeYardOf(H,live.tee))}</div>}
+              <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:12,margin:"2px 0 0"}}>
+                <button onClick={()=>setQYards(String(Math.max(1,y-1)))} style={{border:"none",background:"#fff",width:40,height:40,borderRadius:20,fontSize:22,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>–</button>
+                <input inputMode="numeric" value={qYards} placeholder={String(live.rem)} onChange={e=>setQYards(e.target.value.replace(/[^0-9]/g,"").slice(0,3))} style={{width:118,textAlign:"center",fontSize:48,fontWeight:800,color:INK,border:"none",background:"transparent",fontVariantNumeric:"tabular-nums",outline:"none"}}/>
+                <button onClick={()=>setQYards(String(y+1))} style={{border:"none",background:"#fff",width:40,height:40,borderRadius:20,fontSize:22,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>+</button>
               </div>
-              <div style={{textAlign:"center",color:MUTE,fontSize:11,marginBottom:8}}>{courses[live.course]&&courses[live.course].ref==="flag"?"yards to the flag":"yards to the middle"}{live.strokes>0&&Array.isArray(H.path)?" · tap or rangefinder":""}</div>
-              <div style={{display:"flex",gap:4,justifyContent:"flex-start",flexWrap:"nowrap",overflowX:"auto",marginBottom:8,padding:"0 2px 2px",WebkitOverflowScrolling:"touch"}}>
+              <div style={{textAlign:"center",color:MUTE,fontSize:10,marginBottom:6}}>{courses[live.course]&&courses[live.course].ref==="flag"?"to the flag":"to the middle"}{live.strokes>0&&Array.isArray(H.path)?" · tap or rangefinder":""}</div>
+              <div style={{display:"flex",gap:4,justifyContent:"flex-start",flexWrap:"nowrap",overflowX:"auto",marginBottom:6,padding:"0 2px 2px",WebkitOverflowScrolling:"touch"}}>
                 {[["Tee","FW"],["Fairway","FW"],["Fringe","FRINGE"],["First cut","FIRST"],["Rough","ROUGH"],["Deep","DEEP"],["Bunker","FBUNK"],["Recovery","TREES"]].map(([lab,v])=>{const on=lieLabel===lab;
                   return <button key={lab} className="tapbtn" onClick={()=>{setLie(v);setLieLabel(lab);}} style={{flexShrink:0,border:"none",borderRadius:16,padding:"6px 11px",fontSize:12,fontWeight:600,cursor:"pointer",background:on?PINE:"#fff",color:on?PAPER:INK,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.06)"}}>{lab}</button>;})}
               </div>
-              <div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:10}}>
+              <div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:6}}>
                 {[["NONE","calm"],["INTO","into"],["DOWN","down"],["CROSS","cross"]].map(([k,l])=>(
-                  <button key={k} onClick={()=>setWind(k)} style={{border:"none",borderRadius:14,padding:"5px 11px",fontSize:12,fontWeight:600,cursor:"pointer",background:wind===k?INK:"transparent",color:wind===k?PAPER:MUTE}}>{l}</button>))}
+                  <button key={k} onClick={()=>setWind(k)} style={{border:"none",borderRadius:14,padding:"4px 11px",fontSize:12,fontWeight:600,cursor:"pointer",background:wind===k?INK:"transparent",color:wind===k?PAPER:MUTE}}>{l}</button>))}
               </div>
               {(()=>{const needPlace=live.strokes>0&&Array.isArray(H.path)&&live.ballX==null;
                 return <button className="tapbtn" disabled={needPlace} onClick={()=>{if(needPlace)return;buzz();const v=parseInt(qYards)||live.rem;
                 if(isRecoveryLie(lie)){const loc=live.ballX!=null?holeContext(H,live.ballD,live.ballX):{};const plan=recoveryPlan(v,lie,{bag:recoBag(),wedgeDist,side:loc.side,blocked:loc.blocked});saveLive({...live,rem:v});setSel(plan.best?plan.best.club:Object.keys(P.carries)[0]);}
                 else {const ev=Math.round(v*windMul*lieFactor(lie));const pk=E.pick(ev,reliability);saveLive({...live,rem:v});setSel(pk.chip);}
-                setAsked(true);setShowAlt(false);}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:17,fontWeight:700,cursor:needPlace?"default":"pointer",background:needPlace?"#d9d5cc":PINE,color:needPlace?"#8a8578":PAPER,letterSpacing:.4}}>{needPlace?"Tap your ball on the map first":live.strokes===0?"Tee off":"Read it"}</button>;})()}
+                setAsked(true);setShowAlt(false);}} style={{width:"100%",border:"none",borderRadius:16,padding:"14px",fontSize:17,fontWeight:700,cursor:needPlace?"default":"pointer",background:needPlace?"#d9d5cc":PINE,color:needPlace?"#8a8578":PAPER,letterSpacing:.4}}>{needPlace?"Tap your ball on the map first":live.strokes===0?"Tee off":"Read it"}</button>;})()}
               {(()=>{const hs=(live.shots||[]).map((x,gi)=>({x,gi})).filter(o=>o.x.h===live.hole+1);if(!hs.length)return null;
                 return <div style={{marginTop:20,background:"#fff",borderRadius:16,padding:12,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
                   <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8}}>Shots this hole — tap to review or fix</div>
@@ -1187,7 +1187,7 @@ export default function CaddieOS(){
               </div>
             </div>}
 
-            {!tourn&&<div style={{display:"flex",justifyContent:"center",gap:20,marginTop:8}}>
+            {!tourn&&<div style={{display:"flex",justifyContent:"center",gap:20,marginTop:4}}>
               <button onClick={()=>setShowRep(!showRep)} style={{border:"none",background:"transparent",color:MUTE,fontSize:12,cursor:"pointer"}}>round so far</button>
               <button onClick={()=>setEndArm(!endArm)} style={{border:"none",background:"transparent",color:MUTE,fontSize:12,cursor:"pointer"}}>end round</button>
             </div>}
