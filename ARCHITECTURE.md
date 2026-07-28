@@ -116,10 +116,29 @@ the Service Loaner domain; generic decision engines; one loaner screen.
   `incentive`); layer banners added. Deleted `loanerTiming`; `_retireTiming` is now
   the sole retirement-timing engine and the legacy board consumes it. All Service
   Loaner outputs verified byte-identical before/after.
-- **Phases 2–5 — pending.** (2) Generic `rankBy`/`optimizeMonth`. (3) Delete the
-  legacy loaner board (`loanerRender`); rewire `buildSequence` loaner intake.
-  (4) Slim `allCandidates`; delete `loanerEconomics`/`deprResale`. (5) Migrate the
-  depreciation explorer off `predictor`; delete `predictor`/`getComps`.
+- **Phase 2 — ✅ complete (no code change).** Evaluated extracting generic
+  decision engines (`rankBy`/`optimizeMonth`). None met the extraction bar: the
+  month-optimizer (`_retireTiming`) and rank-assignment (`serviceSelection`) each
+  have a single consumer, and the three rankers use *different* metrics
+  (`difference` vs `acquisitionRecs`' history score), so a shared ranker can't
+  reduce duplication until the metric is unified — which changes outputs and is
+  therefore **deferred into Phase 3**. The prior real duplicate (`optimizeStrategy`)
+  was already removed in Phase 0. Extraction would have been a framework over
+  single consumers, so it was correctly declined.
+- **Phases 3–5 — pending.** (3) Unify the acquisition/ideal-to-order ranking metric
+  onto the kernel and extract a generic ranker *at that point* (real 2nd consumer);
+  delete the legacy loaner board (`loanerRender`); rewire `buildSequence` loaner
+  intake. (4) Slim `allCandidates`; delete `loanerEconomics`/`deprResale`.
+  (5) Migrate the depreciation explorer off `predictor`; delete `predictor`/`getComps`.
+
+## Noted micro-duplicates (not decision logic; addressed opportunistically)
+
+- Identical trim-head helpers: `_trimHead` (engine) and an inline `firstWord` in
+  `acquisitionRecs`. Zero-risk to merge but outside Phase 2's decision-engine
+  scope; fold into whichever phase next edits `acquisitionRecs` (Phase 3).
+- Two different `median` implementations (`_fleetCostInfo.med`,
+  `idealOrderRender.med`) — reconcile only when a phase already changes those
+  outputs, since they compute differently.
 
 ## Known technical debt (live duplicates awaiting the phases above)
 
