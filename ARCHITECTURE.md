@@ -135,6 +135,19 @@ the Service Loaner domain; generic decision engines; one loaner screen.
   `deprResale`. (5) Migrate the depreciation explorer off `predictor`; delete
   `predictor`/`getComps`.
 
+## Accuracy fixes
+
+- **AF-1 (CPO need was non-monotonic — fixed).** `computeArrivalWindows` measured
+  the production→arrival lead from *all* inventory, including inbound units. Adding
+  confirmed future-production units perturbed the recency-weighted lead → moved the
+  seasonal target → could *raise* the need for the very window being fulfilled
+  ("moving goalposts"). Fixed by measuring the lead **only from arrived (on-lot)
+  units**, so the window — and thus the order target — is independent of the orders
+  being planned. Per-config need is now provably monotonic in added inventory
+  (adding a qualifying unit can only lower it). The window's sole consumers are
+  `buildLines` need + `seasArr`; verified isolated (grid-parity test pins windows;
+  auto-window and residual-inbound tests still pass). Mirrored in `engine.py`.
+
 ## Decision Record
 
 - **DR-1 (Acquisition vs. Service Loaner placement are separate decisions).**

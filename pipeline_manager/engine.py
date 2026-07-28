@@ -508,23 +508,25 @@ def _parse_eta_full_date(eta):
 def compute_arrival_windows(inventory, today: _dt.date, s: Settings) -> dict:
     """Continuous, trend-weighted production->arrival lead per model, in months.
 
-    We measure how long real units take from when they were built to when they
-    land on the lot, to the day where the exports allow it:
+    Measured ONLY from units that have actually ARRIVED (on-lot):
 
-      * inbound units -> (planned ETA date)          - (mid production month)
       * on-lot units  -> (today - days-in-stock)      - (mid production month)
 
-    Samples are weighted by how recent each unit's production is (a trend, so
-    the current cadence dominates), averaged, and floored at min_cpo_window
-    (a factory order cannot arrive the month it is placed). order_lead_pad adds
-    any order->production slotting time the exports can't see (default 0).
+    Inbound units are intentionally excluded: their ETA is an estimate, and the
+    units you add for a future window would otherwise perturb this measured lead,
+    moving the seasonal target and the need for the very window you are fulfilling.
+    Arrived-only keeps the window (and thus the target) independent of the orders
+    being planned, so per-config need is monotonic in added inventory — adding a
+    qualifying unit can only lower it. Samples are weighted by how recent each
+    unit's production is, averaged, floored at min_cpo_window, and a model with no
+    arrived units falls back to the default lead.
     """
     fallback = {"QX80": 3.0, "QX60": 2.0, "QX65": 2.0}
     out = {}
     for model in ("QX80", "QX60", "QX65"):
         wsum = lsum = 0.0
         for u in inventory:
-            if u.model != model:
+            if u.model != model or not u.is_dlr_inv:   # arrived (on-lot) only
                 continue
             prod = _production_date(u.production_month)
             arr = _arrival_date(u, today)

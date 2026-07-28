@@ -196,10 +196,18 @@ function arrivalDate(u, today){
   if(u.arr){ let year = u.arr>=today.getMonth()+1 ? today.getFullYear() : today.getFullYear()+1; return new Date(year,u.arr-1,15); }
   return null; }
 function computeArrivalWindows(inv, today, s){
-  // continuous, trend-weighted production->arrival lead per model, day-precise
+  // continuous, trend-weighted production->arrival lead per model, day-precise.
+  // Measured ONLY from units that have actually ARRIVED (on-lot): their real
+  // production->arrival lead is a fact. Inbound units are excluded — their ETA is
+  // an estimate, and (critically) the units you add for a future window would
+  // otherwise perturb this measured lead, moving the seasonal target and the need
+  // for the very window you're fulfilling. Arrived-only keeps the window — and so
+  // the target — independent of the orders being planned, so need is monotonic in
+  // added inventory (adding units can only lower it). A model with no arrived
+  // units falls back to the default lead below.
   let fb={QX80:3,QX60:2,QX65:2}, out={};
   MODELS.forEach(model=>{ let wsum=0,lsum=0;
-    inv.forEach(u=>{ if(u.model!==model) return;
+    inv.forEach(u=>{ if(u.model!==model||!u.isDlr) return;   // arrived (on-lot) only
       let prod=productionDate(u.prod), arr=arrivalDate(u,today); if(!prod||!arr) return;
       let lead=(arr-prod)/86400000/DPM; if(lead<0||lead>12) return;
       let monthsSince=Math.max(0,(today-prod)/86400000/DPM);
