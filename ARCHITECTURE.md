@@ -125,11 +125,32 @@ the Service Loaner domain; generic decision engines; one loaner screen.
   therefore **deferred into Phase 3**. The prior real duplicate (`optimizeStrategy`)
   was already removed in Phase 0. Extraction would have been a framework over
   single consumers, so it was correctly declined.
-- **Phases 3–5 — pending.** (3) Unify the acquisition/ideal-to-order ranking metric
-  onto the kernel and extract a generic ranker *at that point* (real 2nd consumer);
-  delete the legacy loaner board (`loanerRender`); rewire `buildSequence` loaner
-  intake. (4) Slim `allCandidates`; delete `loanerEconomics`/`deprResale`.
-  (5) Migrate the depreciation explorer off `predictor`; delete `predictor`/`getComps`.
+- **Phase 3 — ⏸ paused; scope to be reconsidered.** Product review concluded that
+  acquisition and placement are **separate business decisions** (see Decision
+  Record below), so the earlier "unify the ranking metric / extract a generic
+  ranker" idea is **withdrawn**. Remaining legitimate Phase 3 cleanup (delete the
+  legacy board, preserve per-model best-buys as a grouping, rewire `buildSequence`
+  intake) is deferred until scope is re-set. No code changed.
+- **Phases 4–5 — pending.** (4) Slim `allCandidates`; delete `loanerEconomics`/
+  `deprResale`. (5) Migrate the depreciation explorer off `predictor`; delete
+  `predictor`/`getComps`.
+
+## Decision Record
+
+- **DR-1 (Acquisition vs. Service Loaner placement are separate decisions).**
+  Acquisition ranks the config space (incl. not-owned) on used-car desirability +
+  coverage/gap + repeatability — a forward capital decision. Placement selects
+  among owned, sunk-cost units on the full loaner P&L. They share the L2 kernel
+  and history data, not an objective function. **Their metrics must NOT be unified
+  without a separate, approved business case.** Ranking acquisition by the loaner
+  `difference` would drop its coverage behavior and degrade the decision.
+- **DR-2 (No generic ranker abstraction yet).** With separate metrics and single
+  consumers, a shared `rankBy`/`optimizeMonth` would be a framework over one
+  caller each. Do not extract until a real second consumer of identical logic
+  exists.
+- **DR-3 (Model visibility is a grouping, not a separate engine).** If/when the
+  legacy board is removed, per-model "best loaner buys" should be preserved as a
+  model filter/grouping on a single ranking — not a separate `loanerScore` system.
 
 ## Noted micro-duplicates (not decision logic; addressed opportunistically)
 
