@@ -176,18 +176,20 @@ function executiveReport(res){
       {html:"<span class='dim'>"+esc(r.why)+"</span>"} ]; })));
   return H.join("");
 }
+// Both cells now read the single retirement-timing engine (_retireTiming) via the
+// fields loanerFleet already puts on each row — no separate timing model.
 function timingLeftCell(r){
-  let left=r.timing?r.timing.remaining:null;
+  let left=r.mo_to_release;
   if(left==null) return "<span class='dim'>—</span>";
   let col=left<=1?"var(--bad)":(left<=2?"var(--warn)":"var(--muted)");
   return "<span style='color:"+col+"'>"+left+"mo</span>";
 }
 function timingCell(r){
-  if(!r.timing){ return "<span class='dim' title='needs cost + matching history to project'>—</span>"; }
-  let t=r.timing, b=t.best;
-  let opts=t.options.map(o=>o.label+": "+money(o.net)+" net"+(o===b?"  ◀ best":"")+(o.bonusOk?"":" (no bonus)")).join("\n");
-  let col=b.delta===0?"var(--good)":"var(--teal)";
-  return "<span title=\""+esc(opts)+"\"><b style='color:"+col+"'>"+esc(b.label)+"</b> <span class='dim'>· "+money(b.net)+" net · "+esc(b.why)+"</span></span>";
+  if(r.best_retire_mo==null && !r.release_by){ return "<span class='dim' title='needs cost + matching history to project'>—</span>"; }
+  let now=String(r.status||"").indexOf("RETIRE NOW")>=0;
+  let lbl=now?"Retire now":("Hold to "+monLabel((r.release_by||"").slice(0,7)));
+  let col=now?"var(--bad)":"var(--teal)";
+  return "<span><b style='color:"+col+"'>"+esc(lbl)+"</b>"+(r.release_why?" <span class='dim'>· "+esc(r.release_why)+"</span>":"")+"</span>";
 }
 function loanerRender(res){
   let board=res.loanerBoard||{}, plan=res.loanerFleetPlan||{rows:[],in_service:0,target:0,releasing_now:0,to_add:0};
@@ -217,8 +219,8 @@ function loanerRender(res){
 
   // current in-service fleet + cascading release + timing optimizer
   if(plan.rows.length){
-    let anyTiming=plan.rows.some(r=>r.timing);
-    H.push("<div class='dc-sub'>In-service fleet <span class='dc-note'>cascading release — 🔴 pull now, 🟢 eligible, 🅗 hold for ICV"+(anyTiming?" · <b style='color:var(--teal)'>Best window</b> = manufacturer clock + depreciation + used-car seasonality":"")+"</span></div>");
+    let anyTiming=plan.rows.some(r=>r.best_retire_mo!=null);
+    H.push("<div class='dc-sub'>In-service fleet <span class='dc-note'>cascading release — 🔴 pull now, 🟢 eligible, 🅗 hold for ICV"+(anyTiming?" · <b style='color:var(--teal)'>Best retire</b> = comps + age depreciation + mileage pace + velocity window":"")+"</span></div>");
     H.push(tbl(["Stock","Model","Ext/Int","In svc","Left","Miles","ICV (once)","Release by","Status","Best retail window"],
       ["","","","num","num","num","num","","",""],
       plan.rows.map(r=>[esc(r.stock),r.model,esc(r.ext_int),

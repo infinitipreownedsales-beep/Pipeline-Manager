@@ -503,42 +503,12 @@ function buildSequence(res){ let s=res.settings, plan=loanerOrderPlan(res), out=
     out[model]={allocation:alloc,fleet_reserved:reserved,eff_alloc:effAlloc,retail_build:buildTotal,groups:groups,total_units:totalUnits}; });
   return {intake:plan.intake,serviceMonths:plan.serviceMonths,fleetUnits:plan.fleetUnits,perModel:out}; }
 function loanerMatchUnit(stock,inv){ for(let i=0;i<inv.length;i++){ if(stock&&inv[i].stock.indexOf(stock)===0) return inv[i]; } return null; }
-// Timing optimizer (Enh 3): given a unit already N months in service, project
-// the net at several retail windows (now / +30 / +60 / at mandatory retirement)
-// combining manufacturer clock, depreciation (age curve), used-car seasonality,
-// velocity eligibility and holding cost — and recommend the best window.
-function loanerTiming(res, u, monthsInService, model, year){
-  let s=res.settings, D=(typeof window!=="undefined")?window.DEPR:null;
-  if(!D||!D.active||!D.a||!u||!(u.cost>0)) return null;
-  let today=res.tb.today, maxMo=parseFloat(s.loaner_max_months)||7;
-  let trim=u.trim||"", ext=u.ext||"", cost=u.cost, msrp=u.msrp||u.cost;
-  let deltas=[0,1,2, Math.max(0, Math.round(maxMo-monthsInService))];
-  let seen={}, opts=[];
-  deltas.forEach(dm=>{ if(monthsInService+dm>maxMo+0.5) return; if(seen[dm]) return; seen[dm]=1;
-    let retailAge=Math.max(0,Math.round(monthsInService+dm));
-    let retailMonthIdx=((today.getMonth()+dm)%12+12)%12+1;
-    let pr=D.a.predictor(model,trim||null,null,ext||null,retailMonthIdx,retailAge);   // resale w/ season + age
-    if(!pr||!pr.ok) return;
-    let ctx={year:year||0,month:today.getMonth()+1,retailMonth:retailMonthIdx,monthsInService:monthsInService,retailInMonths:dm};
-    let econ=loanerEconomics(cost,msrp,model,pr.dts,pr.price,s,undefined,ctx);
-    opts.push({delta:dm,label:dm===0?"Retail now":(dm===1?"Wait ~30 days":(dm===2?"Wait ~60 days":"Hold to retirement")),
-      retailMonth:MONTHS[retailMonthIdx-1],age:retailAge,resale:pr.price,net:econ.net,gross:econ.usedGross,
-      bonusOk:econ.bonusOk,conf:pr.confidence}); });
-  if(!opts.length) return null;
-  let best=opts.reduce((a,b)=>b.net>a.net?b:a,opts[0]), now=opts[0];
-  let lift=best.net-now.net;
-  best.why = best.delta===0 ? "best today — waiting loses value faster than demand improves"
-    : "+$"+Math.round(lift).toLocaleString()+" vs. retailing now"+(best.bonusOk?"":" (past bonus window)");
-  return {options:opts, best:best, monthsInService:Math.round(monthsInService*10)/10,
-    remaining:Math.round((maxMo-monthsInService)*10)/10};
-}
-// ===================== SERVICE LOANER SELECTION =====================
-// A pure selection tool. The loaner program is mandatory; the only question is
-// WHICH unit to place. One number per unit — what the used-car department makes
-// or loses retailing it out of service:
-//   Expected cost   = invoice − ICV − velocity bonus − write-down + reconditioning
-//   Expected retail = projected retail at the sale month
-//   Difference      = Expected retail − Expected cost
+// ===================== L2 FINANCIAL KERNEL =====================
+// Domain-agnostic financial primitives. These answer financial questions only —
+// "what will this resell for", "what's the write-down", "what factory money
+// applies" — and never operational/business ones. No business rules live here.
+// (incentive/modelRebate above are also L2 primitives.) The Service Loaner domain
+// (L3, below) composes these into its cost model.
 function _writedownAmt(cost, msrp, policy, months){
   if(policy.method==="flat") return parseFloat(policy.flat)||0;         // flat total
   let base=(String(policy.base).toLowerCase()==="msrp")?msrp:cost;
@@ -612,7 +582,17 @@ function _retailAt(res, ui, months){
   let mp=Math.round(Math.max(0,ui.cost-reb)*(s.preowned_price_pct||0.8));
   return {price:mp, base:mp, n:0, dts:null, low:null, high:null, month:saleMonthIdx, color:null, colorPrem:0, colorDtsDelta:null, src:"modeled"};
 }
-function unitDifference(res, ui, months, policy, milesRate){
+// ===================== L3 SERVICE LOANER DOMAIN =====================
+// Owns the Service Loaner business rules and composes the L2 kernel into them.
+// The loaner program is mandatory; the only question is WHICH unit to place and
+// WHEN to retire it. One number per unit — what the used-car department makes or
+// loses retailing it out of service:
+//   Expected cost   = invoice − ICV(entry month) − velocity bonus − write-down + reconditioning
+//   Expected retail = kernel projected resale at the sale age
+//   Difference      = Expected retail − Expected cost
+// Business rules owned here: velocity eligibility (retail within max months / mile
+// cap), ICV-at-entry, reconditioning, the cost model, and the opportunity metric.
+function serviceLoanerEconomics(res, ui, months, policy, milesRate){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, year=ui.year||res.tb.today.getFullYear();
   let ret=_retailAt(res, ui, months);
   // ICV is captured the month the unit was PLACED into service — a unit already in
@@ -662,8 +642,8 @@ function serviceSelection(res, policyOverride, skipByMonth){
     let ui={model:p.model, trim:p.trim, ext:p.ext, int:p.int, year:u.year||p.year||res.tb.today.getFullYear(),
       stock:u.stock, vin6:u.vin_last6, uid:uid, cost:(u.cost>0?u.cost:p.econ.cost), msrp:(u.msrp>0?u.msrp:p.econ.msrp)};
     if(!(ui.cost>0)) return;
-    let d=unitDifference(res, ui, months, policy);
-    let byMonth=skipByMonth?null:[3,4,5,6,7].map(m=>({months:m, difference:unitDifference(res, ui, m, policy).difference}));
+    let d=serviceLoanerEconomics(res, ui, months, policy);
+    let byMonth=skipByMonth?null:[3,4,5,6,7].map(m=>({months:m, difference:serviceLoanerEconomics(res, ui, m, policy).difference}));
     units.push(Object.assign(ui, d, {byMonth:byMonth})); }); });
   units.sort((a,b)=>b.difference-a.difference);
   units.forEach((u,i)=>u.rank=i+1);
@@ -775,10 +755,10 @@ function _retireTiming(res, unit, costFn, policy){
     icvMonth:(unit.entryMonth!=null?unit.entryMonth:null), icvYear:(unit.entryYear!=null?unit.entryYear:null)};
   // baseline = retail it TODAY at its current age; candidates = hold to each whole
   // month out to the ceiling. The lift is the value of waiting vs. retailing now.
-  let nowD=unitDifference(res, ui, Math.max(0.5,m0), policy, rate).difference;
+  let nowD=serviceLoanerEconomics(res, ui, Math.max(0.5,m0), policy, rate).difference;
   let lo=Math.max(1,Math.ceil(m0-0.001)), hi=Math.max(lo,Math.floor(maxMo+0.5));
   let best=null;
-  for(let M=lo;M<=hi;M++){ let d=unitDifference(res, ui, M, policy, rate);
+  for(let M=lo;M<=hi;M++){ let d=serviceLoanerEconomics(res, ui, M, policy, rate);
     if(!best || d.difference>best.diff) best={M:M, diff:d.difference, eligible:d.eligible}; }
   if(!best) return null;
   let moToRetire=Math.max(0, best.M-m0);
@@ -824,13 +804,12 @@ function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], rele
     let flaggedNow=(status.indexOf("RETIRE NOW")>=0);
     if(releaseAt && !flaggedNow){ let k=releaseAt.toISOString().slice(0,7); relBucket[k]=(relBucket[k]||0)+1; }
     colorMix[grp]=(colorMix[grp]||0)+1;
-    let timing=(u&&hasStart)?loanerTiming(res,u,months,model,uyear):null;
     rows.push({stock:stock,model:model,vehicle:u?u.desc:(rt&&rt.trim?(model+" "+rt.trim):model),ext:ext,color:grp,ext_int:u?(u.ext+"/"+u.int):(ext||""),
       months:Math.round(months*10)/10,miles:Math.round(miles),mo_to_release:Math.round((moTo||0)*10)/10,
       best_retire_mo:(rt?rt.bestM:null),profit_lift:(rt?Math.round(rt.diffBest-rt.diffNow):null),
       icv_secured:eligibleMin?Math.round(icv):0,icv:Math.round(icv),
       eligible:eligibleMin,status:status,release_why:why||"",release_by:releaseAt?releaseAt.toISOString().slice(0,10):"",
-      note:String(e.note||"").trim(),timing:timing}); });
+      note:String(e.note||"").trim()}); });
   rows.sort((a,b)=>a.mo_to_release-b.mo_to_release);
   let inService=rows.length, target=parseInt(s.loaner_fleet_target,10)||0;
   // place now = what it takes to hold the target once the units aging out leave.
@@ -870,7 +849,7 @@ function loanerOutcomes(res){
     let myear=parseInt(e.year||0,10)||today.getFullYear();
     let ui={model:e.model, trim:info.trim||"", ext:e.ext||"", year:myear, cost:info.cost, msrp:info.msrp||info.cost,
       icvMonth:entryD.getMonth()+1, icvYear:myear};
-    let pred=unitDifference(res, ui, svcMonths, policy, rate);
+    let pred=serviceLoanerEconomics(res, ui, svcMonths, policy, rate);
     let actualPrice=(x.price!=null?x.price:null);
     let actualGross=(x.gross!=null?x.gross:null);
     // actual cost basis is only known when the export gives BOTH price and gross

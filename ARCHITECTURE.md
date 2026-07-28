@@ -40,9 +40,11 @@ loaner financial logic is currently JS-only.
   `incentive`/`modelRebate` (entry-month aware), `_interpRet`, comp helpers
   (`_wmedComps`, `_wpctComps`).
 - **L3 Domains (today)** —
-  - **Service Loaner**: `unitDifference` (economics — *still fused with the kernel,
-    see debt*), `_retireTiming`, `_fleetCostInfo`, `loanerFleet`, `serviceSelection`,
-    `_diversify`, `acquisitionRecs`, `policyExplorer`, `loanerOutcomes`.
+  - **Service Loaner**: `serviceLoanerEconomics` (cost model + opportunity;
+    composes L2 primitives — owns velocity/ICV-at-entry/recon), `_retireTiming`
+    (the sole retirement-timing engine), `_fleetCostInfo`, `loanerFleet`,
+    `serviceSelection`, `_diversify`, `acquisitionRecs`, `policyExplorer`,
+    `loanerOutcomes`.
   - **Retail Ordering** (separate, mature): `buildLines`, `computeMetrics`,
     `computePositions`, `projectAtArrival`, `priority`, `resolveWindows`.
   - **Executive Demo** (partial): `computeDemoReturns`, `executiveDemos`.
@@ -83,7 +85,7 @@ raw text ─▶ L0 adapters ─▶ getSettings(s) + window.DEPR (L1)
 | Projected resale | `_retailAt` (comps × continuous age curve × color premium) | **Partial** — legacy `deprResale`/`predictor` still feed the legacy loaner board. Convergence pending. |
 | Write-down | `_writedownAmt` | ✅ Single. |
 | Factory incentive | `incentive` (entry-month aware) | ✅ Single (legacy per-model fallback kept for simple-mode entry). |
-| Retirement timing | `_retireTiming` | **Partial** — legacy `loanerTiming` still feeds the legacy board. |
+| Retirement timing | `_retireTiming` | ✅ Single. Legacy `loanerTiming` removed (Phase 1); the legacy board now consumes `_retireTiming`. |
 | Recommendation ranking | `serviceSelection` / `_diversify` | **Partial** — `acquisitionRecs` and legacy `allCandidates` scoring overlap. |
 | Fleet flow / cadence | `loanerFleet` | ✅ Single. |
 | Predicted-vs-actual | `loanerOutcomes` | ✅ Single. |
@@ -109,21 +111,21 @@ the Service Loaner domain; generic decision engines; one loaner screen.
   mode" subsystem (`serviceLoanerRecs`, `serviceRecReason`, `optimizeStrategy`,
   `deMoney`, `heroRecommendation`, `detailPanel`, `fbRow`/`fbRows`/`srcBadge`,
   `outMoney`) — unreferenced by any live render path.
-- **Phases 1–5 — pending.** (1) Split `unitDifference` into kernel primitives + a
-  `ServiceLoaner` domain module; delete `loanerTiming`. (2) Generic `rankBy`/
-  `optimizeMonth`. (3) Delete the legacy loaner board (`loanerRender`); rewire
-  `buildSequence` loaner intake. (4) Slim `allCandidates`; delete `loanerEconomics`/
-  `deprResale`. (5) Migrate the depreciation explorer off `predictor`; delete
-  `predictor`/`getComps`.
+- **Phase 1 — ✅ complete.** Established the L2/L3 boundary: `unitDifference` →
+  `serviceLoanerEconomics` (L3, composes L2 primitives `_retailAt`/`_writedownAmt`/
+  `incentive`); layer banners added. Deleted `loanerTiming`; `_retireTiming` is now
+  the sole retirement-timing engine and the legacy board consumes it. All Service
+  Loaner outputs verified byte-identical before/after.
+- **Phases 2–5 — pending.** (2) Generic `rankBy`/`optimizeMonth`. (3) Delete the
+  legacy loaner board (`loanerRender`); rewire `buildSequence` loaner intake.
+  (4) Slim `allCandidates`; delete `loanerEconomics`/`deprResale`. (5) Migrate the
+  depreciation explorer off `predictor`; delete `predictor`/`getComps`.
 
 ## Known technical debt (live duplicates awaiting the phases above)
 
 - Two resale paths: `_retailAt` (new) vs `deprResale`/`predictor` (legacy board).
-- Two retirement-timing engines: `_retireTiming` vs `loanerTiming`.
 - Multiple acquisition rankings: `serviceSelection`-derived vs `acquisitionRecs`
   vs legacy `buildSeq.fleetUnits`.
-- `unitDifference` fuses kernel primitives with Service Loaner rules (velocity,
-  ICV, recon) — to be split in Phase 1.
 - Some math still executes in views (`unitStackInner` recomputes comps;
   `fleetFlowRender` does date math) — to move into L5 output.
 - Standalone `Loaner-Intelligence.html` build (`loaner_render.js`,
