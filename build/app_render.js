@@ -141,36 +141,6 @@ function buildSeqBlock(res, model){
   return H.join("");
 }
 
-/* ---- loaner / ICV program dashboard ---- */
-function fbRow(lab,val,o){ o=o||{}; let disp;
-  if(o.neg) disp="<span class='neg'>−"+money(Math.abs(val)).slice(1)+"</span>";
-  else if(o.pos) disp="<span class='pos'>+"+money(Math.abs(val)).slice(1)+"</span>";
-  else if(o.total) disp="<span class='"+(val<0?"neg":"pos")+"'>"+money(val)+"</span>";
-  else disp="<span>"+money(val)+"</span>";
-  return "<div class='fbrow"+(o.sub?" sub":"")+(o.total?" total":"")+"'><span>"+lab+"</span>"+disp+"</div>"; }
-// ONE clean cash statement — every dollar counted once, no stacked frameworks.
-// `e` defaults to the baseline econ but callers pass the BEST-strategy econ so
-// the breakdown matches the recommended outcome shown on the card.
-function fbRows(p, e){ e=e||p.econ; let row=fbRow, H=[];
-  H.push("<div class='fbdiv'>Money in</div>");
-  H.push("<div class='fbrow'><span>Expected resale "+srcBadge(p)+"</span><span class='pos'>+"+money(e.usedPrice).slice(1)+"</span></div>");
-  if(e.icvTotal) H.push(row("ICV allowance (one-time factory cash)", e.icvTotal, {pos:true}));
-  if(e.bonus) H.push(row("Velocity bonus (earned)", e.bonus, {pos:true}));
-  else if(e.velocityAvail) H.push("<div class='fbrow sub'><span>Velocity bonus (misses window)</span><span class='dim'>"+money(e.velocityAvail)+" forfeited</span></div>");
-  if(e.dealerCash) H.push(row("Dealer cash", e.dealerCash, {pos:true}));
-  H.push("<div class='fbdiv'>Money out</div>");
-  H.push(row("Vehicle cost (invoice)", e.cost, {neg:true}));
-  if(e.recon) H.push(row("Reconditioning", e.recon, {neg:true}));
-  if(e.holding) H.push(row("Holding ("+e.serviceSpan+"mo + used turn)", e.holding, {neg:true}));
-  H.push(row("= Owner net profit", e.ownerNet, {total:true}));
-  // write-down shown as an accounting NOTE only — never added to owner net
-  H.push("<div class='fbrow sub' style='margin-top:6px'><span>Note: manufacturer write-down over "+e.serviceSpan+"mo ≈ "+money(e.deprTotal)+"</span><span class='dim'>internal book move (new→used dept) — depreciation is already in the resale, so it is NOT added again</span></div>");
-  return H.join(""); }
-function srcBadge(p){
-  if(p.usedSrc==="history"){ return "<span class='lhistory' title='resale estimated from your own 10-year history — "+(p.histResale?p.histResale.n:0)+" comparable sales'>📊 history ("+(p.histResale?p.histResale.n:0)+")</span>"; }
-  if(p.usedSrc==="measured"){ return "<span class='lmeasured' title='measured from your preowned/auction data'>measured</span>"; }
-  return "<span class='lmodeled' title='modeled: 80% of cheapest-new (no history for this config)'>modeled</span>";
-}
 /* ---------- Executive printable loaner report (Add 5 + 6) ---------- */
 function executiveReport(res){
   let s=res.settings, today=res.tb.today, H=[];
@@ -294,62 +264,6 @@ function seasHeading(vals, nowM){ // where demand is trending over the next ~2 m
   if(fwd<-0.08) return "<span style='color:var(--warn)'>▼ demand easing</span>";
   return "<span style='color:var(--muted)'>▬ steady</span>"; }
 
-function outMoney(n){ n=Math.round(n||0); return (n<0?"-$":"+$")+Math.abs(n).toLocaleString(); }
-// ONE expandable panel: strategy, break-even, sensitivity, scenario search,
-// write-down what-ifs, and the full financial math — kept off the clean face.
-function detailPanel(it){
-  let st=it.strategy, H=["<details class='fbreak'><summary>▸ Strategy, scenarios &amp; math</summary><div class='fbwrap'>"];
-  if(st){ let bs=st.best, be=st.breakeven;
-    H.push("<div class='fbdiv'>Strategy</div>");
-    H.push("<div class='fbrow'><span>Best placement</span><span><b>"+bs.months+" mo</b>"+(bs.pd>0?", place "+MONTHS[bs.placeMonth-1]:", now")+" → retail "+MONTHS[bs.retailMonth-1]+(bs.bonusOk?" ✓bonus":"")+"</span></div>");
-    H.push("<div class='fbrow'><span>Break-even</span><span>"+(be.profitable?"<span class='pos'>already profitable</span>":("+$"+be.gap.toLocaleString()+" to cover")) +"</span></div>");
-    if(st.retailNew.better) H.push("<div class='fbrow'><span>Retail-new alternative</span><span class='pos'>+$"+st.retailNew.gain.toLocaleString()+" better</span></div>");
-    H.push("<div class='fbdiv'>Owner net by service duration (best timing)</div>");
-    let byMonth={}; st.grid.forEach(g=>{ if(!byMonth[g.months]||g.ownerNet>byMonth[g.months].ownerNet) byMonth[g.months]=g; });
-    Object.keys(byMonth).map(Number).sort((a,b)=>a-b).forEach(m=>{ let g=byMonth[m];
-      H.push("<div class='fbrow"+(g===st.best?" total":"")+"'><span>"+m+" mo → retail "+MONTHS[g.retailMonth-1]+(g.bonusOk?" ✓":"")+"</span><span class='"+(g.ownerNet>=0?"pos":"neg")+"'>"+outMoney(g.ownerNet)+"</span></div>"); });
-    H.push("<div class='fbdiv'>Write-down what-if — used-dept booked gross <span class='dim'>(owner net above is unchanged — this only shifts loss new↔used dept)</span></div>");
-    st.writedownScan.forEach(w=>H.push("<div class='fbrow"+(Math.abs(w.pct-st.baseDepr)<0.01?" total":"")+"'><span>"+w.pct.toFixed(2)+"%/mo"+(Math.abs(w.pct-st.baseDepr)<0.01?" (current)":"")+"</span><span class='"+(w.usedGross>=0?"pos":"neg")+"'>"+outMoney(w.usedGross)+"</span></div>"));
-    H.push("<div class='fbdiv'>Sensitivity — what moves the outcome most</div>");
-    st.sensitivity.forEach(x=>H.push("<div class='fbrow sub'><span>"+esc(x.name)+" <span class='dim'>("+esc(x.note)+")</span></span><span>±$"+x.impact.toLocaleString()+"</span></div>"));
-  }
-  H.push("<div class='fbdiv'>Full financial breakdown"+(st?" (best strategy)":"")+"</div>");
-  H.push(fbRows(it.p, st?st.best.econ:null));
-  H.push("</div></details>");
-  return H.join("");
-}
-function heroRecommendation(res){
-  let r=res.serviceRecs; if(!r||!r.items.length) return "<div class='empty'>No in-stock candidates — paste inventory with cost/MSRP, then set the Service loaner need.</div>";
-  let H=[];
-  H.push("<div class='hero-head'>Service needs <b>"+r.need+"</b> vehicle"+(r.need===1?"":"s")+" — "+
-    (r.need>0?("here "+(r.need===1?"is the one":"are the "+r.need)+" to provide"):"set the need up top to get a recommendation")+"</div>");
-  if(r.need>0 && r.profitable<r.need){
-    H.push("<div class='hero-note'>"+(r.profitable>0?(r.profitable+" of "+r.need+" beat a new-retail sale"):("None currently beat a new-retail sale — opportunity cost "+money(r.newGross)+" each"))+
-      " — the rest are ranked as the <b>lowest-cost units to sacrifice</b>. Enter this month's ICV / velocity programs in ✎ Data to unlock more profitable placements.</div>");
-  } else {
-    H.push("<div class='hero-sub'>Ranked by <b>opportunity advantage</b> — the financial gain of placing each unit into Service Loaner versus keeping it in new retail. Open a card for the full breakdown.</div>");
-  }
-  let show=r.items.slice(0, Math.max(Math.min(r.items.length,r.need+3), Math.min(r.items.length,6)));
-  H.push("<div class='hero-grid'>");
-  show.forEach(it=>{
-    let edge=it.tier==="provide"?"var(--good)":(it.tier==="accept"?"var(--warn)":"var(--muted)");
-    let confCol=it.conf==="High"?"var(--good)":(it.conf==="Medium"?"var(--warn)":"var(--muted)");
-    H.push("<div class='hero-card tier-"+it.tier+"'><span class='hr-edge' style='background:"+edge+"'></span>");
-    H.push("<div class='hr-top'><span class='hr-rank'>#"+it.rank+"</span><span class='hr-badge'>"+esc(it.rec)+"</span></div>");
-    H.push("<div class='hr-veh'>"+esc((it.year||"")+" "+it.model+" "+it.trim)+" <span class='demoei'>"+esc(it.ext)+"/"+esc(it.int)+"</span></div>");
-    H.push("<div class='hr-stock'>Stock "+esc(it.stock)+" · VIN …"+esc(it.vin6||"")+(it.dis!=null?" · "+it.dis+"d in stock":"")+"</div>");
-    let outN=(it.effNet!=null?it.effNet:it.loanerNet), advN=(it.effAdv!=null?it.effAdv:it.advantage);
-    let st=it.strategy, bs=st?st.best:null;
-    H.push("<div class='hr-out'><span class='lab'>Best-case outcome</span><span class='amt' style='color:"+(outN>=0?"var(--good)":"var(--bad)")+"'>"+outMoney(outN)+"</span><span class='hr-conf'>Confidence: <b style='color:"+confCol+"'>"+it.conf+"</b></span></div>");
-    if(bs) H.push("<div class='hr-plan'>📋 "+bs.months+" months, place "+(bs.pd>0?MONTHS[bs.placeMonth-1]:"now")+" → retail "+MONTHS[bs.retailMonth-1]+(bs.bonusOk?" <span class='pos'>✓ bonus</span>":"")+" · <span class='dim'>vs retail "+outMoney(advN)+"</span></div>");
-    if(st&&st.solution) H.push("<div class='hr-fix'>💡 "+esc(st.solution.text)+"</div>");
-    H.push("<div class='hr-reason'>"+esc(it.reason)+"</div>");
-    H.push(detailPanel(it));
-    H.push("</div>");
-  });
-  H.push("</div>");
-  return H.join("");
-}
 /* ===================== SERVICE LOANER SELECTION (email/print-friendly) ===================== */
 // expand/collapse a unit's cost-stack detail row (global — called from onclick)
 function toggleSel(tr){ var d=tr.nextElementSibling; if(!d||!d.classList.contains("udetail")) return;
