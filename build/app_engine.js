@@ -247,6 +247,9 @@ function projectAtArrival(model,pos,metric,seas,s,window,returns){
   let chain=projChain(model,pos,metric,seas,s,Math.max(8,Math.ceil(window)+1),returns);
   if(s.mode==="MID-MONTH"){ let back=returns.filter(r=>r===0).length; let pr=pos.onlot+pos.inbound+back; return [xround(pr,1),chain]; }
   return [xround(projAt(chain,window),1),chain]; }
+// Month offset the shortage opens: first point the projection drops below target.
+// A read of the already-computed chain vs target — no new demand math (Step 3b).
+function demandOpen(chain,target){ for(let k=0;k<chain.length;k++){ if(chain[k]<target) return k; } return null; }
 function baseForOrder(key, metrics){ let m=metrics[key]; return m?[m.base,true]:[1,false]; }
 function momFactor(m,dts){ let r90=m?m.r90:0,r180=m?m.r180:0,accel=m?m.momentum==="ACCEL":false,base;
   if(r90>=2||accel) base=1.0; else if(r90===1) base=0.6; else if(r90===0&&r180>=2) base=0.35; else if(r90===0&&r180===1) base=0.25; else base=0.15;
@@ -316,7 +319,7 @@ function buildLines(s,metrics,seas,positions,agedBrakes,overrideMap,windows,demo
     lines.push({model:model,code:code,ext:ext,int:intr,trim:c.trim,key:key,dts:dts,mom:mom,onlot:pos.onlot,inbound:pos.inbound,
       proj:proj,base:base,found:found,mf:mf,orderTarget:orderTarget,overstockTarget:overstockTarget,need:need,
       suppressed:sup,demoted:dem,effDem:effDem,priority:prio,wholeNow:wholeNow,buyGrade:buyGrade(mom,mf,need),plan:plan,pos:pos,seasArr:seasArr,
-      demoReturning:returns.length}); });
+      demoReturning:returns.length,demandOpen:demandOpen(chain,orderTarget)}); });
   return lines; }
 function priority(dts,mom,need,proj,orderTgt,seasArr,effDem,idx){
   let momBand={ACCEL:4,steady:2,"on cadence":1}[mom]||0, db=dtsBand(dts), seasBand=seasArr>=1.3?2:(seasArr>=1?1:0), tb=idx/100000;
@@ -519,6 +522,39 @@ function buildSequence(res){ let s=res.settings, out={};
     let buildTotal=groups.filter(g=>g.tier==="build").reduce((a,g)=>a+g.qty,0);
     out[model]={allocation:alloc,eff_alloc:effAlloc,retail_build:buildTotal,groups:groups,total_units:totalUnits}; });
   return {perModel:out}; }
+// ---- Supply-path scoring (Step 3b) — SUPPLY only, never demand. Fit is scored
+// against the demand-availability window (when the shortage opens), not raw speed:
+// early = aging penalty, late = missed-window penalty, on time wins; earliest
+// arrival is only a tie-breaker. Mirror of reports.supply_paths. ----
+var SUPPLY_EARLY_W=12.0, SUPPLY_LATE_W=20.0, SUPPLY_EARLY_TOL=1.0, SUPPLY_LATE_TOL=1.0;
+function supplyMonthLabel(om,off){ return MONTHS[((om-1+Math.round(off))%12+12)%12]; }
+function scorePath(path,arrivalOffset,needOpen,source,om){
+  let gap=arrivalOffset-needOpen, penalty, note;
+  if(gap>=0){ penalty=gap*SUPPLY_LATE_W; note=(gap<=SUPPLY_LATE_TOL)?"on time":(gap.toFixed(1)+"mo late — misses the window"); }
+  else { penalty=(-gap)*SUPPLY_EARLY_W; note=((-gap)<=SUPPLY_EARLY_TOL)?"on time":((-gap).toFixed(1)+"mo early — aging risk"); }
+  return {path:path,source:source,arrival_offset:Math.round(arrivalOffset*10)/10,arrival_month:supplyMonthLabel(om,arrivalOffset),
+    lands_in_window:(gap>=-SUPPLY_EARLY_TOL&&gap<=SUPPLY_LATE_TOL),fit:Math.round(Math.max(0,100-penalty)*10)/10,note:note}; }
+function ppoIndex(res){ let om=res.settings.order_month, idx={};
+  (res.settings.ppo_units||[]).forEach(p=>{ let code=digitsOnly(p.code||p.config).slice(0,4);
+    let model=String(p.model||modelFromCode(code)||"").trim().toUpperCase();
+    let ext=String(p.exterior_color!==undefined?p.exterior_color:(p.ext||"")).trim();
+    let intr=String(p.interior_color!==undefined?p.interior_color:(p.int||"")).trim();
+    let key=buildKey(model,code,ext,intr), m=parseArrivalMonth("SIT",p.eta);
+    if(!key||!m) return;
+    (idx[key]=idx[key]||[]).push({offset:((m-om)%12+12)%12,source:String(p.source||p.status||"pre-produced").trim()||"pre-produced"}); });
+  return idx; }
+function supplyPaths(res){ let s=res.settings, om=s.order_month, pad=parseFloat(s.order_lead_pad||0)||0, ppo=ppoIndex(res), out=[];
+  // CPO lead = LEARNED production->arrival lead (+ pad), mode-independent — reuses
+  // the existing window function, not the mode-resolved windows. No new timing math.
+  let cpoLead=computeArrivalWindows(res.inv,res.tb.today,s);
+  res.lines.forEach(l=>{ if(l.need<=0||l.suppressed) return;
+    let needOpen=(l.demandOpen!==null&&l.demandOpen!==undefined)?l.demandOpen:0;
+    let cands=[scorePath("CPO",(cpoLead[l.model]||0)+pad,needOpen,"future factory order",om)];
+    (ppo[l.key]||[]).forEach(pu=>cands.push(scorePath("PPO",pu.offset,needOpen,pu.source,om)));
+    cands.sort((a,b)=>(b.fit-a.fit)||(a.arrival_offset-b.arrival_offset));
+    out.push({key:l.key,model:l.model,trim:l.trim,ext:l.ext,int:l.int,need:l.need,
+      demand_open_month:supplyMonthLabel(om,needOpen),recommended:cands[0].path,paths:cands}); });
+  return out; }
 function loanerMatchUnit(stock,inv){ for(let i=0;i<inv.length;i++){ if(stock&&inv[i].stock.indexOf(stock)===0) return inv[i]; } return null; }
 // ===================== L2 FINANCIAL KERNEL =====================
 // Domain-agnostic financial primitives. These answer financial questions only —
@@ -915,4 +951,5 @@ function runEngine(inv,sales,s,today){
   res.policyExplorer=policyExplorer(res);
   res.loanerFleetOrder=loanerOrderPlan(res);   // loaner PLACEMENT rec (Loaner section only) — never reserves factory allocation
   res.buildSeq=buildSequence(res);
+  res.supplyPaths=supplyPaths(res);
   return res; }

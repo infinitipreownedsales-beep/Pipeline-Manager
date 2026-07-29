@@ -495,6 +495,104 @@ def data_health(res: EngineResult) -> dict:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Supply-path scoring (Step 3b) — SUPPLY only, never demand
+# --------------------------------------------------------------------------- #
+# Fit is scored against the demand-availability window (when the shortage opens),
+# NOT raw speed. Arriving early is penalised (aging), arriving late is penalised
+# (missed window), landing on time wins. Earliest arrival is only a tie-breaker.
+# These are the tuning knobs; kept identical in the JS mirror.
+_SUPPLY_EARLY_W = 12.0   # score penalty per month a path lands BEFORE the window (aging)
+_SUPPLY_LATE_W = 20.0    # score penalty per month a path lands AFTER the window (missed)
+_SUPPLY_EARLY_TOL = 1.0  # months early still counted "in window"
+_SUPPLY_LATE_TOL = 1.0   # months late still counted "in window"
+
+
+def _month_label(order_month: int, offset: float) -> str:
+    from .config import MONTH_NAMES
+    return MONTH_NAMES[(order_month - 1 + int(round(offset))) % 12]
+
+
+def _score_path(path: str, arrival_offset: float, need_open: float,
+                source: str, order_month: int) -> dict:
+    """Score one acquisition path by how well its arrival fits the shortage
+    window. Reads timing only — no demand, sell-rate, or profitability input."""
+    gap = arrival_offset - need_open
+    if gap >= 0:
+        penalty = gap * _SUPPLY_LATE_W
+        note = "on time" if gap <= _SUPPLY_LATE_TOL else f"{gap:.1f}mo late — misses the window"
+    else:
+        penalty = (-gap) * _SUPPLY_EARLY_W
+        note = "on time" if -gap <= _SUPPLY_EARLY_TOL else f"{-gap:.1f}mo early — aging risk"
+    return {
+        "path": path, "source": source,
+        "arrival_offset": round(arrival_offset, 1),
+        "arrival_month": _month_label(order_month, arrival_offset),
+        "lands_in_window": (-_SUPPLY_EARLY_TOL <= gap <= _SUPPLY_LATE_TOL),
+        "fit": round(max(0.0, 100.0 - penalty), 1),
+        "note": note,
+    }
+
+
+def _ppo_index(res: EngineResult) -> dict:
+    """Map available PPO units to config keys with an arrival offset (months from
+    the order month), parsed from each unit's ETA."""
+    from .keys import build_key, digits_only, model_from_code
+    from .ingest import parse_arrival_month
+    om = res.settings.order_month
+    idx: dict[str, list] = {}
+    for p in getattr(res.settings, "ppo_units", None) or []:
+        code = digits_only(p.get("code") or p.get("config"))[:4]
+        model = (p.get("model") or model_from_code(code) or "").strip().upper()
+        ext = str(p.get("exterior_color", p.get("ext", ""))).strip()
+        interior = str(p.get("interior_color", p.get("int", ""))).strip()
+        key = build_key(model, code, ext, interior)
+        m = parse_arrival_month("SIT", p.get("eta"))
+        if not key or not m:
+            continue
+        idx.setdefault(key, []).append({
+            "offset": float((m - om) % 12),
+            "source": str(p.get("source", p.get("status", "pre-produced"))).strip() or "pre-produced",
+        })
+    return idx
+
+
+def supply_paths(res: EngineResult) -> list:
+    """For each identified shortage (NEED>0), score the available acquisition
+    paths by how well their arrival fits the demand-availability window, and name
+    the best-fitting path. This layer READS the shortage the demand engine already
+    produced — it never recomputes need, target, seasonality, or sell-rate, and it
+    never consults loaner/depreciation/profitability. It answers only: "given this
+    shortage, which supply path best fills it?"."""
+    from .engine import compute_arrival_windows
+    s = res.settings
+    om = s.order_month
+    pad = float(getattr(s, "order_lead_pad", 0.0) or 0.0)
+    # CPO lead = the LEARNED production->arrival lead (+ order->production pad),
+    # mode-independent (res.arrival_windows is already mode-resolved, so it can't be
+    # reused here). Reuses the existing window function — no new timing math.
+    cpo_lead = compute_arrival_windows(res.inventory, res.time.today, s)
+    ppo = _ppo_index(res)
+    out = []
+    for l in res.lines:
+        if l.need <= 0 or l.suppressed:
+            continue
+        need_open = l.demand_open if l.demand_open is not None else 0.0
+        cands = [_score_path("CPO", cpo_lead.get(l.model, 0.0) + pad,
+                             need_open, "future factory order", om)]
+        # PPO — any pre-produced unit matching this config.
+        for pu in ppo.get(l.key, []):
+            cands.append(_score_path("PPO", pu["offset"], need_open, pu["source"], om))
+        # Best fit; earliest arrival breaks ties (priority 4 — tie-breaker only).
+        cands.sort(key=lambda c: (-c["fit"], c["arrival_offset"]))
+        out.append({
+            "key": l.key, "model": l.model, "trim": l.trim, "ext": l.ext, "int": l.interior,
+            "need": l.need, "demand_open_month": _month_label(om, need_open),
+            "recommended": cands[0]["path"], "paths": cands,
+        })
+    return out
+
+
 def build_all(res: EngineResult) -> dict:
     return {
         "order_priority": order_priority(res),
@@ -506,6 +604,7 @@ def build_all(res: EngineResult) -> dict:
         "loaner_board": loaner_board(res),
         "loaner_fleet": loaner_fleet(res),
         "build_sequence": build_sequence(res),
+        "supply_paths": supply_paths(res),
         "retail_forecast": retail_forecast(res),
         "pace_check": pace_check(res),
         "fleet_targets": fleet_targets(res),

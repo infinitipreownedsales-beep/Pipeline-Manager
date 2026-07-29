@@ -63,6 +63,15 @@ class Settings:
     # Extra orderable combos the built-in roster doesn't carry (new trims/colors).
     # Each {model, code, ext, int[, trim]} is added to the orderable universe.
     roster_add: list = field(default_factory=list)
+    # PPO (pre-produced) units available as an alternative SUPPLY path — units
+    # already built, obtainable from other production cycles. Each
+    # {model, code/config, exterior_color, interior_color, eta, source/status}.
+    # This is supply, not demand: it NEVER changes need/target/seasonality/sell
+    # rate. It is only scored (by how well its arrival fits an already-identified
+    # shortage window) as one way to fill that shortage. Kept an explicit input so
+    # the supply-path layer stays independent of how the unit was acquired (a
+    # future DMS feed can replace the source without touching the scoring).
+    ppo_units: list = field(default_factory=list)
     # Demote keeps a slow combo visible but ranks it last and zeroes NEED
     # unless it proves through (R90 >= prove_bar). Blank field = wildcard.
     demote: list = field(default_factory=lambda: [{"model": "", "ext": "", "int": "N"}])

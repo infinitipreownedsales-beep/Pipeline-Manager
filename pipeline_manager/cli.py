@@ -80,6 +80,21 @@ def render_text(res, rep) -> str:
             ["#", "BUILD?", "TRIM", "EXT", "INT", "DTS", "MOMENTUM", "NEED", "CUM"],
             rows, aligns=["<", "<", "<", "<", "<", ">", "<", ">", ">"]))
 
+    # 1b. Supply path — which acquisition path best fills each shortage
+    sp = rep.get("supply_paths", [])
+    if sp:
+        out.append("\n" + "#" * W)
+        out.append("1b) SUPPLY PATH — best acquisition path per shortage (fit to when needed, not speed)")
+        out.append("#" * W)
+        rows = []
+        for r in sp:
+            alts = "   ".join(f"{p['path']}:{p['arrival_month']}(fit {p['fit']:.0f})" for p in r["paths"])
+            rows.append([r["model"], r["trim"], r["ext"], r["int"], r["need"],
+                         r["demand_open_month"], r["recommended"], alts])
+        out.append(_table(
+            ["MODEL", "TRIM", "EXT", "INT", "NEED", "NEEDED", "BEST PATH", "PATHS (arrival · fit)"],
+            rows, aligns=["<", "<", "<", "<", ">", "<", "<", "<"]))
+
     # 2. Overstock / Wholesale
     out.append("\n" + "#" * W)
     out.append("2) OVERSTOCK / WHOLESALE — over-target metal (order slower, don't dump)")

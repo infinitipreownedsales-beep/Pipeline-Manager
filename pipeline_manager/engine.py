@@ -97,6 +97,7 @@ class OrderLine:
     buy_grade: str = ""
     monthly_plan: list = field(default_factory=list)
     demo_returning: int = 0   # active demos of this config expected back in-window
+    demand_open: float | None = None  # month offset the shortage opens (supply-path fit ref)
 
 
 @dataclass
@@ -635,6 +636,18 @@ def project_at_arrival(model, pos, metric, seas, s: Settings, window, returns=()
 # --------------------------------------------------------------------------- #
 # Order lines
 # --------------------------------------------------------------------------- #
+def _demand_open(chain, target) -> float | None:
+    """The month offset at which projected available supply first drops below the
+    seasonal target — i.e., when the shortage opens and units are actually needed.
+    A pure read of the (already-computed) projection chain vs. the target; it
+    introduces no new demand math. None when supply never falls below target.
+    """
+    for k, v in enumerate(chain):
+        if v < target:
+            return float(k)
+    return None
+
+
 def _base_for_order(key, metrics) -> tuple[int, bool]:
     """The critical not-found vs. error split (brief §13).
 
@@ -858,6 +871,7 @@ def build_lines(s, metrics, seas, positions, aged_brakes, override_map, windows,
             priority=prio, wholesale_now=wholesale_now,
             buy_grade=_buy_grade(momentum, mf, need), monthly_plan=monthly_plan,
             demo_returning=len(returns),
+            demand_open=_demand_open(chain, order_target),
         ))
     return lines
 

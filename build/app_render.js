@@ -141,6 +141,25 @@ function buildSeqBlock(res, model){
   return H.join("");
 }
 
+/* ---- supply-path recommendation per shortage (Step 3b) ---- */
+function supplyPathBlock(res, model){
+  let sp=(res.supplyPaths||[]).filter(r=>r.model===model);
+  if(!sp.length) return "";
+  let H=["<div class='bseqwrap'><div class='bseqhd'>Supply path <span class='bseqsub'>best acquisition path per shortage — fit to when it's needed, not speed</span></div>"];
+  sp.forEach(r=>{
+    let paths=r.paths.map(p=>{
+      let rec=p.path===r.recommended;
+      return "<span style='margin-right:12px"+(rec?";font-weight:600;color:var(--teal)":";color:var(--muted)")+"'>"+
+        esc(p.path)+" "+esc(p.arrival_month)+" <span class='dim'>fit "+Math.round(p.fit)+"</span>"+
+        (p.note!=="on time"?" <span class='dim'>· "+esc(p.note)+"</span>":"")+"</span>";
+    }).join("");
+    H.push("<div style='padding:3px 0'><b>"+esc(r.trim)+"</b> <span class='demoei'>"+esc(r.ext)+"/"+esc(r.int)+
+      "</span> <span class='dim'>need "+r.need+" · needed "+esc(r.demand_open_month)+" →</span> "+paths+"</div>");
+  });
+  H.push("</div>");
+  return H.join("");
+}
+
 /* ---------- Executive printable loaner report (Add 5 + 6) ---------- */
 function executiveReport(res){
   let s=res.settings, today=res.tb.today, H=[];
@@ -554,7 +573,8 @@ function render(res){
         {html:"<b>"+l.orderTarget+"</b>"}, {html:l.need>0?l.need:"<span class='dim'>0</span>"}, r.cum ]; });
     H.push(tbl(["#","Build?","Trim","Ext","Int","DTS","Momentum","Grade","Lot","Inb","PROJ@ARR","Tgt","NEED","Cum"],
       ["num","","","","","num","","","num","num","num teal","num","num need","num"], rows));
-    H.push(buildSeqBlock(res, model)); });
+    H.push(buildSeqBlock(res, model));
+    H.push(supplyPathBlock(res, model)); });
 
   // 2. SIX-MONTH ROLLING PLAN
   H.push(sec(2,"6-Month Rolling Order Plan","when to place each truck — orders by arrival month"));
