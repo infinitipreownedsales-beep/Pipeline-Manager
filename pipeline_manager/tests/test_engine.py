@@ -448,30 +448,32 @@ def test_measured_preowned_overrides_modeled():
     assert st.modeled is False and st.count == 2 and st.used_dts == 15.0
 
 
-def test_build_sequence_is_retail_only_and_nets_fleet_out_of_allocation():
+def test_build_sequence_is_retail_only_and_ignores_loaner_fleet():
+    """Step 1 boundary: loaner / preowned economics must NOT influence factory
+    ordering. The retail build sequence is driven by retail NEED alone, uses the
+    FULL allocation, and never reserves slots for the loaner fleet — so turning the
+    loaner program on must leave the build sequence byte-identical."""
     inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
     sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
-    # ICV set -> the loaner program is active, so the fleet reserves slots.
-    s = Settings(order_month=9, loaner_fleet_target=20, loaner_service_months=4,
-                 loaner_icv={"QX80": 650, "QX60": 500, "QX65": 500},
-                 allocations={"QX80": 50, "QX60": 100, "QX65": 100})
-    res = engine.run(inv, sales, s, today=_AS_OF)
-    bs = reports.build_sequence(res)
-    assert bs["intake"] == round(20 / 4)          # auto cascade = target / service months
-    assert len(bs["fleet_units"]) == bs["intake"]  # fleet lives here, not in the order
-    for model, d in bs["per_model"].items():
-        # the build sequence is RETAIL only — never a loaner-fleet unit
-        assert all(g["stream"] == "retail" for g in d["groups"])
-        # fleet is netted out of allocation, and retail build fits the remainder
-        assert d["eff_alloc"] == max(0, d["allocation"] - d["fleet_reserved"])
-        build = sum(g["qty"] for g in d["groups"] if g["tier"] == "build")
-        assert build <= d["eff_alloc"]
-    # program inactive by default -> no fleet reservation, full allocation to retail
-    s_off = Settings(order_month=9)
+    alloc = {"QX80": 50, "QX60": 100, "QX65": 100}
+    # Loaner program ACTIVE (ICV set, fleet target) — historically this reserved
+    # allocation out of the build sequence. It must no longer do so.
+    s_on = Settings(order_month=9, loaner_fleet_target=20, loaner_service_months=4,
+                    loaner_icv={"QX80": 650, "QX60": 500, "QX65": 500}, allocations=alloc)
+    s_off = Settings(order_month=9, allocations=alloc)
+    bs_on = reports.build_sequence(engine.run(inv, sales, s_on, today=_AS_OF))
     bs_off = reports.build_sequence(engine.run(inv, sales, s_off, today=_AS_OF))
-    assert bs_off["intake"] == 0
-    assert all(d["fleet_reserved"] == 0 and d["eff_alloc"] == d["allocation"]
-               for d in bs_off["per_model"].values())
+    # No loaner/fleet keys leak into the ordering output at all.
+    assert "fleet_units" not in bs_on and "intake" not in bs_on
+    for model, d in bs_on["per_model"].items():
+        assert all(g["stream"] == "retail" for g in d["groups"])   # retail only
+        assert d["eff_alloc"] == d["allocation"]                   # full allocation, no reservation
+        assert "fleet_reserved" not in d                           # reservation concept removed
+        build = sum(g["qty"] for g in d["groups"] if g["tier"] == "build")
+        assert build <= d["allocation"]
+    # The decisive Step-1 guarantee: activating the loaner program does not change
+    # a single unit of the factory order.
+    assert bs_on["per_model"] == bs_off["per_model"]
     # decay 0 keeps a combo's units contiguous (whole combo before the next)
     s0 = Settings(order_month=9, order_unit_decay=0.0)
     g0 = reports.build_sequence(engine.run(inv, sales, s0, today=_AS_OF))["per_model"]["QX80"]["groups"]

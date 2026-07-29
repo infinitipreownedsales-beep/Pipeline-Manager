@@ -258,26 +258,24 @@ def loaner_fleet(res: EngineResult) -> dict:
 def build_sequence(res: EngineResult) -> dict:
     """Power-ranked, unit-by-unit RETAIL build sequence per model.
 
-    This is the retail order only — it never mixes in loaner-fleet units. (The
-    loaner fleet is a separate recommendation in the Loaner section; injecting its
-    loss-making picks here made a model with no retail need look like a broken
-    order of losses.) Retail need is expanded to individual units, where each
-    successive unit of a combo decays in priority (order_unit_decay) — so a
-    dominant combo front-loads several units, but a marginal combo yields after
-    one or two and a stronger combo's later units can still outrank it. Runs of
-    the same combo are grouped: "order 3× A, then 2× B, then 2 more× A". If the
-    loaner program is active, the fleet's cascade intake is *reported* as slots
-    reserved out of allocation, but those units are shown in the Loaner section,
-    not here.
+    Retail-only, and driven by retail NEED alone. The loaner fleet never reserves
+    factory allocation and never appears here: which units become loaners is a
+    separate placement decision (the Loaner section — ``loaner_board`` /
+    ``loaner_fleet``), and loaner/preowned economics must not shape the factory
+    order. New ordering answers only to new retail demand, so the full allocation
+    is available to retail build.
+
+    Retail need is expanded to individual units, where each successive unit of a
+    combo decays in priority (order_unit_decay) — so a dominant combo front-loads
+    several units, but a marginal combo yields after one or two and a stronger
+    combo's later units can still outrank it. Runs of the same combo are grouped:
+    "order 3× A, then 2× B, then 2 more× A".
     """
-    from . import loaner
     s = res.settings
-    plan = loaner.loaner_order_plan(res)
     out = {}
     for model in MODELS:
         alloc = s.allocations.get(model, 0)
-        reserved = plan["per_model"].get(model, 0)     # loaner slots (netting note)
-        eff_alloc = max(0, alloc - reserved)
+        eff_alloc = alloc      # full allocation to retail — loaner reserves nothing
         # Rank combos by priority and show each ONCE with its full quantity — the
         # actionable order ("order N of A, then M of B"). Splitting a combo's units
         # into scattered 1x chips read as duplicates/broken to a user.
@@ -302,11 +300,10 @@ def build_sequence(res: EngineResult) -> dict:
         total_units = sum(int(l.need) for l in combos)
         build_total = sum(g["qty"] for g in groups if g["tier"] == "build")
         out[model] = {
-            "allocation": alloc, "fleet_reserved": reserved, "eff_alloc": eff_alloc,
+            "allocation": alloc, "eff_alloc": eff_alloc,
             "retail_build": build_total, "groups": groups, "total_units": total_units,
         }
-    return {"intake": plan["intake"], "service_months": plan["service_months"],
-            "fleet_units": plan["fleet_units"], "per_model": out}
+    return {"per_model": out}
 
 
 # --------------------------------------------------------------------------- #

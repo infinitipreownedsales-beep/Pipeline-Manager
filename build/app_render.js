@@ -122,13 +122,13 @@ function money(n){ n=Math.round(n||0); return (n<0?"-$":"$")+Math.abs(n).toLocal
 /* ---- power-ranked RETAIL build sequence (per model) ---- */
 function buildSeqBlock(res, model){
   let bs=res.buildSeq, d=bs&&bs.perModel?bs.perModel[model]:null; if(!d) return "";
-  let H=[], reservedNote=d.fleet_reserved>0?" · "+d.fleet_reserved+" reserved for loaner fleet (see Loaner section)":"";
+  let H=[];
   if(!d.groups.length){
-    return "<div class='bseqwrap'><div class='bseqhd'>Build sequence <span class='bseqsub'>no retail order needed this month for "+esc(model)+" — on-hand + inbound already cover the seasonal target"+reservedNote+"</span></div></div>";
+    return "<div class='bseqwrap'><div class='bseqhd'>Build sequence <span class='bseqsub'>no retail order needed this month for "+esc(model)+" — on-hand + inbound already cover the seasonal target</span></div></div>";
   }
   let n=0, shownAltNote=false;
   H.push("<div class='bseqwrap'><div class='bseqhd'>Build sequence <span class='bseqsub'>order in this order · "+
-    d.retail_build+" of "+d.allocation+" allocation"+reservedNote+"</span></div><div class='bseq'>");
+    d.retail_build+" of "+d.allocation+" allocation</span></div><div class='bseq'>");
   d.groups.forEach(g=>{
     if(g.tier==="alt" && !shownAltNote){ H.push("<span class='bseqcut'>▸ beyond allocation</span>"); shownAltNote=true; }
     n++;
@@ -205,11 +205,12 @@ function loanerRender(res){
   H.push("</div>");
 
   // Fleet order this cascade — which combos to bring in for the loaner fleet.
-  // This is netted out of the retail allocation (noted in Order Priority), but is
-  // shown HERE, not mixed into the retail order.
-  let fu=(res.buildSeq&&res.buildSeq.fleetUnits)||[];
+  // This is a loaner PLACEMENT recommendation only: it is separate from the retail
+  // order and never reserves factory allocation (New ordering answers to new
+  // retail demand alone).
+  let fo=res.loanerFleetOrder||{}, fu=fo.fleetUnits||[];
   if(fu.length){
-    H.push("<div class='dc-sub' style='margin-top:4px'>Fleet order this cascade <span class='dc-note'>"+fu.length+" units (~"+res.buildSeq.intake+"/mo) — best preowned economics · netted out of retail allocation</span></div>");
+    H.push("<div class='dc-sub' style='margin-top:4px'>Fleet order this cascade <span class='dc-note'>"+fu.length+" units (~"+fo.intake+"/mo) — best preowned economics · separate from the retail order, does not affect factory allocation</span></div>");
     H.push("<div class='bseq' style='margin-bottom:14px'>");
     fu.forEach((u,i)=>{ let e=u.econ, loss=e&&e.upsideDown;
       H.push("<span class='bstep fleet'><span class='bnum'>"+(i+1)+".</span><span class='bqty'>1×</span> "+

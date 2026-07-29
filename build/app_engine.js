@@ -495,11 +495,13 @@ function loanerOrderPlan(res){ let s=res.settings, svc=Math.max(1,parseInt(s.loa
       fleetUnits.push({model:c.model,key:c.key,trim:c.trim,ext:c.ext,int:c.int,econ:c.econ,netValue:c.netValue,n:counts[c.key]});
       perModel[c.model]++; i++; guard++; } }
   return {intake:intake,serviceMonths:svc,fleetUnits:fleetUnits,perModel:perModel}; }
-// RETAIL-only build sequence (mirror of reports.build_sequence). Loaner-fleet
-// units are NEVER injected here — they live in the Loaner section. If the loaner
-// program is active, fleet slots are reported as reserved out of allocation.
-function buildSequence(res){ let s=res.settings, plan=loanerOrderPlan(res), out={};
-  MODELS.forEach(model=>{ let alloc=s.allocations[model]||0, reserved=plan.perModel[model]||0, effAlloc=Math.max(0,alloc-reserved);
+// RETAIL-only build sequence (mirror of reports.build_sequence). Driven by retail
+// NEED alone: the loaner fleet never reserves factory allocation and never appears
+// here — which units become loaners is a separate placement decision (Loaner
+// section), and loaner/preowned economics must not shape the factory order. The
+// full allocation is available to retail build.
+function buildSequence(res){ let s=res.settings, out={};
+  MODELS.forEach(model=>{ let alloc=s.allocations[model]||0, effAlloc=alloc;   // full allocation to retail — loaner reserves nothing
     // rank combos by priority; each shown ONCE with its full quantity
     let combos=res.lines.filter(l=>l.model===model&&!l.suppressed&&l.need>0&&l.priority>-1).sort((a,b)=>b.priority-a.priority);
     let groups=[], filled=0, totalUnits=0;
@@ -508,8 +510,8 @@ function buildSequence(res){ let s=res.settings, plan=loanerOrderPlan(res), out=
       if(takeBuild>0){ groups.push({key:l.key,trim:l.trim,ext:l.ext,int:l.int,stream:"retail",tier:"build",qty:takeBuild,dts:l.dts,momentum:l.mom}); filled+=takeBuild; }
       if(takeAlt>0) groups.push({key:l.key,trim:l.trim,ext:l.ext,int:l.int,stream:"retail",tier:"alt",qty:takeAlt,dts:l.dts,momentum:l.mom}); });
     let buildTotal=groups.filter(g=>g.tier==="build").reduce((a,g)=>a+g.qty,0);
-    out[model]={allocation:alloc,fleet_reserved:reserved,eff_alloc:effAlloc,retail_build:buildTotal,groups:groups,total_units:totalUnits}; });
-  return {intake:plan.intake,serviceMonths:plan.serviceMonths,fleetUnits:plan.fleetUnits,perModel:out}; }
+    out[model]={allocation:alloc,eff_alloc:effAlloc,retail_build:buildTotal,groups:groups,total_units:totalUnits}; });
+  return {perModel:out}; }
 function loanerMatchUnit(stock,inv){ for(let i=0;i<inv.length;i++){ if(stock&&inv[i].stock.indexOf(stock)===0) return inv[i]; } return null; }
 // ===================== L2 FINANCIAL KERNEL =====================
 // Domain-agnostic financial primitives. These answer financial questions only —
@@ -904,5 +906,6 @@ function runEngine(inv,sales,s,today){
   res.loanerOutcomes=loanerOutcomes(res);      // predicted-vs-actual on units that have sold
   res.selection=serviceSelection(res);
   res.policyExplorer=policyExplorer(res);
+  res.loanerFleetOrder=loanerOrderPlan(res);   // loaner PLACEMENT rec (Loaner section only) — never reserves factory allocation
   res.buildSeq=buildSequence(res);
   return res; }
