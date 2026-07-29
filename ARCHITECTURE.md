@@ -164,6 +164,66 @@ the Service Loaner domain; generic decision engines; one loaner screen.
 - **DR-3 (Model visibility is a grouping, not a separate engine).** If/when the
   legacy board is removed, per-model "best loaner buys" should be preserved as a
   model filter/grouping on a single ranking — not a separate `loanerScore` system.
+- **DR-4 (`acquisitionRecs` is a loaner lens, permanently isolated from ordering).**
+  `acquisitionRecs` may exist as a Service-Loaner placement/reporting lens and may
+  use depreciation, used gross, resale, and retirement economics to say *"this
+  available unit is a better loaner candidate."* It must **never** influence New
+  Retail demand, factory ordering, allocation, or the build sequence — it cannot
+  say *"therefore order more of this configuration."* (Verified: it is computed
+  independently and consumed only by the loaner executive report; it never feeds
+  need/order-priority/build sequence.)
+- **DR-5 (Dealer Trade is two different systems).** *Historical completed Dealer
+  Trades* = demand intelligence (a real unit left inventory — actual consumption).
+  *Future Dealer Trade acquisition recommendations* = a supply acquisition path
+  (what to request when another dealer asks for one of ours; reads need only).
+  These are different systems and must not be merged.
+
+## Demand signal hierarchy (New Retail)
+
+New Retail demand is a **weighted blend of demand signals** — never loaner /
+depreciation / preowned economics (those are supply/placement, not demand). In
+priority order:
+
+1. **Customer retail sales** — *primary demand truth.* Actual consumer purchases
+   (Speed-to-Sell). Highest weight.
+2. **Completed Dealer Trades** — *actual market consumption.* A unit physically
+   left inventory because another market participant created real demand, so it
+   stays **full-weight**, graded exactly like a showroom sale (today: outbound
+   trade log folded into `total`/`r90`/`r180`/`prate`/momentum). Not weakened.
+3. **Dealer Trade Requests** — *leading scarcity / desirability signal.* Other
+   dealers requesting a configuration. **Lower weight** than a sale; it does **not**
+   count as a sale and does **not** alter historical sales metrics. It raises a
+   config's desirability / stocking priority and flags where supply is
+   insufficient — it can influence future configuration mix, but it can never
+   create fake sales history.
+4. **Speed-to-sell** — velocity confirmation (how fast a unit sells once on lot).
+5. **Seasonality** — timing adjustment to the arrival window.
+
+**Anti-double-count rule:** a Dealer Trade Request is a *leading* indicator only.
+If a request converts into a completed Dealer Trade, the **request signal is
+removed** and only the completed-trade event is retained — the same interest is
+never counted twice (once as a request, once as a completed trade).
+
+Implementation note (pending, Step 2.5): (2) already exists (`config.trades` →
+`compute_metrics`, full weight — keep). (3) is a **new, separate** lower-weight
+input (`dealer_trade_requests` + a `dealer_trade_request_weight` setting),
+mirrored in `app_engine.js`, with the anti-double-count rule enforced at ingest.
+The *future Dealer Trade acquisition recommendation* (DR-5, supply path) is
+separate again and lands in the supply-path layer (Step 3), reading need only.
+
+## Boundary corrections
+
+- **BC-1 (New ordering answers only to New Retail demand — Step 1, ✅ done).**
+  The retail build sequence previously reserved factory allocation for the loaner
+  fleet (`eff_alloc = allocation − loaner_reserved`), letting preowned economics
+  shape the factory order. Removed: `reports.build_sequence` /
+  `app_engine.buildSequence` are now retail-only on the **full** allocation, with
+  no fleet reservation and no loaner keys in the ordering output. Loaner fleet
+  placement is preserved as a loaner-side recommendation (`res.loanerFleetOrder`),
+  shown in the Loaner section, fully decoupled from ordering. Demand, Speed-to-Sell,
+  seasonality, order-priority ranking, and need are unchanged. Test rewritten to
+  assert activating the loaner program changes **zero** units of the retail build
+  sequence. (39/39 green.)
 
 ## Noted micro-duplicates (not decision logic; addressed opportunistically)
 
