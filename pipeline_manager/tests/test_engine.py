@@ -274,6 +274,23 @@ def test_committed_pipeline_is_not_re_ordered():
     assert after.need == 0                 # ...so the whole batch is satisfied — no re-order
 
 
+def test_demand_is_path_independent():
+    """3a: demand (need + order_target) is computed once and is INDEPENDENT of the
+    acquisition path — identical across mode CPO/PPO/MID-MONTH and across
+    order_lead_pad (a supply-only order->production lead). How the units are
+    eventually acquired is invisible to the demand engine."""
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+
+    def demand(**kw):
+        r = engine.run(inv, sales, Settings(order_month=9, **kw), today=_AS_OF)
+        return {l.key: (l.need, l.order_target) for l in r.lines}
+
+    cpo = demand(mode="CPO")
+    assert cpo == demand(mode="PPO") == demand(mode="MID-MONTH")   # mode never shifts demand
+    assert cpo == demand(mode="CPO", order_lead_pad=2.0)           # the pad is supply-only
+
+
 def test_supply_feasibility_does_not_touch_demand():
     """3b: the supply layer (PPO input, cycle position, etc.) never changes need /
     target / any demand number — the shortage is identical with and without it."""

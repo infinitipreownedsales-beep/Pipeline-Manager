@@ -547,10 +547,29 @@ def compute_arrival_windows(inventory, today: _dt.date, s: Settings) -> dict:
     return out
 
 
+def resolve_demand_window(inventory, today, s: Settings) -> dict:
+    """Per-model DEMAND-availability window (months) — when we plan for inventory
+    to be available and thus where the seasonal target and the shortage are
+    measured. PATH-INDEPENDENT: no acquisition mode, and no `order_lead_pad` (the
+    pad is an order->production SUPPLY lead, owned by the Supply Engine). Every
+    acquisition workflow therefore solves the exact same shortage; how the units
+    are eventually acquired is invisible to the demand engine."""
+    auto = compute_arrival_windows(inventory, today, s)
+    out = {}
+    for model in ("QX80", "QX60", "QX65"):
+        v = s.window_setting(model)
+        if isinstance(v, str) and v.strip().lower() == "auto":
+            out[model] = auto[model]
+        else:
+            out[model] = max(s.min_cpo_window, float(v))
+    return out
+
+
 def resolve_windows(inventory, today, s: Settings) -> dict:
-    """Per-model lead time, distinct per mode: MID-MONTH = today (0); PPO = the
-    vehicle's own production->arrival lead (auto or manual); CPO = that lead PLUS
-    the order->production lead (order_lead_pad)."""
+    """DEPRECATED (3a): the mode-resolved supply window. `mode` is now a no-op for
+    demand; acquisition timing (incl. `order_lead_pad`) lives in the Supply Engine
+    (`supply_feasibility`). Retained only for backward compatibility until the
+    legacy `mode` cleanup pass; not used by the demand engine."""
     auto = compute_arrival_windows(inventory, today, s)
     pad = float(getattr(s, "order_lead_pad", 0.0) or 0.0)
     out = {}
@@ -621,15 +640,13 @@ def _proj_at(chain, offset):
 
 
 def project_at_arrival(model, pos, metric, seas, s: Settings, window, returns=()):
-    """Return (projection_at_arrival, full proj chain) for a fractional window."""
+    """Return (projection_at_arrival, full proj chain) at the DEMAND-availability
+    window. Path-independent: the shortage is measured against what we'll hold when
+    inventory is planned to be available, regardless of how it is acquired. (The
+    old MID-MONTH 'right-now snapshot' is gone — an immediate acquisition is now
+    just a Supply workflow, not a different demand calculation.)"""
     chain = _proj_chain(model, pos, metric, seas, s,
                         n=max(8, int(math.ceil(window)) + 1), returns=returns)
-    # CPO and PPO both measure a FUTURE order against what you'll hold at arrival
-    # (the window projection). MID-MONTH is the right-now dealer-trade snapshot:
-    # what you could obtain/hold today, so it uses current on-hand + inbound.
-    if s.mode == "MID-MONTH":
-        proj = pos.onlot + pos.inbound_total + sum(1 for r in returns if r == 0)
-        return xround(proj, 1), chain
     return xround(_proj_at(chain, window), 1), chain
 
 
@@ -906,13 +923,16 @@ def run(inventory, sales, settings: Settings, today: _dt.date | None = None) -> 
     for e in settings.overrides:
         override_map[e["key"]] = override_map.get(e["key"], 0) + int(e.get("qty", 0))
 
-    windows = resolve_windows(inventory, today, settings)
+    # DEMAND window (path-independent) drives the target + shortage. Acquisition
+    # timing (mode, order_lead_pad, per-workflow arrival) belongs to the Supply
+    # Engine and never touches the shortage.
+    demand_windows = resolve_demand_window(inventory, today, settings)
     demo_units = [u for u in inventory
                   if u.is_dlr_inv and _is_demo(u.stock, settings.demo_stocks)
                   and _match_prev_loaner(u, settings.prev_loaners) is None]
     demo_returns = compute_demo_returns(demo_units, settings, today)
     lines = build_lines(settings, metrics, seas, positions, aged_brakes,
-                        override_map, windows, demo_returns)
+                        override_map, demand_windows, demo_returns)
     orphans = _find_orphans(sales, inventory, settings.effective_roster())
     preowned = _loaner.compute_preowned(settings, metrics, inventory)
 
@@ -920,5 +940,5 @@ def run(inventory, sales, settings: Settings, today: _dt.date | None = None) -> 
         settings=settings, time=tb, metrics=metrics, seasonality=seas,
         positions=positions, lines=lines, demo_units=demo_units,
         inventory=inventory, sales=sales, orphans=orphans,
-        arrival_windows=windows, preowned=preowned,
+        arrival_windows=demand_windows, preowned=preowned,
     )
