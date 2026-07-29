@@ -223,16 +223,23 @@ function resolveWindows(inv, today, s){ let auto=computeArrivalWindows(inv,today
     out[model]= (s.mode==="MID-MONTH") ? 0 : (s.mode==="CPO" ? base+pad : base); });
   return out; }
 function interpSeas(idx, om, off){ let lo=Math.floor(off), fr=off-lo, a=idx[((om-1+lo)%12+12)%12], b=idx[((om-1+lo+1)%12+12)%12]; return a+(b-a)*fr; }
+// Two-bucket projection (Step 2). RETAIL-AVAILABLE (on lot today) sells down at
+// the seasonal retail pace, never below the stalled floor — the only inventory
+// projected demand may consume. FUTURE PIPELINE (all inbound) is committed supply:
+// credited in full, NEVER consumed by sell-down before it arrives, so a committed
+// unit reduces future need and can't be re-ordered (crediting the whole pipeline,
+// not just what lands by the window, is what stops the double-order). Returned
+// demos join as held slow stock as they come back. Feed is authoritative — a
+// landed unit re-appears on-lot next import; no memory, no ledger.
 function projChain(model,pos,metric,seas,s,n,returns){
   returns=returns||[];
   let om=s.order_month, rate=projRate(metric,metric?metric.dts:null,s);
-  function arr(off){ return pos.arrivals[((om-1+off)%12)+1]||0; }
-  function demosAt(o){ let c=0; returns.forEach(r=>{ if(r===o) c++; }); return c; }
   function demosBy(o){ let c=0; returns.forEach(r=>{ if(r<=o) c++; }); return c; }
-  let later=0; for(let k=1;k<=n;k++) later+=arr(k);
-  let proj=[pos.onlot+Math.max(0,pos.inbound-later)+demosAt(0)];
-  for(let k=1;k<=n;k++){ let held=pos.stalled+demosBy(k); let sm=seas[model].index[((om-1+(k-1))%12)];
-    proj.push(Math.max(held,proj[k-1]-rate*sm)+arr(k)+demosAt(k)); }
+  let pipeline=pos.inbound, onlotRem=pos.onlot;
+  let proj=[onlotRem+pipeline+demosBy(0)];
+  for(let k=1;k<=n;k++){ let sm=seas[model].index[((om-1+(k-1))%12)];
+    onlotRem=Math.max(pos.stalled,onlotRem-rate*sm);
+    proj.push(onlotRem+pipeline+demosBy(k)); }
   return proj; }
 function projAt(chain, off){ let lo=Math.floor(off); if(lo>=chain.length-1) return chain[chain.length-1]; let fr=off-lo; return chain[lo]+(chain[lo+1]-chain[lo])*fr; }
 function projectAtArrival(model,pos,metric,seas,s,window,returns){

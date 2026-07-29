@@ -1,1 +1,344 @@
-{"QX80": [{"rank": 1, "trim": "AUTOG", "ext": "XKJ", "int": "G", "need": 3, "tier": "\u2713 BUILD"}, {"rank": 2, "trim": "LUXE 2WD", "ext": "QBE", "int": "P", "need": 3, "tier": "\u2713 BUILD"}, {"rank": 3, "trim": "PURE 2WD", "ext": "QBE", "int": "C", "need": 3, "tier": "\u2713 BUILD"}, {"rank": 4, "trim": "AUTOG", "ext": "XKJ", "int": "A", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 5, "trim": "AUTOG", "ext": "XKD", "int": "G", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 6, "trim": "LUXE 2WD", "ext": "KH3", "int": "P", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 7, "trim": "PURE 2WD", "ext": "QBE", "int": "G", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 8, "trim": "LUXE 2WD", "ext": "QBE", "int": "G", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 9, "trim": "PURE 2WD", "ext": "KH3", "int": "G", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 10, "trim": "AUTOG", "ext": "XLF", "int": "A", "need": 0, "tier": "\u25cb option"}, {"rank": 11, "trim": "AUTOG", "ext": "XKD", "int": "A", "need": 0, "tier": "\u25cb option"}, {"rank": 12, "trim": "Sport 4WD", "ext": "GAT", "int": "D", "need": 0, "tier": "\u25cb option"}, {"rank": 13, "trim": "Sport 4WD", "ext": "XKJ", "int": "D", "need": 0, "tier": "\u25cb option"}, {"rank": 14, "trim": "Sport 4WD", "ext": "XLF", "int": "D", "need": 0, "tier": "\u25cb option"}], "QX60": [{"rank": 1, "trim": "Autograph AWD", "ext": "XKJ", "int": "P", "need": 4, "tier": "\u2713 BUILD"}, {"rank": 2, "trim": "LUXE FWD", "ext": "QBE", "int": "K", "need": 3, "tier": "\u2713 BUILD"}, {"rank": 3, "trim": "SPORT", "ext": "GAT", "int": "G", "need": 3, "tier": "\u2713 BUILD"}, {"rank": 4, "trim": "Autograph AWD", "ext": "XKD", "int": "P", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 5, "trim": "LUXE FWD", "ext": "KAD", "int": "K", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 6, "trim": "LUXE FWD", "ext": "KCF", "int": "K", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 7, "trim": "LUXE FWD", "ext": "KCG", "int": "K", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 8, "trim": "Autograph AWD", "ext": "GAT", "int": "K", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 9, "trim": "LUXE FWD", "ext": "QBE", "int": "G", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 10, "trim": "Autograph AWD", "ext": "GAQ", "int": "P", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 11, "trim": "Autograph AWD", "ext": "XHU", "int": "P", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 12, "trim": "Autograph AWD", "ext": "GAT", "int": "G", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 13, "trim": "Autograph AWD", "ext": "GAT", "int": "P", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 14, "trim": "PURE FWD", "ext": "QBE", "int": "K", "need": 8, "tier": "\u2713 BUILD"}, {"rank": 15, "trim": "Autograph AWD", "ext": "GAQ", "int": "G", "need": 0, "tier": "\u25cb option"}, {"rank": 16, "trim": "Autograph AWD", "ext": "GAQ", "int": "K", "need": 0, "tier": "\u25cb option"}, {"rank": 17, "trim": "LUXE AWD", "ext": "GAT", "int": "G", "need": 0, "tier": "\u25cb option"}, {"rank": 18, "trim": "LUXE FWD", "ext": "GAT", "int": "K", "need": 0, "tier": "\u25cb option"}, {"rank": 19, "trim": "Autograph AWD", "ext": "XKJ", "int": "K", "need": 0, "tier": "\u25cb option"}, {"rank": 20, "trim": "LUXE FWD", "ext": "GAT", "int": "G", "need": 0, "tier": "\u25cb option"}], "QX65": [{"rank": 1, "trim": "LUXE AWD", "ext": "QBE", "int": "K", "need": 2, "tier": "\u2713 BUILD"}, {"rank": 2, "trim": "SPORT AWD", "ext": "XEX", "int": "G", "need": 2, "tier": "\u2713 BUILD"}, {"rank": 3, "trim": "AUTOG", "ext": "XKJ", "int": "G", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 4, "trim": "LUXE AWD", "ext": "KH3", "int": "G", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 5, "trim": "SPORT AWD", "ext": "GAT", "int": "G", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 6, "trim": "SPORT AWD", "ext": "QBE", "int": "G", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 7, "trim": "SPORT AWD", "ext": "KBY", "int": "G", "need": 1, "tier": "\u2713 BUILD"}, {"rank": 8, "trim": "AUTOG", "ext": "XKJ", "int": "K", "need": 0, "tier": "\u25cb option"}]}
+{
+ "QX80": [
+  {
+   "rank": 1,
+   "trim": "PURE 2WD",
+   "ext": "QBE",
+   "int": "C",
+   "need": 3,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 2,
+   "trim": "AUTOG",
+   "ext": "XKJ",
+   "int": "A",
+   "need": 1,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 3,
+   "trim": "AUTOG",
+   "ext": "XKD",
+   "int": "G",
+   "need": 1,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 4,
+   "trim": "AUTOG",
+   "ext": "XKJ",
+   "int": "G",
+   "need": 1,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 5,
+   "trim": "LUXE 2WD",
+   "ext": "QBE",
+   "int": "P",
+   "need": 1,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 6,
+   "trim": "PURE 2WD",
+   "ext": "QBE",
+   "int": "G",
+   "need": 1,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 7,
+   "trim": "LUXE 2WD",
+   "ext": "QBE",
+   "int": "G",
+   "need": 1,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 8,
+   "trim": "PURE 2WD",
+   "ext": "KH3",
+   "int": "G",
+   "need": 1,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 9,
+   "trim": "LUXE 2WD",
+   "ext": "KH3",
+   "int": "P",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 10,
+   "trim": "AUTOG",
+   "ext": "XLF",
+   "int": "A",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 11,
+   "trim": "AUTOG",
+   "ext": "XKD",
+   "int": "A",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 12,
+   "trim": "Sport 4WD",
+   "ext": "GAT",
+   "int": "D",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 13,
+   "trim": "Sport 4WD",
+   "ext": "XKJ",
+   "int": "D",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 14,
+   "trim": "Sport 4WD",
+   "ext": "XLF",
+   "int": "D",
+   "need": 0,
+   "tier": "\u25cb option"
+  }
+ ],
+ "QX60": [
+  {
+   "rank": 1,
+   "trim": "LUXE FWD",
+   "ext": "QBE",
+   "int": "K",
+   "need": 3,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 2,
+   "trim": "Autograph AWD",
+   "ext": "XKD",
+   "int": "P",
+   "need": 1,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 3,
+   "trim": "Autograph AWD",
+   "ext": "XKJ",
+   "int": "P",
+   "need": 3,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 4,
+   "trim": "LUXE FWD",
+   "ext": "KAD",
+   "int": "K",
+   "need": 1,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 5,
+   "trim": "LUXE FWD",
+   "ext": "KCF",
+   "int": "K",
+   "need": 1,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 6,
+   "trim": "LUXE FWD",
+   "ext": "KCG",
+   "int": "K",
+   "need": 1,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 7,
+   "trim": "SPORT",
+   "ext": "GAT",
+   "int": "G",
+   "need": 2,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 8,
+   "trim": "Autograph AWD",
+   "ext": "XHU",
+   "int": "P",
+   "need": 1,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 9,
+   "trim": "PURE FWD",
+   "ext": "QBE",
+   "int": "K",
+   "need": 8,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 10,
+   "trim": "Autograph AWD",
+   "ext": "GAQ",
+   "int": "G",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 11,
+   "trim": "Autograph AWD",
+   "ext": "GAQ",
+   "int": "K",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 12,
+   "trim": "LUXE AWD",
+   "ext": "GAT",
+   "int": "G",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 13,
+   "trim": "LUXE FWD",
+   "ext": "GAT",
+   "int": "K",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 14,
+   "trim": "Autograph AWD",
+   "ext": "GAT",
+   "int": "G",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 15,
+   "trim": "Autograph AWD",
+   "ext": "GAT",
+   "int": "K",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 16,
+   "trim": "Autograph AWD",
+   "ext": "XKJ",
+   "int": "K",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 17,
+   "trim": "LUXE FWD",
+   "ext": "QBE",
+   "int": "G",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 18,
+   "trim": "Autograph AWD",
+   "ext": "GAQ",
+   "int": "P",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 19,
+   "trim": "Autograph AWD",
+   "ext": "GAT",
+   "int": "P",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 20,
+   "trim": "LUXE FWD",
+   "ext": "GAT",
+   "int": "G",
+   "need": 0,
+   "tier": "\u25cb option"
+  }
+ ],
+ "QX65": [
+  {
+   "rank": 1,
+   "trim": "AUTOG",
+   "ext": "XKJ",
+   "int": "G",
+   "need": 1,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 2,
+   "trim": "LUXE AWD",
+   "ext": "QBE",
+   "int": "K",
+   "need": 1,
+   "tier": "\u2713 BUILD"
+  },
+  {
+   "rank": 3,
+   "trim": "SPORT AWD",
+   "ext": "QBE",
+   "int": "G",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 4,
+   "trim": "SPORT AWD",
+   "ext": "XEX",
+   "int": "G",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 5,
+   "trim": "AUTOG",
+   "ext": "XKJ",
+   "int": "K",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 6,
+   "trim": "LUXE AWD",
+   "ext": "KH3",
+   "int": "G",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 7,
+   "trim": "SPORT AWD",
+   "ext": "GAT",
+   "int": "G",
+   "need": 0,
+   "tier": "\u25cb option"
+  },
+  {
+   "rank": 8,
+   "trim": "SPORT AWD",
+   "ext": "KBY",
+   "int": "G",
+   "need": 0,
+   "tier": "\u25cb option"
+  }
+ ]
+}

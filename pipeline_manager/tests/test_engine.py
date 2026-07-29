@@ -7,7 +7,16 @@ ELITE_PIPELINE_MANAGER workbook (recalculated 2026-07-17):
                     BASE / MOM / PRATE  (the LIVE ENGINE sheet)
   seas_ref.json   — per-model 12-month seasonality index  (LIVE ENGINE)
   grid_ref.json   — per-config ONLOT / PROJ@ARR / NEED / target  (PLANNING GRID,
-                    order month SEP, mode CPO, measured windows QX80/60=5, QX65=1)
+                    order month SEP, mode CPO, measured windows QX80/60=5, QX65=1).
+                    ONLOT and target remain the workbook's; PROJ@ARR and NEED were
+                    RE-BASELINED for the Step 2 two-bucket projection fix — the
+                    workbook (and the pre-fix engine) sold committed future
+                    pipeline down at retail velocity before it arrived, so it
+                    re-ordered units it already had coming. Under the fix, on-lot
+                    sells down but committed pipeline is credited in full and never
+                    consumed before arrival. The re-baseline is provably monotone:
+                    onlot and target are unchanged, and NEED only ever dropped
+                    (total 52 -> 33 across the 74 configs) — never rose.
 
 Run with `pytest` or directly: `python pipeline_manager/tests/test_engine.py`.
 """
@@ -229,6 +238,40 @@ def test_projection_credits_residual_inbound():
     res = engine.run(inv, sales, Settings(order_month=9, mode="CPO"), today=_AS_OF)
     line = next(l for l in res.lines if l.key == "QX80|8361|XKJ|G")  # 1 lot + 2 inbound
     assert line.inbound == 2 and line.proj_at_arrival > 0
+
+
+def test_committed_pipeline_is_not_re_ordered():
+    """Step 2 / TEST 1: once a recommended unit is committed and appears in the
+    inventory feed as pipeline it must reduce need and never be re-ordered — even
+    when it arrives AFTER the arrival window. The pre-fix engine sold committed
+    pipeline down at retail velocity before it arrived, so it re-recommended the
+    same production every cycle."""
+    from pipeline_manager.ingest import InventoryUnit, parse_arrival_month
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    s = Settings(order_month=9, mode="CPO", anticipate_demo_returns=False)
+    today = datetime.date(2026, 7, 28)
+    key = "QX80|8361|XKJ|G"
+    model, code, ext, interior = key.split("|")
+
+    def line(res):
+        return next(l for l in res.lines if l.key == key)
+
+    rec = line(engine.run(inv, sales, s, today=today)).need
+    assert rec > 0
+    # Commit the recommended units. They arrive in February — well past the ~2.8mo
+    # production->arrival window the need is measured at.
+    committed = [InventoryUnit(
+        stock=f"CM{i}", serial=f"V{i}", status="", my="2026", model=model,
+        model_code=code + "1", description="", trans="", ext=ext, interior=interior,
+        msrp=90000, inv_cost=85000, location="SIT", dis=0, eta="2/15/2027",
+        production_month="2026-12", key=key,
+        arrival_month=parse_arrival_month("SIT", "2/15/2027"), model_year=2026)
+        for i in range(rec)]
+    after = line(engine.run(list(inv) + committed, sales, s, today=today))
+    assert after.inbound >= rec            # committed units are in the feed as pipeline
+    assert after.proj_at_arrival >= rec    # pipeline credited into the projection...
+    assert after.need == 0                 # ...so the whole batch is satisfied — no re-order
 
 
 def test_executive_demo_board():

@@ -575,33 +575,38 @@ def _interp_seas(seas_model, om, offset):
 
 
 def _proj_chain(model, pos, metric, seas, s: Settings, n=8, returns=()) -> list:
-    """Forward sell-down chain proj_0..proj_n.
+    """Forward two-bucket projection proj_0..proj_n (Step 2).
 
-    Each month: sell down at the config's pace and that month's seasonality,
-    never below the held floor (stalled units + demos that have come back), then
-    add whatever lands that month (inbound pipeline + returning demos). proj_0
-    swallows everything already back before the window opens so it isn't ordered
-    twice. A returned demo joins the held floor -- used, higher-mileage stock
-    that lingers rather than reselling at the config's fresh pace.
+    Two buckets, treated differently:
+
+      * RETAIL-AVAILABLE (on lot today) sells down each month at the config's pace
+        × that month's seasonality, never below the stalled floor. This is the
+        only inventory projected retail demand may consume.
+      * FUTURE PIPELINE (all inbound) is committed supply: it is credited in full
+        and is NEVER consumed by projected sell-down — a committed unit reduces
+        future need and cannot be sold before it physically arrives. (Crediting the
+        whole pipeline, not just what lands by the window, is what stops the engine
+        re-ordering units it already has coming: a unit arriving just past the
+        window must still count.)
+
+    A returned demo joins as held (used, higher-mileage) stock as it comes back,
+    lingering rather than reselling at the config's fresh pace. The inventory feed
+    is authoritative: when a pipeline unit lands it re-appears on-lot in the next
+    import and rejoins the sell-down bucket — no memory, no ledger.
     """
     om = s.order_month
     rate = _proj_rate(metric, metric.dts if metric else None, s)
 
-    def arrivals_at(offset):
-        return pos.arrivals.get(((om - 1 + offset) % 12) + 1, 0)
-
-    def demos_at(offset):
-        return sum(1 for r in returns if r == offset)
-
     def demos_by(offset):     # returned and still held by this month
         return sum(1 for r in returns if r <= offset)
 
-    later = sum(arrivals_at(k) for k in range(1, n + 1))
-    proj = [pos.onlot + max(0, pos.inbound_total - later) + demos_at(0)]
+    pipeline = pos.inbound_total          # committed future supply — never sold down
+    onlot_rem = float(pos.onlot)
+    proj = [onlot_rem + pipeline + demos_by(0)]
     for k in range(1, n + 1):
-        held = pos.stalled + demos_by(k)
         seas_m = seas[model][(om - 1 + (k - 1)) % 12]
-        proj.append(max(held, proj[k - 1] - rate * seas_m) + arrivals_at(k) + demos_at(k))
+        onlot_rem = max(float(pos.stalled), onlot_rem - rate * seas_m)
+        proj.append(onlot_rem + pipeline + demos_by(k))
     return proj
 
 
