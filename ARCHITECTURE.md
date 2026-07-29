@@ -177,6 +177,14 @@ the Service Loaner domain; generic decision engines; one loaner screen.
   *Future Dealer Trade acquisition recommendations* = a supply acquisition path
   (what to request when another dealer asks for one of ours; reads need only).
   These are different systems and must not be merged.
+- **DR-6 (One Vehicle Valuation Engine; the attribute-premium registry is its ONLY
+  extension point).** `_retailAt` is the single projected-resale engine for the
+  whole dealership. Every resale adjustment is an entry in the `_ATTR_PREMIUMS`
+  registry (`Base + exterior + interior + future attribute premiums`). **Do not**
+  build a second valuation path, duplicate a premium calculation, or write
+  feature-specific resale logic anywhere else — extend the registry instead. Each
+  premium stays independently explainable and carries its own sample count +
+  confidence.
 
 ## Demand signal hierarchy (New Retail)
 
@@ -224,6 +232,54 @@ separate again and lands in the supply-path layer (Step 3), reading need only.
   seasonality, order-priority ranking, and need are unchanged. Test rewritten to
   assert activating the loaner program changes **zero** units of the retail build
   sequence. (39/39 green.)
+
+## Vehicle Valuation Engine
+
+A reusable, dealership-wide engine responsible **only** for projected market value.
+`_retailAt` is that engine; nothing else projects resale.
+
+- **Single engine, deterministic, explainable.** One input → one output; run twice,
+  same numbers. Every projected value decomposes into an auditable build-up.
+- **The build-up:** `Projected Resale = Base Value + Exterior Premium + Interior
+  Premium + Future Attribute Premiums`. `base + Σ premiums = final`, exactly — never
+  a hidden blended adjustment.
+- **Attribute-premium registry (`_ATTR_PREMIUMS`) is the ONLY extension point.** Each
+  attribute independently computes a capped (±15% of base) median price delta of
+  matching comps vs. the rest, and carries its **sample count** and **confidence
+  (0–1)**. Additive under one combined guard; if clipped, premiums scale
+  proportionally so the breakdown still sums to the applied total.
+- **Future attributes extend the registry, never a parallel engine:** package
+  content, wheel package, drivetrain (AWD/RWD/4WD), option/technology/tow/
+  performance/appearance groups, certified status, previous-loaner status, mileage
+  bands, market scarcity, regional preference, historical retail performance, actual
+  dealer-gross history, and prediction-vs-actual learning adjustments.
+
+**Feature Complete vs. Data Limited (important — not a bug).** The **interior**
+premium is *feature-complete*: fully wired through the engine, validated to compute
+correctly on synthetic data, explainable, sample-counted, confidence-scored. It
+currently produces **$0** adjustment **only because production data has no usable
+interior history** for INFINITI QX (the column is blank, and inventory stores an
+interior *code* while history stores a *name*). This is an intentional **data
+limitation**, not an unfinished implementation. It activates automatically when
+reliable interior data — plus the documented interior code→group map — exists.
+Future contributors must not "fix" the $0 output; there is nothing to fix in the
+engine.
+
+## System architecture: a collection of reusable business engines
+
+Pipeline Manager is evolving from one application into independent business engines
+with defined responsibilities. These boundaries are **architectural contracts**: no
+engine may duplicate another's responsibility, each stays independently testable, and
+each should be reusable outside Pipeline Manager.
+
+| Engine | Responsibility (only this) |
+|--------|----------------------------|
+| **Demand Engine** | What inventory should exist (historical retail sales + speed-to-sell + seasonality). Never reads supply/loaner/valuation. |
+| **Supply Engine** | Which operational workflows can satisfy an identified shortage now (CPO/PPO/CTP/Dealer-Trade feasibility by cycle position + arrival). Never changes demand. |
+| **Vehicle Valuation Engine** | Projected market value via the attribute-premium registry (`_retailAt`). The single valuation source. |
+| **Service Loaner Engine** | Placement, retirement timing, write-down strategy, financial optimization — consumes the Valuation Engine; never touches New Retail demand/ordering/allocation. |
+| **Learning Engine** | Compares predictions against actual outcomes and produces calibration signals; never rewrites history or mutates the deterministic engines directly. |
+| **Reporting Engine** | Explains every recommendation in an auditable, management-friendly form. |
 
 ## Noted micro-duplicates (not decision logic; addressed opportunistically)
 
