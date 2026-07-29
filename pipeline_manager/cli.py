@@ -98,6 +98,20 @@ def render_text(res, rep) -> str:
             ["MODEL", "TRIM", "EXT", "INT", "NEED", "NEEDED", "FEASIBLE NOW", "NOT FEASIBLE (why)"],
             rows, aligns=["<", "<", "<", "<", ">", "<", "<", "<"]))
 
+    # 1c. CTP — incremental production-edit recommendations
+    ctp = rep.get("ctp_recommendations")
+    if ctp and ctp.get("changes"):
+        out.append("\n" + "#" * W)
+        out.append(f"1c) CTP — re-spec editable future production (need {ctp['total_need_before']}"
+                   f" -> {ctp['total_need_after']}; {len(ctp['changes'])} of {ctp['editable_units']} editable units)")
+        out.append("#" * W)
+        rows = [[i + 1, c["unit"], c["model"],
+                 f"{c['from']['trim']} {c['from']['ext']}/{c['from']['int']}",
+                 f"{c['to']['trim']} {c['to']['ext']}/{c['to']['int']}", f"+{c['improvement']}"]
+                for i, c in enumerate(ctp["changes"])]
+        out.append(_table(["#", "UNIT", "MODEL", "FROM", "TO", "IMPROVE"], rows,
+                          aligns=["<", "<", "<", "<", "<", ">"]))
+
     # 2. Overstock / Wholesale
     out.append("\n" + "#" * W)
     out.append("2) OVERSTOCK / WHOLESALE — over-target metal (order slower, don't dump)")

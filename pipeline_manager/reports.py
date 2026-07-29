@@ -558,9 +558,12 @@ def _ppo_index(res: EngineResult) -> dict:
 
 
 def _workflow(name, arrival_offset, has_supply, need_open, grace, cyc, s, om,
-              source, no_supply_reason) -> dict:
+              source, no_supply_reason, editable=False) -> dict:
     """Operational feasibility of ONE workflow for ONE shortage. No score, no
-    ranking — just: available? arrives in time? therefore feasible?, and why not."""
+    ranking — just: available? arrives in time? therefore feasible?, and why not.
+    `editable` marks a workflow (CTP) whose future supply can be re-spec'd — the
+    common workflow interface (availability, arrival, editable state, feasibility)
+    every acquisition method implements."""
     avail_map = getattr(s, "workflow_availability", None) or _DEFAULT_WORKFLOW_AVAIL
     allowed = avail_map.get(name, _DEFAULT_WORKFLOW_AVAIL.get(name, ["beginning", "middle", "end"]))
     available = bool(has_supply and cyc in allowed)
@@ -583,7 +586,7 @@ def _workflow(name, arrival_offset, has_supply, need_open, grace, cyc, s, om,
         reason = "immediate — satisfies the shortage now"
     else:
         reason = f"arrives {arrival_month} — satisfies the {open_label} demand window"
-    return {"workflow": name, "available": available, "source": source,
+    return {"workflow": name, "available": available, "source": source, "editable": editable,
             "arrival_offset": (round(arrival_offset, 1) if arrival_offset is not None else None),
             "arrival_month": arrival_month, "satisfies_window": satisfies,
             "lands_in_window": lands, "feasible": feasible, "reason": reason}
@@ -616,6 +619,11 @@ def supply_feasibility(res: EngineResult) -> list:
         matches = sorted(ppo.get(l.key, []), key=lambda p: p["offset"])
         ppo_off = matches[0]["offset"] if matches else None
         ppo_src = matches[0]["source"] if matches else "pre-produced"
+        # The Supply Engine's workflow registry. Each entry implements the same
+        # interface (availability, estimated arrival, editable state, feasibility);
+        # feasibility is derived uniformly. New acquisition methods (Auction,
+        # Off-Lease, Executive Demo, Service-Loaner Conversion, Internal Transfer,
+        # manufacturer programs) plug in by adding an entry here — NO demand logic.
         workflows = [
             # Dealer Trade — immediate inventory change.
             _workflow("Dealer Trade", 0.0, dealer_ok, need_open, grace, cyc, s, om,
@@ -623,9 +631,9 @@ def supply_feasibility(res: EngineResult) -> list:
             # PPO — soonest matching pre-produced unit (soonest, not "best").
             _workflow("PPO", ppo_off, ppo_off is not None, need_open, grace, cyc, s, om,
                       ppo_src, "no matching pre-produced unit"),
-            # CTP — change future production (window closes with the ordering cycle).
+            # CTP — EDITABLE: re-spec future production (window closes late in cycle).
             _workflow("CTP", base, True, need_open, grace, cyc, s, om,
-                      "change future production", ""),
+                      "change future production", "", editable=True),
             # Factory Order (CPO) — learned production->arrival lead (+ order pad).
             _workflow("Factory Order", base + pad, True, need_open, grace, cyc, s, om,
                       "future factory order", ""),
@@ -640,6 +648,73 @@ def supply_feasibility(res: EngineResult) -> list:
     return out
 
 
+def ctp_recommendations(res: EngineResult, max_changes: int = 20) -> dict:
+    """CTP editing recommendations — the incremental, self-balancing plan. Each step
+    asks: which single editable production unit, re-spec'd WITHIN its model, most
+    improves overall inventory position (reduces total remaining shortage)? Apply
+    it, recompute, repeat — so the plan never flips the whole schedule. Reads the
+    shortage the demand engine already produced; edits SUPPLY only. Surplus sources
+    emerge from maximising improvement — they are not hard-coded."""
+    from .engine import _unit_editable
+    s = res.settings
+    today = res.time.today
+    total_before = sum(l.need for l in res.lines)
+    # Editable production units by their current config key (reflects any applied
+    # overlay); one entry per unit so we can move them one at a time.
+    editable, stocks = {}, {}
+    for u in res.inventory:
+        if u.key and _unit_editable(u, today, s):
+            editable[u.key] = editable.get(u.key, 0) + 1
+            stocks.setdefault(u.key, []).append(u.stock)
+    st = {l.key: {"model": l.model, "trim": l.trim, "ext": l.ext, "int": l.interior,
+                  "target": l.order_target, "proj": l.proj_at_arrival, "sup": l.suppressed}
+          for l in res.lines}
+
+    def need_of(key, proj):
+        c = st.get(key)
+        return 0 if (not c or c["sup"]) else max(0, xround(c["target"] - proj))
+
+    proj_now = {k: st[k]["proj"] for k in st}
+    left = dict(editable)
+    changes = []
+    for _ in range(max_changes):
+        best = None   # (improvement, tgt_need, src_key, tgt_key)
+        for src_key, cnt in left.items():
+            if cnt <= 0 or src_key not in st:
+                continue
+            model = st[src_key]["model"]
+            src_delta = need_of(src_key, proj_now[src_key] - 1) - need_of(src_key, proj_now[src_key])
+            for tgt_key, c in st.items():
+                if tgt_key == src_key or c["model"] != model or c["sup"]:
+                    continue
+                tgt_now = need_of(tgt_key, proj_now[tgt_key])
+                if tgt_now <= 0:
+                    continue
+                tgt_delta = tgt_now - need_of(tgt_key, proj_now[tgt_key] + 1)
+                improvement = tgt_delta - src_delta
+                if improvement > 0 and (best is None or improvement > best[0]
+                                        or (improvement == best[0] and tgt_now > best[1])):
+                    best = (improvement, tgt_now, src_key, tgt_key)
+        if best is None:
+            break
+        improvement, _tn, src_key, tgt_key = best
+        proj_now[src_key] -= 1
+        proj_now[tgt_key] += 1
+        left[src_key] -= 1
+        stock = stocks[src_key].pop() if stocks.get(src_key) else ""
+        sc, tc = st[src_key], st[tgt_key]
+        changes.append({
+            "unit": stock, "model": sc["model"], "improvement": improvement,
+            "from": {"trim": sc["trim"], "ext": sc["ext"], "int": sc["int"], "key": src_key},
+            "to": {"trim": tc["trim"], "ext": tc["ext"], "int": tc["int"], "key": tgt_key},
+            "reason": (f"re-spec 1 → {tc['trim']} {tc['ext']}/{tc['int']} (fills its shortage; "
+                       f"{sc['trim']} {sc['ext']}/{sc['int']} has slack)"),
+        })
+    return {"changes": changes, "editable_units": sum(editable.values()),
+            "total_need_before": total_before,
+            "total_need_after": total_before - sum(c["improvement"] for c in changes)}
+
+
 def build_all(res: EngineResult) -> dict:
     return {
         "order_priority": order_priority(res),
@@ -652,6 +727,7 @@ def build_all(res: EngineResult) -> dict:
         "loaner_fleet": loaner_fleet(res),
         "build_sequence": build_sequence(res),
         "supply_feasibility": supply_feasibility(res),
+        "ctp_recommendations": ctp_recommendations(res),
         "retail_forecast": retail_forecast(res),
         "pace_check": pace_check(res),
         "fleet_targets": fleet_targets(res),

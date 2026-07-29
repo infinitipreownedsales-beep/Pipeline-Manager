@@ -906,9 +906,58 @@ def _find_orphans(sales, inventory, roster) -> list:
 # --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
+def _unit_editable(u, today: _dt.date, s: Settings) -> bool:
+    """Is this future-production unit still editable (CTP)? Only pipeline units, and
+    only before production locks. Prefer real production status / lock date; fall
+    back to a lock-lead heuristic on the production month when neither is present."""
+    if not u.is_inbound:
+        return False
+    status = str(getattr(u, "status", "") or "").lower()
+    if any(w in status for w in ("lock", "built", "produced", "arrived", "transit")):
+        return False
+    lock_date = _iso(getattr(u, "lock_date", None))
+    if lock_date is not None:
+        return today < lock_date
+    prod = _production_date(u.production_month)
+    if prod is None:
+        return False
+    lead = float(getattr(s, "ctp_lock_lead_months", 2.0) or 0.0)
+    return (prod - today).days / _DAYS_PER_MONTH >= lead
+
+
+def apply_ctp_overlay(inventory, today: _dt.date, s: Settings) -> list:
+    """Return inventory with editable production units re-spec'd per s.ctp_changes.
+    A SUPPLY edit only: model-locked (a change can never alter the model), applied
+    only to editable units, and the input feed is never mutated (copies). This is a
+    session/what-if overlay — a fresh import always replaces it."""
+    from dataclasses import replace
+    from .keys import build_key, digits_only
+    changes = getattr(s, "ctp_changes", None) or []
+    if not changes:
+        return inventory
+    by_stock = {str(c.get("stock", "")).strip(): c for c in changes if str(c.get("stock", "")).strip()}
+    out = []
+    for u in inventory:
+        c = by_stock.get(u.stock)
+        if c is None or not _unit_editable(u, today, s):
+            out.append(u)
+            continue
+        new_code = (digits_only(c.get("code") or c.get("config") or u.model_code)[:4]
+                    or u.model_code[:4])
+        new_ext = str(c.get("ext", c.get("exterior_color", u.ext))).strip()
+        new_int = str(c.get("int", c.get("interior_color", u.interior))).strip()
+        # model is NEVER changed — that is the one hard CTP constraint.
+        out.append(replace(u, model_code=new_code, ext=new_ext, interior=new_int,
+                           key=build_key(u.model, new_code, new_ext, new_int)))
+    return out
+
+
 def run(inventory, sales, settings: Settings, today: _dt.date | None = None) -> EngineResult:
     from . import loaner as _loaner
     today = today or _dt.date.today()
+    # CTP is a SUPPLY edit: re-spec editable future-production units, then run the
+    # position/shortage recompute exactly as always. The demand engine is untouched.
+    inventory = apply_ctp_overlay(inventory, today, settings)
     tb = compute_time_base(sales, today)
     metrics = compute_metrics(sales, tb, settings, settings.effective_roster())
     seas = compute_seasonality(sales, tb, getattr(settings, "seasonality_shrink_k", 0.0))

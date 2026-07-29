@@ -274,6 +274,74 @@ def test_committed_pipeline_is_not_re_ordered():
     assert after.need == 0                 # ...so the whole batch is satisfied — no re-order
 
 
+def _editable_unit(stock, key, prod="2026-12"):
+    from pipeline_manager.ingest import InventoryUnit
+    model, code, ext, interior = key.split("|")
+    return InventoryUnit(stock=stock, serial="V" + stock, status="On Order", my="2026",
+        model=model, model_code=code + "1", description="", trans="", ext=ext, interior=interior,
+        msrp=90000, inv_cost=85000, location="SIT", dis=0, eta="", production_month=prod,
+        key=key, arrival_month=0, model_year=2026)
+
+
+def test_ctp_overlay_edits_supply_model_locked_and_editable_only():
+    """3c: a CTP change re-specs an EDITABLE future-production unit (supply only),
+    is model-locked, and leaves the demand target untouched. Non-editable units and
+    model changes are ignored."""
+    from pipeline_manager.engine import apply_ctp_overlay
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    today = _AS_OF
+    u = _editable_unit("CTP1", "QX80|8361|XKJ|G")
+    st = Settings(order_month=9, anticipate_demo_returns=False)
+    base = {l.key: l for l in engine.run(inv + [u], sales, st, today=today).lines}
+    chg = [{"stock": "CTP1", "code": "8311", "ext": "QBE", "int": "C"}]
+    res = {l.key: l for l in engine.run(inv + [u], sales,
+           Settings(order_month=9, anticipate_demo_returns=False, ctp_changes=chg), today=today).lines}
+    # supply moved from source config to target config (one editable pipeline unit)
+    assert res["QX80|8311|QBE|C"].inbound == base["QX80|8311|QBE|C"].inbound + 1
+    assert res["QX80|8361|XKJ|G"].inbound == base["QX80|8361|XKJ|G"].inbound - 1
+    # demand target unchanged — only supply moved
+    assert res["QX80|8311|QBE|C"].order_target == base["QX80|8311|QBE|C"].order_target
+    # model-lock: even a QX60 code keeps the unit QX80 (model NEVER changes)
+    s2 = Settings(ctp_changes=[{"stock": "CTP1", "code": "8481", "ext": "QBE", "int": "C"}],
+                  ctp_lock_lead_months=2.0)
+    out = apply_ctp_overlay([u], today, s2)
+    assert out[0].model == "QX80" and out[0].key.startswith("QX80|")
+    # editable-only: an ON-LOT unit with the same Stock# is never edited
+    onlot = _editable_unit("CTP1", "QX80|8361|XKJ|G")
+    onlot.location = "DLR-INV"
+    out2 = apply_ctp_overlay([onlot], today, Settings(ctp_changes=chg, ctp_lock_lead_months=2.0))
+    assert out2[0].key == "QX80|8361|XKJ|G"   # unchanged (not editable)
+
+
+def test_ctp_recommendations_are_self_balancing():
+    """3c / TEST 2: CTP recommends the incremental change that most improves overall
+    inventory position, and stops — it never flips the whole schedule. Given far
+    more editable surplus units than the shortage, it converts only up to the
+    shortage and leaves the rest untouched."""
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    today = _AS_OF
+    st = Settings(order_month=9, anticipate_demo_returns=False)
+    base = engine.run(inv, sales, st, today=today)
+    # a QX80 config with NO need -> a clean surplus source when we pile units on it
+    src_key = next(l.key for l in base.lines
+                   if l.model == "QX80" and l.need == 0 and not l.suppressed)
+    qx80_need = sum(l.need for l in base.lines if l.model == "QX80")
+    assert qx80_need > 0
+    n_editable = qx80_need + 6                       # strictly more surplus than the shortage
+    extra = [_editable_unit(f"CTP{i}", src_key) for i in range(n_editable)]
+    res = engine.run(inv + extra, sales, st, today=today)
+    rec = reports.ctp_recommendations(res)
+    n = len(rec["changes"])
+    assert n == qx80_need                            # fills exactly the shortage...
+    assert n < n_editable                            # ...and never converts every unit
+    assert all(c["model"] == "QX80" for c in rec["changes"])
+    assert rec["total_need_after"] == rec["total_need_before"] - n
+    # no target is ever over-filled (each change improves position by 1)
+    assert all(c["improvement"] == 1 for c in rec["changes"])
+
+
 def test_demand_is_path_independent():
     """3a: demand (need + order_target) is computed once and is INDEPENDENT of the
     acquisition path — identical across mode CPO/PPO/MID-MONTH and across

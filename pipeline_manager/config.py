@@ -86,6 +86,17 @@ class Settings:
     # satisfying it ("before or during the demand window"). Early arrival always
     # satisfies; only too-late fails.
     supply_window_grace: float = 1.0
+    # --- CTP (Change The Production) — a SUPPLY editing workflow ------------ #
+    # Session-only proposed edits to editable future-production units. NEVER
+    # inventory truth: a fresh inventory import always replaces it. Each
+    # {stock, code?, ext, int} re-specs the pipeline unit at that Stock# to a new
+    # configuration of the SAME MODEL (model can never change). Applied to supply
+    # before the position/shortage recompute — the demand engine is untouched.
+    ctp_changes: list = field(default_factory=list)
+    # A production unit is editable if real production status / lock date says so;
+    # absent that, the fallback heuristic: editable while its production month is at
+    # least this many months out (production locks as build approaches).
+    ctp_lock_lead_months: float = 2.0
     # Demote keeps a slow combo visible but ranks it last and zeroes NEED
     # unless it proves through (R90 >= prove_bar). Blank field = wildcard.
     demote: list = field(default_factory=lambda: [{"model": "", "ext": "", "int": "N"}])

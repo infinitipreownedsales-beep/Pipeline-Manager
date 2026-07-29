@@ -585,6 +585,53 @@ function supplyFeasibility(res){ let s=res.settings, om=s.order_month, pad=parse
       demand_open_month:supplyMonthLabel(om,needOpen),cycle_position:cyc,
       feasible:workflows.filter(w=>w.feasible).map(w=>w.workflow),workflows:workflows}); });
   return out; }
+// ---- CTP (Change The Production) — a SUPPLY editing workflow. Re-specs editable
+// future-production units (session/what-if only; a fresh import replaces it), then
+// the position/shortage recompute runs exactly as always. Model-locked. The demand
+// engine is untouched. Mirror of engine._unit_editable / apply_ctp_overlay /
+// reports.ctp_recommendations. ----
+function unitEditable(u, today, s){
+  if(!u.isInbound) return false;
+  let st=String(u.status||"").toLowerCase();
+  if(["lock","built","produced","arrived","transit"].some(w=>st.indexOf(w)>=0)) return false;
+  let prod=productionDate(u.prod); if(!prod) return false;
+  let lead=parseFloat(s.ctp_lock_lead_months!==undefined?s.ctp_lock_lead_months:2.0)||0;
+  return (prod-today)/86400000/30.44 >= lead; }
+function applyCtpOverlay(inv, today, s){
+  let changes=s.ctp_changes||[]; if(!changes.length) return inv;
+  let byStock={}; changes.forEach(c=>{ let st=String(c.stock||"").trim(); if(st) byStock[st]=c; });
+  return inv.map(u=>{ let c=byStock[u.stock]; if(!c||!unitEditable(u,today,s)) return u;
+    let nc=(digitsOnly(c.code||c.config||u.code).slice(0,4))||String(u.code).slice(0,4);
+    let ne=String(c.ext!==undefined?c.ext:(c.exterior_color!==undefined?c.exterior_color:u.ext)).trim();
+    let ni=String(c.int!==undefined?c.int:(c.interior_color!==undefined?c.interior_color:u.int)).trim();
+    return Object.assign({},u,{code:nc,ext:ne,int:ni,key:buildKey(u.model,nc,ne,ni)}); }); }  // model unchanged
+function ctpRecommendations(res, maxChanges){
+  maxChanges=maxChanges||20;
+  let s=res.settings, today=res.tb.today, totalBefore=res.lines.reduce((a,l)=>a+l.need,0);
+  let editable={}, stocks={};
+  res.inv.forEach(u=>{ if(u.key&&unitEditable(u,today,s)){ editable[u.key]=(editable[u.key]||0)+1; (stocks[u.key]=stocks[u.key]||[]).push(u.stock); } });
+  let stmap={}; res.lines.forEach(l=>{ stmap[l.key]={model:l.model,trim:l.trim,ext:l.ext,int:l.int,target:l.orderTarget,proj:l.proj,sup:l.suppressed}; });
+  function needOf(key,proj){ let c=stmap[key]; if(!c||c.sup) return 0; return Math.max(0,xround(c.target-proj,0)); }
+  let projNow={}; Object.keys(stmap).forEach(k=>projNow[k]=stmap[k].proj);
+  let left=Object.assign({},editable), changes=[];
+  for(let it=0; it<maxChanges; it++){
+    let best=null;
+    Object.keys(left).forEach(srcKey=>{ if(left[srcKey]<=0||!stmap[srcKey]) return;
+      let model=stmap[srcKey].model, srcDelta=needOf(srcKey,projNow[srcKey]-1)-needOf(srcKey,projNow[srcKey]);
+      Object.keys(stmap).forEach(tgtKey=>{ let c=stmap[tgtKey]; if(tgtKey===srcKey||c.model!==model||c.sup) return;
+        let tgtNow=needOf(tgtKey,projNow[tgtKey]); if(tgtNow<=0) return;
+        let tgtDelta=tgtNow-needOf(tgtKey,projNow[tgtKey]+1), imp=tgtDelta-srcDelta;
+        if(imp>0&&(best===null||imp>best.imp||(imp===best.imp&&tgtNow>best.tn))) best={imp:imp,tn:tgtNow,src:srcKey,tgt:tgtKey}; }); });
+    if(!best) break;
+    projNow[best.src]-=1; projNow[best.tgt]+=1; left[best.src]-=1;
+    let stock=(stocks[best.src]&&stocks[best.src].length)?stocks[best.src].pop():"";
+    let sc=stmap[best.src], tc=stmap[best.tgt];
+    changes.push({unit:stock,model:sc.model,improvement:best.imp,
+      from:{trim:sc.trim,ext:sc.ext,int:sc.int,key:best.src},to:{trim:tc.trim,ext:tc.ext,int:tc.int,key:best.tgt},
+      reason:"re-spec 1 → "+tc.trim+" "+tc.ext+"/"+tc.int+" (fills its shortage; "+sc.trim+" "+sc.ext+"/"+sc.int+" has slack)"}); }
+  let eu=Object.keys(editable).reduce((a,k)=>a+editable[k],0);
+  return {changes:changes,editable_units:eu,total_need_before:totalBefore,
+    total_need_after:totalBefore-changes.reduce((a,c)=>a+c.improvement,0)}; }
 function loanerMatchUnit(stock,inv){ for(let i=0;i<inv.length;i++){ if(stock&&inv[i].stock.indexOf(stock)===0) return inv[i]; } return null; }
 // ===================== L2 FINANCIAL KERNEL =====================
 // Domain-agnostic financial primitives. These answer financial questions only —
@@ -959,6 +1006,7 @@ function loanerOutcomes(res){
 }
 
 function runEngine(inv,sales,s,today){
+  inv=applyCtpOverlay(inv,today,s);   // CTP: re-spec editable future supply, then recompute as always
   let tb=timeBase(sales,today), metrics=computeMetrics(sales,tb,effectiveRoster(s),s), seas=computeSeasonality(sales,tb,(s.seasonality_shrink_k!==undefined?s.seasonality_shrink_k:6));
   let loanerPrefixes=loanerStockPrefixes(s), positions=computePositions(inv,metrics,s,today,loanerPrefixes);
   let agedBrakes={}; (s.aged_memory||[]).forEach(e=>{ if(e.active===undefined||e.active===1||e.active===true||e.active==="1") agedBrakes[e.key]=(agedBrakes[e.key]||0)+1; });
@@ -982,4 +1030,5 @@ function runEngine(inv,sales,s,today){
   res.loanerFleetOrder=loanerOrderPlan(res);   // loaner PLACEMENT rec (Loaner section only) — never reserves factory allocation
   res.buildSeq=buildSequence(res);
   res.supplyFeasibility=supplyFeasibility(res);
+  res.ctpRecommendations=ctpRecommendations(res);
   return res; }

@@ -162,6 +162,19 @@ function supplyFeasibilityBlock(res, model){
   return H.join("");
 }
 
+/* ---- CTP: incremental re-spec of editable future production (self-balancing) ---- */
+function ctpBlock(res){
+  let ctp=res.ctpRecommendations; if(!ctp||!ctp.changes||!ctp.changes.length) return "";
+  let H=["<div class='bseqwrap'><div class='bseqhd'>CTP — change the production <span class='bseqsub'>re-spec editable future units, largest overall improvement first · need "+ctp.total_need_before+" → "+ctp.total_need_after+" ("+ctp.changes.length+" of "+ctp.editable_units+" editable units)</span></div>"];
+  ctp.changes.forEach((c,i)=>{
+    H.push("<div style='padding:3px 0'><span class='dim'>"+(i+1)+".</span> <span class='demoei'>"+esc(c.unit)+"</span> <b>"+
+      esc(c.from.trim)+" "+esc(c.from.ext)+"/"+esc(c.from.int)+"</b> <span style='color:var(--teal)'>→ "+
+      esc(c.to.trim)+" "+esc(c.to.ext)+"/"+esc(c.to.int)+"</span> <span class='dim'>(+"+c.improvement+" position)</span></div>");
+  });
+  H.push("</div>");
+  return H.join("");
+}
+
 /* ---------- Executive printable loaner report (Add 5 + 6) ---------- */
 function executiveReport(res){
   let s=res.settings, today=res.tb.today, H=[];
@@ -577,6 +590,7 @@ function render(res){
       ["num","","","","","num","","","num","num","num teal","num","num need","num"], rows));
     H.push(buildSeqBlock(res, model));
     H.push(supplyFeasibilityBlock(res, model)); });
+  H.push(ctpBlock(res));
 
   // 2. SIX-MONTH ROLLING PLAN
   H.push(sec(2,"6-Month Rolling Order Plan","when to place each truck — orders by arrival month"));
