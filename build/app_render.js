@@ -239,6 +239,36 @@ function timingCell(r){
   let col=now?"var(--bad)":"var(--teal)";
   return "<span><b style='color:"+col+"'>"+esc(lbl)+"</b>"+(r.release_why?" <span class='dim'>· "+esc(r.release_why)+"</span>":"")+"</span>";
 }
+/* ---- Retirement Scenario Explorer (Step 4): surfaces _retireTiming's month-by-
+   month economics for each in-service unit. Ranked by total contribution — never
+   lowest write-down. Decision support only; changes nothing. ---- */
+function scenarioExplorer(res){
+  let plan=res.loanerFleetPlan||{rows:[]};
+  let withSc=(plan.rows||[]).filter(r=>r.scenarios&&r.scenarios.length);
+  if(!withSc.length) return "";
+  let signed=function(v){ return (v>=0?"+":"−")+money(Math.abs(v)); };
+  let H=["<div class='dc-sub' style='margin-top:14px'>Retirement scenario explorer <span class='dc-note'>“if I keep this loaner one more month, what happens?” — ranked by total economic contribution, not lowest write-down · ★ recommended</span></div>"];
+  withSc.forEach(function(r){
+    let rec=r.scenarios.filter(function(s){return s.recommended;})[0];
+    let head=esc(r.stock)+" · "+esc(r.model)+" "+esc(r.ext_int)+" · "+r.months+"mo in service"+
+      (rec?(" <span style='color:var(--teal)'>★ retire Mo "+rec.month+" · "+money(rec.contribution)+"</span>"):"");
+    H.push("<details style='margin:3px 0'><summary style='cursor:pointer;padding:4px 0'>"+head+"</summary>");
+    H.push("<div style='overflow-x:auto'><table class='sctbl'><thead><tr><th>Retire</th><th>When</th><th>Resale</th><th>Write-down</th><th>Velocity bonus</th><th>Total contribution</th><th>Δ vs prev mo</th><th>Used DTS</th></tr></thead><tbody>");
+    r.scenarios.forEach(function(sc,i){
+      let prev=i>0?r.scenarios[i-1].contribution:null, delta=(prev!=null)?(sc.contribution-prev):null;
+      let hl=sc.recommended?" style='background:rgba(77,182,172,.14)'":"";
+      H.push("<tr"+hl+"><td><b>Mo "+sc.month+"</b>"+(sc.recommended?" <span style='color:var(--teal)'>★</span>":"")+"</td>"+
+        "<td class='dim'>"+(sc.monthsFromNow<=0?"now":("+"+sc.monthsFromNow+"mo"))+"</td>"+
+        "<td>"+money(sc.resale)+"</td><td>"+money(sc.writedown)+"</td>"+
+        "<td>"+(sc.eligible?("<span style='color:var(--good)'>✓ "+money(sc.velocity)+"</span>"):"<span class='dim'>out of window</span>")+"</td>"+
+        "<td><b style='color:"+(sc.contribution>=0?"var(--teal)":"var(--bad)")+"'>"+money(sc.contribution)+"</b></td>"+
+        "<td class='dim'>"+(delta==null?"—":signed(delta))+"</td>"+
+        "<td class='dim'>"+(sc.dts!=null?sc.dts+"d":"—")+"</td></tr>");
+    });
+    H.push("</tbody></table></div></details>");
+  });
+  return H.join("");
+}
 function loanerRender(res){
   let board=res.loanerBoard||{}, plan=res.loanerFleetPlan||{rows:[],in_service:0,target:0,releasing_now:0,to_add:0};
   let H=[];
@@ -280,6 +310,9 @@ function loanerRender(res){
   } else {
     H.push("<div class='empty'>No loaners in service yet. Add your current fleet in ✎ Data → Loaner / ICV program, then this shows each unit's age, miles, ICV earned and when to release it.</div>");
   }
+
+  // retirement scenario explorer — per in-service unit, month-by-month
+  H.push(scenarioExplorer(res));
 
   // candidate board — best combos to put INTO the program
   H.push("<div class='foot' style='margin-top:14px'>Which unit to place is decided in the <b>Service Loaner Selection</b> section at the top — one ranked list, one number per unit. This section tracks units already in service and when to retire them.</div>");

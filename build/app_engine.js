@@ -887,14 +887,21 @@ function _retireTiming(res, unit, costFn, policy){
   // month out to the ceiling. The lift is the value of waiting vs. retailing now.
   let nowD=serviceLoanerEconomics(res, ui, Math.max(0.5,m0), policy, rate).difference;
   let lo=Math.max(1,Math.ceil(m0-0.001)), hi=Math.max(lo,Math.floor(maxMo+0.5));
-  let best=null;
+  // Build the month-by-month scenario table ONCE; bestM is DERIVED from it (Step 4).
+  // Ranked by total contribution (difference) — never lowest write-down. Same loop
+  // and comparison as before, so bestM/diffBest are unchanged.
+  let scenarios=[], best=null;
   for(let M=lo;M<=hi;M++){ let d=serviceLoanerEconomics(res, ui, M, policy, rate);
+    scenarios.push({month:M, monthsFromNow:Math.round(Math.max(0,M-m0)*10)/10,
+      resale:d.expectedRetail, writedown:d.writedown, icv:d.icv, velocity:d.velocity,
+      eligible:d.eligible, cost:d.expectedCost, contribution:d.difference, dts:d.avgDays});
     if(!best || d.difference>best.diff) best={M:M, diff:d.difference, eligible:d.eligible}; }
   if(!best) return null;
+  scenarios.forEach(sc=>{ sc.recommended=(sc.month===best.M); });
   let moToRetire=Math.max(0, best.M-m0);
   let retireDate=new Date(res.tb.today.getTime()+Math.round(moToRetire*DPM)*86400000);
   return {bestM:best.M, moToRetire:Math.round(moToRetire*10)/10, retireDate:retireDate,
-    diffBest:best.diff, diffNow:(nowD!=null?nowD:best.diff), eligible:best.eligible, rate:Math.round(rate), trim:info.trim||""};
+    diffBest:best.diff, diffNow:(nowD!=null?nowD:best.diff), eligible:best.eligible, rate:Math.round(rate), trim:info.trim||"", scenarios:scenarios};
 }
 function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], releasing=0;
   let costFn=_fleetCostInfo(res);
@@ -939,7 +946,7 @@ function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], rele
       best_retire_mo:(rt?rt.bestM:null),profit_lift:(rt?Math.round(rt.diffBest-rt.diffNow):null),
       icv_secured:eligibleMin?Math.round(icv):0,icv:Math.round(icv),
       eligible:eligibleMin,status:status,release_why:why||"",release_by:releaseAt?releaseAt.toISOString().slice(0,10):"",
-      note:String(e.note||"").trim()}); });
+      scenarios:(rt?rt.scenarios:null),note:String(e.note||"").trim()}); });
   rows.sort((a,b)=>a.mo_to_release-b.mo_to_release);
   let inService=rows.length, target=parseInt(s.loaner_fleet_target,10)||0;
   // place now = what it takes to hold the target once the units aging out leave.
