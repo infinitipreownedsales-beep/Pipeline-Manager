@@ -103,6 +103,48 @@ a `contextRefs:[]` array so contexts can later become their own immutable record
 (a future **Context Engine / Context Registry**) that records merely reference.
 Not implemented now — the model is only kept open for it.
 
+### 0.10 Two persistent categories, and only two (Rule 14)
+The platform holds exactly two kinds of persistent objects. Categorize by nature,
+never by which engine created them.
+
+| Category | Nature | Examples |
+|---|---|---|
+| **Business Fact** | immutable · historical · auditable · never rewritten/recalculated · never becomes smarter | Prediction Snapshot, Decision Record, Observation, future Context / Approval / Business-Event |
+| **Knowledge** | interpretation derived from facts · recomputable · versioned forever · always replaceable | Error, Attribution, Learning Signal, Calibration, Forecast, Confidence, Risk |
+
+Before creating any new persistent object: *"Is this a business fact?"* → Fact
+family. Else *"Is this knowledge derived from facts?"* → Knowledge family. If
+neither, it probably should not exist. Facts record **reality**; Knowledge records
+**understanding**. This boundary outranks every engine boundary. `PMRecords`
+currently mints the Business-Fact family (`category:"business-fact"`); Knowledge is
+a separate, recomputable family introduced in the Error/Signal layers.
+
+### 0.11 Every fact points at canonical Entities (not a VIN abstraction)
+A fact's `subject` is a list of **entity references** `[{type,id}]`, not a vehicle
+field. Today the entity is usually a vehicle; tomorrow it may be a customer,
+salesperson, technician, repair order, purchase order, factory allocation, vendor,
+store, region, or campaign. One fact may point at several. This removes future
+coupling and lets the Timeline expand beyond a single VIN with no redesign.
+
+### 0.12 Evidence, not links (`about → evidence`)
+Every fact carries `evidence:[factId,…]` — *"I exist because of these other
+facts."* This is deliberately framed as **evidence**, not generic relationships,
+because Knowledge (Learning) consumes evidence. It is one of the most important
+fields in the platform.
+
+### 0.13 Observations record truths, not events
+An Observation answers *"What became true?"* — not *"What happened?"*. Truths remain
+(vehicle sold, write-down completed, mileage recorded); events happen. Lifecycle
+**events** (on Decision Records) answer *"What happened to the recommendation?"*;
+they are a separate timeline from Observation **truths**. Keep them permanently
+apart so Observation never drifts into being another event log.
+
+### 0.14 The Timeline is a projection, never an object
+"Show me every Business Fact involving this entity" is a **query** across the fact
+collections (`forEntity`), not a stored object. The Timeline owns nothing and
+duplicates nothing. Guard every relationship against making that projection
+impossible; if a design would, stop and surface it.
+
 ---
 
 ## 1. Standard object model (project-wide) — implemented as `PMRecords`
@@ -119,13 +161,31 @@ compositions — no duplicated machinery.
 Every persistent business object in the platform follows the same four-part shape.
 This is now the standard, not a Learning-Engine-only convention.
 
+Record shape (Business-Fact family):
+```
+{ id, objectType, category:"business-fact", createdAt,
+  subject:[{type,id},…],   // canonical entity references (§0.11)
+  evidence:[factId,…],     // facts this fact exists because of (§0.12)
+  supersedes:null,         // correction chain (§0.4)
+  facts:{…},               // the frozen fact block — structurally isolated
+  interpretations:[],      // append-only Knowledge (§0.10)
+  events:[],               // append-only recommendation lifecycle
+  provenance:{…, factsHash} }
+```
+
 | Part | Mutability | Purpose |
 |---|---|---|
-| **Identity** | immutable | permanent `objectId` (independent of VIN), object type, created-at; VIN is a *relationship*, not the identity (§0.5) |
-| **Immutable Facts** | frozen at creation | what was true/decided at the moment; never edited (§0.4) |
-| **Mutable Interpretation** | append-only versions | conclusions drawn later; evolves; never overwritten |
-| **Event history** | append-only | lifecycle/business events; history grows around the facts, never edits them |
-| **Metadata / Provenance** | provenance | who/when/engine versions/config/business rules/source data — the auditor test (§0.6) |
+| **Identity** | immutable | permanent `objectId` (independent of entity), object type, created-at (§0.5) |
+| **Subject** | immutable | canonical entity references `[{type,id}]` — the Timeline join keys (§0.11) |
+| **Evidence** | immutable | facts this fact exists because of (§0.12) |
+| **Immutable Facts** | frozen, isolated under `facts` | what was true/decided; never edited (§0.4). Nested so the fact namespace can never collide with system fields and `appendVersion` can never touch it — immutability is **structural**, not conventional |
+| **Mutable Interpretation** | append-only versions | Knowledge drawn later; evolves; never overwritten |
+| **Event history** | append-only | recommendation lifecycle; grows around facts, never edits them |
+| **Metadata / Provenance** | provenance | who/when/versions/config/rules/source data + `factsHash` over the whole immutable core — the auditor test (§0.6) |
+
+`describe()` answers business questions (§0.8, Rule 12) via each type's
+**descriptor**; the foundation reads no type-specific field itself, so every fact
+is self-describing for AI and executives alike (Rule 13).
 
 "Append-only versions" means a changed interpretation is written as a *new*
 interpretation record referencing the prior one — the old one survives.
@@ -327,7 +387,8 @@ Do not move to the next layer until the previous passes architecture verificatio
 1. **Repository abstraction** (interfaces + localStorage adapter + JSON export/import) — ✅ DONE (`build/repository.js`, commit `4b257cf`)
 2. **Immutable Prediction Snapshot** — ✅ DONE, then refactored onto the shared `PMRecords` foundation (`build/records.js`)
 3. **`PMRecords` foundation + platform Decision Record** (typed envelope, lifecycle events, `describe()`) — ✅ DONE (`build/records.js`)
-4. **Observation Store** (append-only) — ◀ next; a `PMRecords` composition on `repositories.observations`
+3b. **Foundation refactor** — Business-Fact family (Rule 14), `facts:{}` isolation + structural immutability, canonical entity `subject`, `evidence`, business-question descriptors, unified `forEntity` — ✅ DONE (`build/records.js`, `build/repository.js`)
+4. **Observation Store** ("What became true?", append-only truths, typed-kind registry, entity subject, evidence) — ◀ next; a `PMRecords` composition on `repositories.observations`
 5. **Error Engine** (typed registry + immature classifier) — Learning Engine *thinking* (reintroduces `learning_engine.js`)
 6. **Learning Signal Engine** (confidence + provenance, non-destructive versions)
 7. **Calibration Recommendation surface** (recommendation-only, approval-gated)

@@ -1,26 +1,33 @@
-/* PMRecords — the platform's immutable business-record foundation.
+/* PMRecords — the platform's immutable Business-Fact foundation.
    (Learning Engine Spec §1 standard object model, made executable.)
 
-   This is the ONE implementation of everything every persistent business object
-   in the platform inherits:
-     • Identity            permanent, k-sortable objectId, independent of VIN (§0.5)
-     • Immutable Facts     frozen at creation, never edited/regenerated (§0.4)
-     • Provenance          the auditor test — who/when/versions/config/rules/data (§0.6)
-     • Integrity           factsHash + verify(): facts are provably unaltered
-     • Supersedes chains    corrections are new records linked to the prior (§0.4)
-     • Mutable Interpretation append-only versions; conclusions evolve, never overwrite
-     • Event history       append-only lifecycle/business events; history grows around facts
-     • Self-description    describe(): every object answers the AI-legibility questions
+   Rule 14 — the platform holds exactly two persistent categories:
+     • BUSINESS FACTS  — immutable, historical, auditable; record what is
+       permanently true. Prediction Snapshot, Decision Record, Observation,
+       and future Context / Approval / Business-Event records.
+     • KNOWLEDGE       — interpretation derived from facts; recomputable,
+       versioned forever, always replaceable. Error, Attribution, Learning
+       Signal, Calibration, Forecast, Confidence, Risk. (Built in later layers.)
+   This module is the ONE implementation the Business-Fact family inherits:
+     • Identity            permanent, k-sortable objectId, independent of entity
+     • Entity subject      one or more canonical entity references (§ subject)
+     • Evidence            the facts a fact exists because of (§ about → evidence)
+     • Immutable Facts      frozen fact block, structurally isolated under `facts`
+     • Provenance          the auditor test — who/when/versions/config/rules/data
+     • Integrity           factsHash + verify(): the immutable core is unaltered
+     • Supersedes chains    corrections are new facts linked to the prior
+     • Interpretations     append-only Knowledge attached to a fact (never edits it)
+     • Events              append-only lifecycle of a recommendation (Decisions)
+     • describe()          business-question answers for AI / executives / reporting
 
    It sits BELOW the engines and BESIDE the repository layer. Engines produce and
-   read records through it; it never ranks, chooses, trusts, or otherwise thinks
-   (§0.3). It depends only on the Layer 1 repositories contract, so it is storage-
-   and runtime-agnostic (§0.1, §0.2): the same code runs on localStorage, a DB, a
-   worker, an API, or a test harness.
+   read facts through it; it never ranks, chooses, or trusts (§0.3). It depends
+   only on the Layer 1 repositories contract, so it is storage- and runtime-
+   agnostic (§0.1, §0.2).
 
-   The two concrete platform records live here because nothing owns them but the
-   platform: Prediction Snapshots and Decision Records. Observations, Learning
-   Signals, and Calibrations will be defined the same way in later layers.
+   Timeline is NOT an object here (or anywhere): it is a projection — "every
+   Business Fact involving this entity" — served by forEntity() across the fact
+   collections. It owns nothing and duplicates nothing.
 
    Exposes window.PMRecords. Inert on load. */
 (function () {
@@ -28,8 +35,7 @@
 
   function clone(x) { return x == null ? x : JSON.parse(JSON.stringify(x)); }
 
-  /* FNV-1a 32-bit hex — deterministic, dependency-free. Source-data digests and
-     facts tamper-evidence. */
+  /* FNV-1a 32-bit hex — deterministic, dependency-free. */
   function hash(str) {
     var h = 0x811c9dc5; str = String(str == null ? "" : str);
     for (var i = 0; i < str.length; i++) {
@@ -39,8 +45,7 @@
     return ("00000000" + h.toString(16)).slice(-8);
   }
 
-  /* ULID-style k-sortable id: 10-char Crockford-base32 time prefix + random
-     suffix. Lexicographically sortable by creation time; DB-index friendly. */
+  /* ULID-style k-sortable id: time prefix + random suffix; DB-index friendly. */
   var CROCK = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
   function ulid(time, rng) {
     time = (time == null ? Date.now() : time);
@@ -69,9 +74,8 @@
     businessRulesVersion: "1.0.0"
   };
 
-  /* Canonical, platform-wide lifecycle events (registry / extension point, R-B).
-     Engine-specific events may be registered; unknown types are rejected so the
-     event vocabulary can never drift silently. */
+  /* Canonical, platform-wide lifecycle events for recommendations (registry).
+     Observations are NOT events — they are truths (a separate timeline). */
   var LIFECYCLE_EVENTS = {
     Generated: true, Presented: true, Viewed: true, Accepted: true, Modified: true,
     Rejected: true, Executed: true, Cancelled: true, Expired: true, Superseded: true
@@ -79,25 +83,36 @@
   var TERMINAL_EVENTS = { Executed: true, Cancelled: true, Rejected: true, Expired: true, Superseded: true };
   function registerLifecycleEvent(type) { LIFECYCLE_EVENTS[type] = true; }
 
-  /* Decision-kind registry (typed envelope, R-A). Seeded with the platform's
-     known recommendation kinds; extendable so any engine can emit decisions
-     without a new object type. */
+  /* Decision-kind registry (typed envelope). Extendable so any engine emits
+     decisions without a new object type. */
   var DECISION_KINDS = {};
   ["loaner-retirement", "ctp-adjustment", "acquisition", "trade", "pricing",
    "write-down", "factory-order", "demand", "inventory"].forEach(function (k) { DECISION_KINDS[k] = true; });
   function registerDecisionKind(kind) { DECISION_KINDS[kind] = true; }
 
+  var byId = function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; };
+
   /* ===================== foundation() =====================
-     Composes a repository (persistence, Layer 1) with the standard object model
-     into the common service surface every platform record shares. Concrete record
-     services (snapshots, decisions, …) call this and add only domain-specific
-     shaping and queries. */
+     Composes a repository (persistence) with the standard object model into the
+     shared surface every Business Fact inherits. Concrete fact registries call
+     this and add only the business verb that mints their fact (capture / record /
+     observe) and any fact-specific helpers.
+
+     opts:
+       type       business object name (e.g. "Prediction Snapshot")
+       idPrefix   objectId prefix (e.g. "psnap")
+       category   "business-fact" (default) — Rule 14
+       descriptor business-question answerers (purpose/decision/truth/outcome/
+                  confidence); describe() stays generic and never reads
+                  implementation details itself (Rule 12, 13). */
   function foundation(repositories, collectionKey, opts) {
     opts = opts || {};
     var repo = repositories && repositories[collectionKey];
     if (!repo) throw new Error("PMRecords.foundation: repositories." + collectionKey + " required");
     var type = opts.type || "Record";
     var idPrefix = opts.idPrefix || "rec";
+    var category = opts.category || "business-fact";
+    var descriptor = opts.descriptor || {};
     var versions = opts.versions || DEFAULT_VERSIONS;
     var clock = opts.clock || function () { return new Date(); };
     var rng = opts.rng || Math.random;
@@ -111,28 +126,41 @@
       return d;
     }
 
-    /* Mint a fully-formed immutable record from a fact block. `facts` is the
-       object of fact fields to spread at top level; it is copied verbatim
-       (capture, not compute — R5) and hashed for tamper-evidence. Not persisted. */
-    function mint(facts, meta) {
+    /* The immutable core is everything that can never change: the entity
+       references, the evidence, the supersedes link, and the fact block. It is
+       hashed as one unit, so tampering with any of it is detectable. */
+    function coreOf(input, supersedes) {
+      return {
+        subject: clone(input.subject) || [],     // canonical entity references
+        evidence: clone(input.evidence) || [],   // facts this fact exists because of
+        supersedes: supersedes || null,          // correction chain
+        facts: clone(input.facts) || {}          // the frozen fact block
+      };
+    }
+
+    function mint(input, meta) {
       meta = meta || {};
       var now = clock();
       var ms = (now && now.getTime) ? now.getTime() : Date.now();
       var iso = (now && now.toISOString) ? now.toISOString() : new Date(ms).toISOString();
-      var factCopy = clone(facts) || {};
-
+      var core = coreOf(input, meta.supersedes);
       var record = {
-        // Identity (§0.5)
+        // Identity
         id: idPrefix + "-" + ulid(ms, rng),
         objectType: type,
+        category: category,                       // Rule 14 family
         createdAt: iso,
-        supersedes: meta.supersedes || null,   // ledger chain (§0.4)
-        // Mutable, append-only histories (empty at creation)
-        interpretations: [],
-        events: [],
+        // Immutable core (mirrored at top level for ergonomic reads)
+        subject: core.subject,
+        evidence: core.evidence,
+        supersedes: core.supersedes,
+        facts: core.facts,
+        // Append-only histories (empty at creation)
+        interpretations: [],                      // Knowledge attaches here
+        events: [],                               // recommendation lifecycle
         // Metadata / provenance (§0.6)
         provenance: {
-          createdBy: meta.createdBy || (type + "Service"),
+          createdBy: meta.createdBy || type,
           createdAt: iso,
           buildId: versions.buildId,
           valuationEngineVersion: versions.valuationEngineVersion,
@@ -143,166 +171,170 @@
           sourceData: digestSources(meta.sources)
         }
       };
-      // Spread immutable facts at top level, then hash them.
-      Object.keys(factCopy).forEach(function (k) { record[k] = factCopy[k]; });
-      record.provenance.factsHash = hash(JSON.stringify(factCopy));
-      record._factKeys = Object.keys(factCopy);   // which top-level keys are facts (for verify/describe)
+      record.provenance.factsHash = hash(JSON.stringify(core));
       return record;
     }
 
-    function factBlock(rec) {
-      var keys = rec._factKeys || [];
-      var f = {}; keys.forEach(function (k) { f[k] = rec[k]; });
-      return f;
+    function coreFromRecord(rec) {
+      return { subject: rec.subject, evidence: rec.evidence, supersedes: rec.supersedes, facts: rec.facts };
     }
 
-    return {
+    var api = {
       type: type,
+      category: category,
       collection: collectionKey,
       versions: versions,
 
-      mint: function (facts, meta) { return deepFreeze(mint(facts, meta)); },
-
-      /* Mint + persist. Returns the saved record. */
-      create: function (facts, meta) { return repo.save(deepFreeze(mint(facts, meta))); },
+      mint: function (input, meta) { return deepFreeze(mint(input, meta)); },
+      create: function (input, meta) { return repo.save(deepFreeze(mint(input, meta))); },
 
       get: function (id) { return repo.getById(id); },
       list: function (pred) { return repo.list(pred); },
       count: function () { return repo.count(); },
 
-      /* Prove facts were not altered out-of-band. */
+      /* Prove the immutable core was not altered out-of-band. */
       verify: function (rec) {
         if (!rec || !rec.provenance) return false;
-        return rec.provenance.factsHash === hash(JSON.stringify(factBlock(rec)));
+        return rec.provenance.factsHash === hash(JSON.stringify(coreFromRecord(rec)));
       },
 
-      /* Append a lifecycle/business event — non-destructive (§0.4). Unknown event
-         types are rejected so the vocabulary never drifts silently (R-B). */
+      /* Timeline projection: every fact in this collection referencing an entity.
+         One implementation, any entity type — no per-object VIN lookups. */
+      forEntity: function (entityType, entityId) {
+        return repo.list(function (r) {
+          return (r.subject || []).some(function (e) { return e.type === entityType && e.id === entityId; });
+        }).sort(byId);
+      },
+      forVehicle: function (vin) { return api.forEntity("vehicle", vin); },
+
+      /* Append Knowledge (interpretation) — non-destructive; never edits facts. */
+      appendInterpretation: function (id, entry) { return repo.appendVersion(id, entry || {}, "interpretations"); },
+
+      /* Append a recommendation lifecycle event — non-destructive; unknown types
+         rejected so the vocabulary never drifts. */
       appendEvent: function (id, event) {
         event = event || {};
         if (!event.type || !LIFECYCLE_EVENTS[event.type])
-          throw new Error(type + ".appendEvent: unknown event type '" + event.type + "' (register it first)");
+          throw new Error(type + ".appendEvent: unknown event type '" + event.type + "'");
         if (!event.at) event.at = (clock().toISOString ? clock().toISOString() : new Date().toISOString());
         return repo.appendVersion(id, event, "events");
       },
 
-      /* Append an interpretation version — non-destructive; earlier versions
-         are never destroyed. */
-      appendInterpretation: function (id, entry) { return repo.appendVersion(id, entry || {}, "interpretations"); },
-
-      /* Follow the supersedes chain oldest→newest for a record. */
+      /* Follow the supersedes chain oldest→newest. */
       history: function (id) {
         var chain = [], seen = {}, cur = repo.getById(id);
         while (cur && !seen[cur.id]) { chain.unshift(cur); seen[cur.id] = true; cur = cur.supersedes ? repo.getById(cur.supersedes) : null; }
         return chain;
       },
 
-      /* AI-legibility (spec §"Future AI Compatibility"): answer the standard
-         questions from standard fields alone — no engine-specific knowledge. */
+      /* AI-legibility (Rule 13) + explainability (Rule 12): answers are business
+         questions, produced by the type's descriptor — describe() itself reads no
+         implementation-specific field. */
       describe: function (rec) {
         if (!rec) return null;
-        var terminal = null;
-        (rec.events || []).forEach(function (e) { if (TERMINAL_EVENTS[e.type]) terminal = e; });
+        function ask(fn) { try { return fn ? fn(rec) : null; } catch (e) { return null; } }
         return {
           whatAmI: rec.objectType,
-          whyDoIExist: (rec.recommendation && rec.recommendation.summary) || null,
+          category: rec.category,
+          whyDoIExist: ask(descriptor.purpose),
           whoCreatedMe: rec.provenance && rec.provenance.createdBy,
           when: rec.createdAt,
-          immutableFactKeys: rec._factKeys || [],
-          interpretationsOverTime: (rec.interpretations || []).length,
-          eventsOverTime: (rec.events || []).length,
-          relatedObjects: {
-            supersedes: rec.supersedes || null,
-            basedOn: rec.basedOn || [],
-            contextRefs: rec.contextRefs || [],
-            relationships: rec.relationships || null
-          },
-          whatDecisionWasMade: rec.recommendation ? { kind: rec.recommendation.kind, summary: rec.recommendation.summary } : null,
-          whatUltimatelyHappened: terminal ? { type: terminal.type, at: terminal.at } : null
+          entities: rec.subject || [],
+          evidence: rec.evidence || [],
+          immutableFacts: Object.keys(rec.facts || {}),
+          understandingOverTime: (rec.interpretations || []).length,
+          businessEvents: (rec.events || []).length,
+          supersedes: rec.supersedes || null,
+          whatDecisionWasMade: ask(descriptor.decision),
+          whatBecameTrue: ask(descriptor.truth),
+          whatUltimatelyHappened: ask(descriptor.outcome),
+          howTrustworthy: ask(descriptor.confidence)
         };
+      },
+
+      _terminalEvent: function (rec) {
+        var t = null; (rec.events || []).forEach(function (e) { if (TERMINAL_EVENTS[e.type]) t = e; });
+        return t ? { type: t.type, at: t.at, actor: t.actor || null } : null;
       }
     };
+    return api;
   }
 
-  /* ===================== PredictionSnapshotService (Layer 2, refactored) =====
-     Captures what the valuation/retirement engines produced at decision-commit
-     time (Q1). Same record shape as before + the uniform interpretations/events
-     logs every platform object now inherits (Decision 2). */
-  function PredictionSnapshotService(repositories, opts) {
-    var base = foundation(repositories, "predictionSnapshots",
-      Object.assign({ type: "PredictionSnapshot", idPrefix: "psnap" }, opts || {}));
+  function entityRefs(input) {
+    if (Array.isArray(input.subject)) return input.subject;
+    if (input.vin) return [{ type: "vehicle", id: input.vin }];
+    return [];
+  }
+
+  /* ============ Prediction Snapshots — "What did we believe would happen?" ====
+     A Business Fact captured at decision-commit time. Pure copy of engine output
+     (capture, never compute). */
+  function PredictionSnapshots(repositories, opts) {
+    var base = foundation(repositories, "predictionSnapshots", Object.assign({
+      type: "Prediction Snapshot", idPrefix: "psnap",
+      descriptor: {
+        purpose: function () { return "Records what the engines believed would happen for this vehicle at the moment a decision was committed."; },
+        confidence: function (r) { return r.facts.prediction ? r.facts.prediction.overallConfidence : null; }
+      }
+    }, opts || {}));
     return Object.assign({}, base, {
-      commit: function (decision) {
-        if (!decision || !decision.prediction)
-          throw new Error("PredictionSnapshotService.commit: decision.prediction required");
+      capture: function (prediction) {
+        if (!prediction || !prediction.prediction)
+          throw new Error("PredictionSnapshots.capture: prediction.prediction required");
         var facts = {
-          subject: decision.subject || {},              // VIN lives here as a relationship
-          decisionContext: decision.decisionContext || {},
-          contextRefs: decision.contextRefs || [],      // future external Context records
-          prediction: decision.prediction               // pure copy of engine output (R5)
+          vehicle: prediction.vehicle || {},                                  // descriptive (model/year/trim)
+          context: prediction.context || prediction.decisionContext || {},    // decision environment
+          contextRefs: prediction.contextRefs || [],                          // future Context records
+          prediction: prediction.prediction                                   // engine output, verbatim
         };
-        return base.create(facts, {
-          createdBy: decision.committedBy || "PredictionSnapshotService",
-          sources: decision.sources, supersedes: decision.supersedes
-        });
-      },
-      forVin: function (vin) {
-        return base.list(function (r) { return r.subject && r.subject.vin === vin; })
-          .sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
+        return base.create(
+          { subject: entityRefs(prediction), evidence: prediction.evidence || [], facts: facts },
+          { createdBy: prediction.committedBy || "Prediction Snapshot", sources: prediction.sources, supersedes: prediction.supersedes });
       }
     });
   }
 
-  /* ===================== DecisionRecordService (Layer 3, platform object) =====
-     A Decision Record is a platform object every engine emits with the same
-     immutable structure. The recommendation never changes; history (events,
-     interpretations) grows around it. */
-  function DecisionRecordService(repositories, opts) {
-    var base = foundation(repositories, "decisions",
-      Object.assign({ type: "DecisionRecord", idPrefix: "dec" }, opts || {}));
+  /* ============ Decision Records — "What decision did we make?" ===============
+     Platform Business Fact any engine emits with one immutable structure. The
+     recommendation never changes; lifecycle events and Knowledge grow around it. */
+  function DecisionRecords(repositories, opts) {
+    var base = foundation(repositories, "decisions", Object.assign({
+      type: "Decision Record", idPrefix: "dec",
+      descriptor: {
+        purpose: function (r) { return r.facts.recommendation ? r.facts.recommendation.summary : null; },
+        decision: function (r) { return r.facts.recommendation ? { kind: r.facts.recommendation.kind, summary: r.facts.recommendation.summary } : null; },
+        outcome: function (r) { return base._terminalEvent(r); },
+        confidence: function (r) { return r.facts.rationale ? r.facts.rationale.confidence : null; }
+      }
+    }, opts || {}));
     return Object.assign({}, base, {
-      /* Record a recommendation. `decision`:
-           { origin:{engine,engineVersion}, recommendation:{kind,summary,payload},
-             rationale:{why,assumptions,confidence}, context, contextRefs, basedOn,
-             relationships, sources, committedBy, supersedes } */
       record: function (decision) {
         decision = decision || {};
         var rec = decision.recommendation || {};
-        if (!rec.kind) throw new Error("DecisionRecordService.record: recommendation.kind required");
-        if (!DECISION_KINDS[rec.kind]) throw new Error("DecisionRecordService.record: unregistered kind '" + rec.kind + "'");
+        if (!rec.kind) throw new Error("DecisionRecords.record: recommendation.kind required");
+        if (!DECISION_KINDS[rec.kind]) throw new Error("DecisionRecords.record: unregistered kind '" + rec.kind + "'");
         var facts = {
-          origin: decision.origin || {},                                  // which engine produced it
-          recommendation: { kind: rec.kind, summary: rec.summary || "", payload: rec.payload || {} }, // typed envelope
+          origin: decision.origin || {},
+          recommendation: { kind: rec.kind, summary: rec.summary || "", payload: rec.payload || {} },
           rationale: decision.rationale || { why: "", assumptions: [], confidence: null },
-          context: decision.context || {},                                // embedded for now
-          contextRefs: decision.contextRefs || [],                        // future external Context records
-          basedOn: decision.basedOn || [],                                // e.g. prediction snapshot ids
-          relationships: decision.relationships ||
-            { parentId: null, dependsOn: [], alternativesTo: [], bundleId: null }
+          context: decision.context || {},
+          contextRefs: decision.contextRefs || [],
+          relationships: decision.relationships || { parentId: null, dependsOn: [], alternativesTo: [], bundleId: null }
         };
-        var saved = base.create(facts, {
-          createdBy: decision.committedBy || (facts.origin.engine || "DecisionRecordService"),
-          sources: decision.sources, supersedes: decision.supersedes
-        });
-        return saved;
-      },
-      forVin: function (vin) {
-        return base.list(function (r) {
-          return (r.context && r.context.vin === vin) ||
-                 (r.recommendation && r.recommendation.payload && r.recommendation.payload.vin === vin);
-        }).sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
+        return base.create(
+          { subject: entityRefs(decision), evidence: decision.evidence || decision.basedOn || [], facts: facts },
+          { createdBy: decision.committedBy || (facts.origin.engine || "Decision Record"), sources: decision.sources, supersedes: decision.supersedes });
       },
       forEngine: function (engine) {
-        return base.list(function (r) { return r.origin && r.origin.engine === engine; })
-          .sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
+        return base.list(function (r) { return r.facts.origin && r.facts.origin.engine === engine; }).sort(byId);
       }
     });
   }
 
   window.PMRecords = {
     foundation: foundation,
-    PredictionSnapshotService: PredictionSnapshotService,
-    DecisionRecordService: DecisionRecordService,
+    PredictionSnapshots: PredictionSnapshots,
+    DecisionRecords: DecisionRecords,
     DEFAULT_VERSIONS: DEFAULT_VERSIONS,
     LIFECYCLE_EVENTS: LIFECYCLE_EVENTS,
     DECISION_KINDS: DECISION_KINDS,

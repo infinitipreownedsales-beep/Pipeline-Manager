@@ -118,6 +118,10 @@
         var recs = load(), i = findIndex(recs, id);
         if (i < 0) throw new Error(collection + ".appendVersion: no record '" + id + "'");
         var rec = recs[i];
+        // Structural immutability: only append-log arrays may grow. Refuse to
+        // overwrite any existing non-array field (facts, subject, provenance, …).
+        if (key in rec && !Array.isArray(rec[key]))
+          throw new Error(collection + ".appendVersion: '" + key + "' is immutable, not an append log");
         if (!Array.isArray(rec[key])) rec[key] = [];
         var v = clone(entry) || {};
         v.version = rec[key].length + 1;
