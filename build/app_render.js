@@ -162,15 +162,29 @@ function supplyFeasibilityBlock(res, model){
   return H.join("");
 }
 
-/* ---- CTP: incremental re-spec of editable future production (self-balancing) ---- */
+/* ---- CTP: Proposed Supply Adjustments — an interactive, session-only what-if that
+   re-specs editable future production to fill the largest remaining shortage. NOT an
+   order. Cleared on a fresh inventory import. The Apply buttons just grow the overlay
+   and recompute, reusing the exact same engine logic as the recommendations. ---- */
 function ctpBlock(res){
-  let ctp=res.ctpRecommendations; if(!ctp||!ctp.changes||!ctp.changes.length) return "";
-  let H=["<div class='bseqwrap'><div class='bseqhd'>CTP — change the production <span class='bseqsub'>re-spec editable future units, largest overall improvement first · need "+ctp.total_need_before+" → "+ctp.total_need_after+" ("+ctp.changes.length+" of "+ctp.editable_units+" editable units)</span></div>"];
-  ctp.changes.forEach((c,i)=>{
-    H.push("<div style='padding:3px 0'><span class='dim'>"+(i+1)+".</span> <span class='demoei'>"+esc(c.unit)+"</span> <b>"+
-      esc(c.from.trim)+" "+esc(c.from.ext)+"/"+esc(c.from.int)+"</b> <span style='color:var(--teal)'>→ "+
-      esc(c.to.trim)+" "+esc(c.to.ext)+"/"+esc(c.to.int)+"</span> <span class='dim'>(+"+c.improvement+" position)</span></div>");
-  });
+  let ctp=res.ctpRecommendations, applied=(res.settings&&res.settings.ctp_changes)||[];
+  if(typeof window!=="undefined") window.__ctpRec=(ctp&&ctp.changes)||[];
+  if((!ctp||!ctp.changes||!ctp.changes.length) && !applied.length) return "";
+  let H=["<div class='bseqwrap'><div class='bseqhd'>Proposed Supply Adjustments · CTP <span class='bseqsub'>a temporary what-if that re-specs editable future production — session only, cleared on a fresh inventory import. Not an order.</span></div>"];
+  if(applied.length){
+    H.push("<div style='padding:4px 0'><b style='color:var(--orange)'>"+applied.length+" proposed adjustment"+(applied.length>1?"s":"")+" applied</b> "+
+      "<button class='btn2' style='margin-left:8px' onclick='ctpClearOverlay()'>↩ Clear proposed</button></div>");
+  }
+  if(ctp&&ctp.changes&&ctp.changes.length){
+    H.push("<div class='dim' style='padding:2px 0'>Remaining shortage "+ctp.total_need_before+" → "+ctp.total_need_after+" if all applied · "+ctp.changes.length+" of "+ctp.editable_units+" editable units:</div>");
+    ctp.changes.forEach(function(c){ let p=String(c.to.key).split("|");
+      H.push("<div style='padding:3px 0'><button class='btn2' onclick=\"ctpApplyChange('"+esc(c.unit)+"','"+esc(p[1])+"','"+esc(p[2])+"','"+esc(p[3])+"')\">Apply</button> "+
+        "<span class='demoei' style='margin-left:6px'>"+esc(c.unit)+"</span> <b>"+esc(c.from.trim)+" "+esc(c.from.ext)+"/"+esc(c.from.int)+"</b> "+
+        "<span style='color:var(--teal)'>→ "+esc(c.to.trim)+" "+esc(c.to.ext)+"/"+esc(c.to.int)+"</span> <span class='dim'>(+"+c.improvement+" position)</span></div>"); });
+    H.push("<div style='padding:5px 0'><button class='btn2' onclick='ctpApplyAll()'>Apply all "+ctp.changes.length+"</button></div>");
+  } else if(applied.length){
+    H.push("<div class='dim' style='padding:2px 0'>No further improving adjustment — the editable production is positioned as well as it can be.</div>");
+  }
   H.push("</div>");
   return H.join("");
 }

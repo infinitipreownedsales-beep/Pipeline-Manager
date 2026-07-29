@@ -45,7 +45,16 @@ function getSettings(){
     color_map:readColorMap(),
     service_need:((document.getElementById("serviceNeed")||{}).value||"").trim()===""?null:numVal("serviceNeed",0), new_retail_gross:numVal("lnewgross",1500),
     loaner_units:readFleet(), preowned_sales:readPreowned(),
+    ctp_changes:readCtpOverlay(), ctp_lock_lead_months:2.0,
     loaner_ledger:ledgerArray(), sold_units:readSold() }; }
+/* ---- CTP proposed-supply overlay: session only, cleared on fresh import. The
+   interactive layer just grows s.ctp_changes and recomputes — it reuses the exact
+   same engine logic as the recommendations, no duplicate calculation. ---- */
+function readCtpOverlay(){ try{ return JSON.parse(localStorage.getItem("pm_ctp_overlay")||"[]")||[]; }catch(e){ return []; } }
+function saveCtpOverlay(l){ try{ localStorage.setItem("pm_ctp_overlay",JSON.stringify(l)); }catch(e){} }
+function ctpApplyChange(stock,code,ext,intr){ let ov=readCtpOverlay(); ov.push({stock:stock,code:code,ext:ext,int:intr}); saveCtpOverlay(ov); liveRecompute(); }
+function ctpApplyAll(){ let ov=readCtpOverlay(); (window.__ctpRec||[]).forEach(function(c){ let p=String(c.to.key).split("|"); ov.push({stock:c.unit,code:p[1],ext:p[2],int:p[3]}); }); saveCtpOverlay(ov); liveRecompute(); }
+function ctpClearOverlay(){ saveCtpOverlay([]); liveRecompute(); }
 function numVal(id,def){ let el=document.getElementById(id); if(!el) return def; let v=parseFloat(el.value); return isNaN(v)?def:v; }
 const LOANCFG_IDS=["lfleet","licv80","licv60","licv65","reb80","reb60","reb65","ldepr","lwdmethod","lwdflat","lbase","lmin","lmax","lsvc","lcap","lbonus","lmpm","lrecon","lret","ldecay","lhold","lnewgross"];
 function persistLoanCfg(){ try{ let o={}; LOANCFG_IDS.forEach(id=>o[id]=document.getElementById(id).value); localStorage.setItem("pm_loancfg",JSON.stringify(o)); }catch(e){} }
@@ -460,6 +469,10 @@ function compute(scroll){
   let st=document.getElementById("status"); st.className="foot";
   let invText=document.getElementById("inv").value, salesText=document.getElementById("sales").value;
   if(!invText.trim()||!salesText.trim()){ st.className="foot err"; st.textContent="Paste both exports first (or click Load sample data)."; return; }
+  // A fresh inventory import is the new reality — the temporary CTP overlay
+  // disappears. (A live recompute re-uses the same inventory, so the overlay
+  // survives while the user iterates on proposed supply adjustments.)
+  try{ if(invText.trim()!==(localStorage.getItem("pm_inv")||"").trim()) saveCtpOverlay([]); }catch(e){}
   try{
     let inv=loadInventory(invText), sales=loadSales(salesText), s=getSettings();
     let td=document.getElementById("today").value, today=td?new Date(td+"T00:00:00"):new Date();
