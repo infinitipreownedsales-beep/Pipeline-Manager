@@ -59,7 +59,7 @@ function parseRows(rows){
     let isLoaner=x.loanerStock||(x.vin&&loanerVins.has(x.vin));
     out.push({date:x.date,year:x.y,month:x.mo,quarter:Math.floor((x.mo-1)/3)+1,
       stock:x.stock,vin:x.vin,model_year:x.my,make:x.make,model:x.model,
-      trim:norm(x.r["Trim"]),ext:canonColor(x.r["Exterior Color"]),
+      trim:norm(x.r["Trim"]),ext:canonColor(x.r["Exterior Color"]),int:norm(x.r["Interior Color"]),
       cost:money(x.r["Vehicle Cost"]),price:money(x.r["Vehicle Price"]),
       gross:money(x.r["Gross Profit"]),dts:toInt(x.r["Days to Sell"]),
       age_months:x.age,is_infiniti:x.make.startsWith("INFINITI"),is_loaner:!!isLoaner,weight:1});
@@ -285,7 +285,7 @@ function analyze(sales,halfLife,asOf){
         if(colorGrp && colorGroup(s.ext)!==colorGrp) return false;
         return true; })
         .map(function(s){ return {date:s.date, price:Math.round(s.price), gross:(s.gross!=null?Math.round(s.gross):null),
-          dts:s.dts, ext:s.ext, color:colorGroup(s.ext), age:s.age_months, year:s.model_year, trim:s.trim,
+          dts:s.dts, ext:s.ext, color:colorGroup(s.ext), int:s.int, age:s.age_months, year:s.model_year, trim:s.trim,
           weight:Math.round(s.weight*100)/100}; })
         .sort(function(a,b){ return b.date-a.date; });
     },
@@ -301,7 +301,7 @@ function analyze(sales,halfLife,asOf){
         if(s.age_months>maxAge) return false;
         return true; })
         .map(function(s){ return {date:s.date, price:Math.round(s.price), gross:(s.gross!=null?Math.round(s.gross):null),
-          dts:s.dts, ext:s.ext, color:colorGroup(s.ext), age:s.age_months, year:s.model_year, trim:s.trim,
+          dts:s.dts, ext:s.ext, color:colorGroup(s.ext), int:s.int, age:s.age_months, year:s.model_year, trim:s.trim,
           weight:Math.round(s.weight*100)/100}; })
         .sort(function(a,b){ return b.date-a.date; });
     },

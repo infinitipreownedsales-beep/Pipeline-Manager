@@ -626,7 +626,7 @@ function parseRows(rows){
     let isLoaner=x.loanerStock||(x.vin&&loanerVins.has(x.vin));
     out.push({date:x.date,year:x.y,month:x.mo,quarter:Math.floor((x.mo-1)/3)+1,
       stock:x.stock,vin:x.vin,model_year:x.my,make:x.make,model:x.model,
-      trim:norm(x.r["Trim"]),ext:canonColor(x.r["Exterior Color"]),
+      trim:norm(x.r["Trim"]),ext:canonColor(x.r["Exterior Color"]),int:norm(x.r["Interior Color"]),
       cost:money(x.r["Vehicle Cost"]),price:money(x.r["Vehicle Price"]),
       gross:money(x.r["Gross Profit"]),dts:toInt(x.r["Days to Sell"]),
       age_months:x.age,is_infiniti:x.make.startsWith("INFINITI"),is_loaner:!!isLoaner,weight:1});
@@ -852,7 +852,7 @@ function analyze(sales,halfLife,asOf){
         if(colorGrp && colorGroup(s.ext)!==colorGrp) return false;
         return true; })
         .map(function(s){ return {date:s.date, price:Math.round(s.price), gross:(s.gross!=null?Math.round(s.gross):null),
-          dts:s.dts, ext:s.ext, color:colorGroup(s.ext), age:s.age_months, year:s.model_year, trim:s.trim,
+          dts:s.dts, ext:s.ext, color:colorGroup(s.ext), int:s.int, age:s.age_months, year:s.model_year, trim:s.trim,
           weight:Math.round(s.weight*100)/100}; })
         .sort(function(a,b){ return b.date-a.date; });
     },
@@ -868,7 +868,7 @@ function analyze(sales,halfLife,asOf){
         if(s.age_months>maxAge) return false;
         return true; })
         .map(function(s){ return {date:s.date, price:Math.round(s.price), gross:(s.gross!=null?Math.round(s.gross):null),
-          dts:s.dts, ext:s.ext, color:colorGroup(s.ext), age:s.age_months, year:s.model_year, trim:s.trim,
+          dts:s.dts, ext:s.ext, color:colorGroup(s.ext), int:s.int, age:s.age_months, year:s.model_year, trim:s.trim,
           weight:Math.round(s.weight*100)/100}; })
         .sort(function(a,b){ return b.date-a.date; });
     },
@@ -1564,6 +1564,43 @@ function _interpRet(points, age){
     return a0.retention_smooth+(a1.retention_smooth-a0.retention_smooth)*f; } }
   return pts[pts.length-1].retention_smooth;
 }
+// ---- Attribute-premium framework (Step 5) — the single, extensible mechanism
+// _retailAt uses to EXPLAIN projected resale:
+//   Projected Resale = Base Value + Exterior Premium + Interior Premium
+//                      + Future Attribute Premiums
+// Each attribute is computed independently, capped, sample-counted and confidence-
+// scored — nothing is a hidden blended adjustment. Add a new factor (package, wheel
+// package, drivetrain, ...) with ONE entry in _ATTR_PREMIUMS; it plugs into _retailAt
+// with no further refactor. _retailAt stays the ONLY valuation engine — this is a
+// decomposition of it, not a second path.
+function _canonInt(v){ return (v==null||String(v).trim()==="")?null:String(v).trim().toUpperCase(); }
+var _ATTR_PREMIUMS=[
+  // Exterior: inventory ext CODE -> group via the user color_map; comps already carry
+  // the history ext NAME mapped to the same group (c.color). Unchanged behavior.
+  {name:"exterior", target:function(ui,s){ return (s.color_map||{})[String(ui.ext||"").toUpperCase()]||null; }, compVal:function(c){ return c.color; }},
+  // Interior: FULLY WIRED but data-limited today — history Interior Color is blank for
+  // INFINITI QX, and inventory stores an interior CODE while history stores a NAME, so
+  // values won't match -> $0 (byte-identical). A DATA gap, not an engine gap.
+  // >>> EXTENSION POINT <<< when a reliable interior code->canonical-group map exists,
+  // replace the target below with that lookup (mirroring color_map) — nothing else.
+  {name:"interior", target:function(ui,s){ return _canonInt(ui.int); }, compVal:function(c){ return _canonInt(c.int); }},
+];
+// One attribute's premium: capped median price delta of comps matching the unit's
+// value vs the rest, with sample count + confidence. The exact math the exterior
+// premium always used, now reusable. Sparse/absent -> {premium:0} (unchanged).
+function _attrPremium(comps, base, dts, compVal, target, cap){
+  if(target==null||target==="") return {premium:0, n:0, confidence:0, dtsDelta:null};
+  let same=comps.filter(function(c){ return compVal(c)===target; });
+  if(same.length<2 || (comps.length-same.length)<1) return {premium:0, n:same.length, confidence:0, dtsDelta:null};
+  let sameMed=_wmedComps(same,"price"), sameDts=_wmedComps(same,"dts");
+  if(sameMed==null||base==null) return {premium:0, n:same.length, confidence:0, dtsDelta:null};
+  let prem=Math.round(Math.max(-cap,Math.min(cap,sameMed-base)));
+  let dd=(sameDts!=null&&dts!=null)?Math.round(sameDts-dts):null;
+  // confidence 0..1 by sample size (same curve as loaner_engine's confidence();
+  // computed inline so it's independent of module scope).
+  let conf=Math.round(Math.min(1,Math.log(same.length+1)/Math.log(31))*1000)/1000;
+  return {premium:prem, n:same.length, confidence:conf, dtsDelta:dd};
+}
 function _retailAt(res, ui, months){
   let s=res.settings, curMonth=res.tb.today.getMonth()+1, saleMonthIdx=((curMonth-1+months)%12)+1;
   let D=(typeof window!=="undefined")?window.DEPR:null;
@@ -1583,7 +1620,7 @@ function _retailAt(res, ui, months){
     // normalize each sale to near-new-equivalent so they're all comparable
     let comps=raw.map(c=>{ let r=_interpRet(curve, c.age), adj=c.price;
       if(rRef!=null&&r!=null&&r>0) adj=Math.round(c.price*(rRef/r));
-      return {price:adj, raw:c.price, dts:c.dts, age:c.age, color:c.color, ext:c.ext, year:c.year, trim:c.trim, date:c.date, weight:c.weight}; });
+      return {price:adj, raw:c.price, dts:c.dts, age:c.age, color:c.color, ext:c.ext, int:c.int, year:c.year, trim:c.trim, date:c.date, weight:c.weight}; });
     if(comps.length){
       let base=_wmedComps(comps,"price"), dts=_wmedComps(comps,"dts");
       // walk the near-new baseline down to the age at sale
@@ -1591,17 +1628,28 @@ function _retailAt(res, ui, months){
       let rSale=_interpRet(curve, ageAtSale);
       let ageFactor=(rSale!=null&&rRef!=null&&rRef>0)?(rSale/rRef):1;
       ageFactor=Math.max(0.80, Math.min(1.02, ageFactor));  // guard thin data
-      // color premium — only meaningful when the history has more than one color
-      let grp=(s.color_map||{})[String(ui.ext||"").toUpperCase()]||null, cprem=0, cn=0, cdd=null;
-      if(grp){ let same=comps.filter(c=>c.color===grp), other=comps.filter(c=>c.color!==grp);
-        if(same.length>=2&&other.length>=1){ let sameMed=_wmedComps(same,"price"), sameDts=_wmedComps(same,"dts");
-          if(sameMed!=null&&base!=null){ let cap=0.15*base; cprem=Math.round(Math.max(-cap,Math.min(cap,sameMed-base))); cn=same.length;
-            if(sameDts!=null&&dts!=null) cdd=Math.round(sameDts-dts); } } }
+      // Attribute premiums (exterior + interior + future) — each independently
+      // computed and explainable; base + Σ premiums = projected resale.
+      let cap=0.15*(base||0), attrs=[];
+      _ATTR_PREMIUMS.forEach(function(a){ let tv=a.target(ui,s);
+        let r=_attrPremium(comps, base, dts, a.compVal, tv, cap);
+        attrs.push({attr:a.name, value:tv, premium:r.premium, n:r.n, confidence:r.confidence, dtsDelta:r.dtsDelta}); });
+      // Additive under ONE combined guard so ext+int(+future) can't over-swing. If
+      // clipped, scale proportionally so the breakdown still sums to the applied
+      // total (base + Σ premiums = final is always exact — never a hidden blend).
+      let rawSum=attrs.reduce(function(t,a){ return t+a.premium; },0);
+      let premSum=Math.max(-cap,Math.min(cap,rawSum));
+      if(rawSum!==0 && premSum!==rawSum){ let scl=premSum/rawSum;
+        attrs.forEach(function(a){ a.premium=Math.round(a.premium*scl); });
+        premSum=attrs.reduce(function(t,a){ return t+a.premium; },0); }
+      let extA=attrs[0]||{}, intA=attrs[1]||{};
       let aged=Math.round(base*ageFactor);
       let lo=_wpctComps(comps,"price",0.25), hi=_wpctComps(comps,"price",0.75);
-      return {price:aged+cprem, base:aged, n:comps.length, dts:(dts!=null?Math.round(dts):null),
-        low:(lo!=null?Math.round(lo*ageFactor)+cprem:null), high:(hi!=null?Math.round(hi*ageFactor)+cprem:null),
-        month:saleMonthIdx, color:grp, colorPrem:cprem, colorN:cn, colorDtsDelta:cdd,
+      return {price:aged+premSum, base:aged, n:comps.length, dts:(dts!=null?Math.round(dts):null),
+        low:(lo!=null?Math.round(lo*ageFactor)+premSum:null), high:(hi!=null?Math.round(hi*ageFactor)+premSum:null),
+        month:saleMonthIdx, premiums:attrs, premiumTotal:premSum,
+        color:extA.value||null, colorPrem:extA.premium||0, colorN:extA.n||0, colorDtsDelta:(extA.dtsDelta!=null?extA.dtsDelta:null),
+        intColor:intA.value||null, intPrem:intA.premium||0, intN:intA.n||0, intConfidence:(intA.confidence!=null?intA.confidence:0),
         ageFactor:Math.round(ageFactor*1000)/1000, ageAtSale:Math.round(ageAtSale*10)/10, refAge:_REF_AGE, src:"comps"}; }
   }
   let reb=modelRebate(s,ui.model,ui.year,curMonth);
@@ -1777,7 +1825,7 @@ function _retireTiming(res, unit, costFn, policy){
   let m0=unit.months||0, miles0=unit.miles||0;
   let mpm=parseFloat(s.loaner_miles_per_month)||1500, maxMo=parseFloat(s.loaner_max_months)||7;
   let rate=(miles0>0&&m0>0.4)?(miles0/m0):mpm;
-  let ui={model:unit.model, trim:info.trim||"", ext:unit.ext||"", year:unit.year||res.tb.today.getFullYear(), cost:info.cost, msrp:info.msrp||info.cost,
+  let ui={model:unit.model, trim:info.trim||"", ext:unit.ext||"", int:unit.int||"", year:unit.year||res.tb.today.getFullYear(), cost:info.cost, msrp:info.msrp||info.cost,
     icvMonth:(unit.entryMonth!=null?unit.entryMonth:null), icvYear:(unit.entryYear!=null?unit.entryYear:null)};
   // baseline = retail it TODAY at its current age; candidates = hold to each whole
   // month out to the ceiling. The lift is the value of waiting vs. retailing now.
@@ -1820,7 +1868,7 @@ function loanerFleet(res){ let s=res.settings, today=res.tb.today, rows=[], rele
     // Ask the engine for the PROFIT-OPTIMAL retire month for THIS unit (uses its
     // own mileage pace, and its entry-month ICV). Hard limits still force it out:
     // past 7 months or over the mile cap, it goes regardless of the profit curve.
-    let rt=_retireTiming(res, {model:model,code:code,ext:ext,miles:miles,months:months,year:uyear,entryMonth:entryMonth,entryYear:uyear}, costFn, policy);
+    let rt=_retireTiming(res, {model:model,code:code,ext:ext,int:(u?u.int:(e.int||"")),miles:miles,months:months,year:uyear,entryMonth:entryMonth,entryYear:uyear}, costFn, policy);
     let overCap=miles>=cap, over=months>=maxMo;
     let eligibleMin=months>=minMo, status, why, releaseAt=null, moTo;
     if(overCap||over){ status="🔴 RETIRE NOW"; why=overCap?"over "+cap.toLocaleString()+" mi":"past "+maxMo+"-mo window"; releasing++; moTo=0; releaseAt=today; }
