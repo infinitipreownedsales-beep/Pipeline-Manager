@@ -80,19 +80,22 @@ def render_text(res, rep) -> str:
             ["#", "BUILD?", "TRIM", "EXT", "INT", "DTS", "MOMENTUM", "NEED", "CUM"],
             rows, aligns=["<", "<", "<", "<", "<", ">", "<", ">", ">"]))
 
-    # 1b. Supply path — which acquisition path best fills each shortage
-    sp = rep.get("supply_paths", [])
-    if sp:
+    # 1b. Supply feasibility — which workflows can currently satisfy each shortage
+    sf = rep.get("supply_feasibility", [])
+    if sf:
+        cyc = sf[0].get("cycle_position", "")
         out.append("\n" + "#" * W)
-        out.append("1b) SUPPLY PATH — best acquisition path per shortage (fit to when needed, not speed)")
+        out.append(f"1b) SUPPLY FEASIBILITY — workflows that can satisfy each shortage now ({cyc} of cycle)")
         out.append("#" * W)
         rows = []
-        for r in sp:
-            alts = "   ".join(f"{p['path']}:{p['arrival_month']}(fit {p['fit']:.0f})" for p in r["paths"])
+        for r in sf:
+            feas = ", ".join(r["feasible"]) or "none in time"
+            infeas = "   ".join(f"{w['workflow']}: {w['reason']}"
+                                for w in r["workflows"] if not w["feasible"])
             rows.append([r["model"], r["trim"], r["ext"], r["int"], r["need"],
-                         r["demand_open_month"], r["recommended"], alts])
+                         r["demand_open_month"], feas, infeas])
         out.append(_table(
-            ["MODEL", "TRIM", "EXT", "INT", "NEED", "NEEDED", "BEST PATH", "PATHS (arrival · fit)"],
+            ["MODEL", "TRIM", "EXT", "INT", "NEED", "NEEDED", "FEASIBLE NOW", "NOT FEASIBLE (why)"],
             rows, aligns=["<", "<", "<", "<", ">", "<", "<", "<"]))
 
     # 2. Overstock / Wholesale

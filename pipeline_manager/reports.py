@@ -496,16 +496,26 @@ def data_health(res: EngineResult) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Supply-path scoring (Step 3b) — SUPPLY only, never demand
+# Supply feasibility (Step 3b) — SUPPLY only, never demand, never a ranking
 # --------------------------------------------------------------------------- #
-# Fit is scored against the demand-availability window (when the shortage opens),
-# NOT raw speed. Arriving early is penalised (aging), arriving late is penalised
-# (missed window), landing on time wins. Earliest arrival is only a tie-breaker.
-# These are the tuning knobs; kept identical in the JS mirror.
-_SUPPLY_EARLY_W = 12.0   # score penalty per month a path lands BEFORE the window (aging)
-_SUPPLY_LATE_W = 20.0    # score penalty per month a path lands AFTER the window (missed)
-_SUPPLY_EARLY_TOL = 1.0  # months early still counted "in window"
-_SUPPLY_LATE_TOL = 1.0   # months late still counted "in window"
+# Each acquisition workflow answers ONE operational question: "can I satisfy this
+# shortage — am I available at this point in the ordering cycle, and do I arrive
+# before or during the demand window?" Workflows are NOT scored or ranked against
+# one another; none is "better". The engine simply reports which are currently
+# feasible and, for the rest, why not. Reads timing only — no demand recompute,
+# no sell-rate, no profitability/loaner/depreciation.
+#
+# Which workflows are AVAILABLE depends on the calendar position in the cycle
+# (e.g. production-change windows close late in the month). Feasibility never
+# changes demand — only which operational actions remain possible. These defaults
+# are tunable (settings.workflow_availability) and mirrored in the JS engine.
+_DEFAULT_WORKFLOW_AVAIL = {
+    "Dealer Trade": ["beginning", "middle", "end"],   # immediate — always an option
+    "PPO": ["beginning", "middle", "end"],            # gated by whether a unit exists
+    "CTP": ["beginning", "middle"],                   # production changes close late
+    "Factory Order": ["beginning", "middle", "end"],  # feasibility is arrival-driven
+}
+_WINDOW_TOL = 1.0   # months around the open month still counted "lands in window"
 
 
 def _month_label(order_month: int, offset: float) -> str:
@@ -513,25 +523,15 @@ def _month_label(order_month: int, offset: float) -> str:
     return MONTH_NAMES[(order_month - 1 + int(round(offset))) % 12]
 
 
-def _score_path(path: str, arrival_offset: float, need_open: float,
-                source: str, order_month: int) -> dict:
-    """Score one acquisition path by how well its arrival fits the shortage
-    window. Reads timing only — no demand, sell-rate, or profitability input."""
-    gap = arrival_offset - need_open
-    if gap >= 0:
-        penalty = gap * _SUPPLY_LATE_W
-        note = "on time" if gap <= _SUPPLY_LATE_TOL else f"{gap:.1f}mo late — misses the window"
-    else:
-        penalty = (-gap) * _SUPPLY_EARLY_W
-        note = "on time" if -gap <= _SUPPLY_EARLY_TOL else f"{-gap:.1f}mo early — aging risk"
-    return {
-        "path": path, "source": source,
-        "arrival_offset": round(arrival_offset, 1),
-        "arrival_month": _month_label(order_month, arrival_offset),
-        "lands_in_window": (-_SUPPLY_EARLY_TOL <= gap <= _SUPPLY_LATE_TOL),
-        "fit": round(max(0.0, 100.0 - penalty), 1),
-        "note": note,
-    }
+def _cycle_position(today, s) -> str:
+    """Where we are in the ordering cycle — a primary OPERATIONAL input (it gates
+    which workflows are available, never demand). Override with
+    settings.supply_cycle_position, else derived from the day of the month."""
+    override = str(getattr(s, "supply_cycle_position", "auto") or "auto").strip().lower()
+    if override in ("beginning", "middle", "end"):
+        return override
+    d = today.day
+    return "beginning" if d <= 10 else ("middle" if d <= 20 else "end")
 
 
 def _ppo_index(res: EngineResult) -> dict:
@@ -557,38 +557,85 @@ def _ppo_index(res: EngineResult) -> dict:
     return idx
 
 
-def supply_paths(res: EngineResult) -> list:
-    """For each identified shortage (NEED>0), score the available acquisition
-    paths by how well their arrival fits the demand-availability window, and name
-    the best-fitting path. This layer READS the shortage the demand engine already
-    produced — it never recomputes need, target, seasonality, or sell-rate, and it
-    never consults loaner/depreciation/profitability. It answers only: "given this
-    shortage, which supply path best fills it?"."""
+def _workflow(name, arrival_offset, has_supply, need_open, grace, cyc, s, om,
+              source, no_supply_reason) -> dict:
+    """Operational feasibility of ONE workflow for ONE shortage. No score, no
+    ranking — just: available? arrives in time? therefore feasible?, and why not."""
+    avail_map = getattr(s, "workflow_availability", None) or _DEFAULT_WORKFLOW_AVAIL
+    allowed = avail_map.get(name, _DEFAULT_WORKFLOW_AVAIL.get(name, ["beginning", "middle", "end"]))
+    available = bool(has_supply and cyc in allowed)
+    open_label = _month_label(om, need_open)
+    if arrival_offset is None:
+        arrival_month, satisfies, lands = None, False, False
+    else:
+        arrival_month = _month_label(om, arrival_offset)
+        # "before or during the demand window": early is fine, only too-late fails.
+        satisfies = arrival_offset <= need_open + grace
+        lands = abs(arrival_offset - need_open) <= _WINDOW_TOL
+    feasible = bool(available and satisfies)
+    if not has_supply:
+        reason = no_supply_reason
+    elif cyc not in allowed:
+        reason = f"{name.lower()} window closed ({cyc} of the month)"
+    elif not satisfies:
+        reason = f"arrives {arrival_month} — after the {open_label} demand window"
+    elif arrival_offset == 0:
+        reason = "immediate — satisfies the shortage now"
+    else:
+        reason = f"arrives {arrival_month} — satisfies the {open_label} demand window"
+    return {"workflow": name, "available": available, "source": source,
+            "arrival_offset": (round(arrival_offset, 1) if arrival_offset is not None else None),
+            "arrival_month": arrival_month, "satisfies_window": satisfies,
+            "lands_in_window": lands, "feasible": feasible, "reason": reason}
+
+
+def supply_feasibility(res: EngineResult) -> list:
+    """For each identified shortage (NEED>0), report which acquisition workflows
+    are currently FEASIBLE — available at this point in the ordering cycle AND able
+    to arrive before/during the demand window — and, for the rest, why not. This is
+    an operational workflow layer: it READS the shortage the demand engine already
+    produced and never recomputes need/target/seasonality/sell-rate, never consults
+    loaner/depreciation/profitability, and never ranks one workflow above another.
+    New workflows (auction, transfer, off-lease, …) plug in the same way."""
     from .engine import compute_arrival_windows
     s = res.settings
     om = s.order_month
     pad = float(getattr(s, "order_lead_pad", 0.0) or 0.0)
-    # CPO lead = the LEARNED production->arrival lead (+ order->production pad),
-    # mode-independent (res.arrival_windows is already mode-resolved, so it can't be
-    # reused here). Reuses the existing window function — no new timing math.
-    cpo_lead = compute_arrival_windows(res.inventory, res.time.today, s)
+    grace = float(getattr(s, "supply_window_grace", 1.0) or 0.0)
+    cyc = _cycle_position(res.time.today, s)
+    dealer_ok = bool(getattr(s, "dealer_trade_available", True))
+    # Learned production->arrival lead — reuses the existing window function.
+    lead = compute_arrival_windows(res.inventory, res.time.today, s)
     ppo = _ppo_index(res)
     out = []
     for l in res.lines:
         if l.need <= 0 or l.suppressed:
             continue
         need_open = l.demand_open if l.demand_open is not None else 0.0
-        cands = [_score_path("CPO", cpo_lead.get(l.model, 0.0) + pad,
-                             need_open, "future factory order", om)]
-        # PPO — any pre-produced unit matching this config.
-        for pu in ppo.get(l.key, []):
-            cands.append(_score_path("PPO", pu["offset"], need_open, pu["source"], om))
-        # Best fit; earliest arrival breaks ties (priority 4 — tie-breaker only).
-        cands.sort(key=lambda c: (-c["fit"], c["arrival_offset"]))
+        base = lead.get(l.model, 0.0)
+        matches = sorted(ppo.get(l.key, []), key=lambda p: p["offset"])
+        ppo_off = matches[0]["offset"] if matches else None
+        ppo_src = matches[0]["source"] if matches else "pre-produced"
+        workflows = [
+            # Dealer Trade — immediate inventory change.
+            _workflow("Dealer Trade", 0.0, dealer_ok, need_open, grace, cyc, s, om,
+                      "immediate inventory change", "no dealer-trade relationship available"),
+            # PPO — soonest matching pre-produced unit (soonest, not "best").
+            _workflow("PPO", ppo_off, ppo_off is not None, need_open, grace, cyc, s, om,
+                      ppo_src, "no matching pre-produced unit"),
+            # CTP — change future production (window closes with the ordering cycle).
+            _workflow("CTP", base, True, need_open, grace, cyc, s, om,
+                      "change future production", ""),
+            # Factory Order (CPO) — learned production->arrival lead (+ order pad).
+            _workflow("Factory Order", base + pad, True, need_open, grace, cyc, s, om,
+                      "future factory order", ""),
+        ]
         out.append({
             "key": l.key, "model": l.model, "trim": l.trim, "ext": l.ext, "int": l.interior,
             "need": l.need, "demand_open_month": _month_label(om, need_open),
-            "recommended": cands[0]["path"], "paths": cands,
+            "cycle_position": cyc,
+            "feasible": [w["workflow"] for w in workflows if w["feasible"]],
+            "workflows": workflows,
         })
     return out
 
@@ -604,7 +651,7 @@ def build_all(res: EngineResult) -> dict:
         "loaner_board": loaner_board(res),
         "loaner_fleet": loaner_fleet(res),
         "build_sequence": build_sequence(res),
-        "supply_paths": supply_paths(res),
+        "supply_feasibility": supply_feasibility(res),
         "retail_forecast": retail_forecast(res),
         "pace_check": pace_check(res),
         "fleet_targets": fleet_targets(res),

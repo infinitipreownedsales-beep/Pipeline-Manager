@@ -141,20 +141,22 @@ function buildSeqBlock(res, model){
   return H.join("");
 }
 
-/* ---- supply-path recommendation per shortage (Step 3b) ---- */
-function supplyPathBlock(res, model){
-  let sp=(res.supplyPaths||[]).filter(r=>r.model===model);
-  if(!sp.length) return "";
-  let H=["<div class='bseqwrap'><div class='bseqhd'>Supply path <span class='bseqsub'>best acquisition path per shortage — fit to when it's needed, not speed</span></div>"];
-  sp.forEach(r=>{
-    let paths=r.paths.map(p=>{
-      let rec=p.path===r.recommended;
-      return "<span style='margin-right:12px"+(rec?";font-weight:600;color:var(--teal)":";color:var(--muted)")+"'>"+
-        esc(p.path)+" "+esc(p.arrival_month)+" <span class='dim'>fit "+Math.round(p.fit)+"</span>"+
-        (p.note!=="on time"?" <span class='dim'>· "+esc(p.note)+"</span>":"")+"</span>";
+/* ---- supply feasibility per shortage (Step 3b) — which workflows can satisfy it,
+   not a ranking. Feasible workflows in teal; infeasible dimmed with the reason. ---- */
+function supplyFeasibilityBlock(res, model){
+  let sf=(res.supplyFeasibility||[]).filter(r=>r.model===model);
+  if(!sf.length) return "";
+  let cyc=sf[0].cycle_position||"";
+  let H=["<div class='bseqwrap'><div class='bseqhd'>Supply feasibility <span class='bseqsub'>which workflows can satisfy each shortage now ("+esc(cyc)+" of cycle) — availability + arrival, not a ranking</span></div>"];
+  sf.forEach(r=>{
+    let wfs=r.workflows.map(w=>{
+      let ok=w.feasible;
+      return "<span style='margin-right:12px"+(ok?";font-weight:600;color:var(--teal)":";color:var(--muted)")+"' title='"+esc(w.reason)+"'>"+
+        (ok?"✓ ":"· ")+esc(w.workflow)+(w.arrival_month?(" "+esc(w.arrival_month)):"")+
+        (ok?"":" <span class='dim'>("+esc(w.reason)+")</span>")+"</span>";
     }).join("");
     H.push("<div style='padding:3px 0'><b>"+esc(r.trim)+"</b> <span class='demoei'>"+esc(r.ext)+"/"+esc(r.int)+
-      "</span> <span class='dim'>need "+r.need+" · needed "+esc(r.demand_open_month)+" →</span> "+paths+"</div>");
+      "</span> <span class='dim'>need "+r.need+" · needed "+esc(r.demand_open_month)+" →</span> "+wfs+"</div>");
   });
   H.push("</div>");
   return H.join("");
@@ -574,7 +576,7 @@ function render(res){
     H.push(tbl(["#","Build?","Trim","Ext","Int","DTS","Momentum","Grade","Lot","Inb","PROJ@ARR","Tgt","NEED","Cum"],
       ["num","","","","","num","","","num","num","num teal","num","num need","num"], rows));
     H.push(buildSeqBlock(res, model));
-    H.push(supplyPathBlock(res, model)); });
+    H.push(supplyFeasibilityBlock(res, model)); });
 
   // 2. SIX-MONTH ROLLING PLAN
   H.push(sec(2,"6-Month Rolling Order Plan","when to place each truck — orders by arrival month"));

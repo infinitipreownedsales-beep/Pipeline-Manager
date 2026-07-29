@@ -67,11 +67,25 @@ class Settings:
     # already built, obtainable from other production cycles. Each
     # {model, code/config, exterior_color, interior_color, eta, source/status}.
     # This is supply, not demand: it NEVER changes need/target/seasonality/sell
-    # rate. It is only scored (by how well its arrival fits an already-identified
-    # shortage window) as one way to fill that shortage. Kept an explicit input so
-    # the supply-path layer stays independent of how the unit was acquired (a
-    # future DMS feed can replace the source without touching the scoring).
+    # rate. It is only evaluated (does its arrival satisfy an already-identified
+    # shortage window?) as one operational way to fill that shortage. Kept an
+    # explicit input so the supply layer stays independent of how the unit was
+    # acquired (a future DMS feed can replace the source without touching it).
     ppo_units: list = field(default_factory=list)
+    # --- supply feasibility (operational workflow layer) ------------------- #
+    # Where we are in the ordering cycle. "auto" derives beginning/middle/end from
+    # the day of the month; override with "beginning"/"middle"/"end". This is an
+    # OPERATIONAL input — it gates which workflows are still available, never demand.
+    supply_cycle_position: str = "auto"
+    # Is a dealer-trade relationship available to source from (immediate arrival)?
+    dealer_trade_available: bool = True
+    # Which cycle positions each workflow is available in (empty -> built-in
+    # defaults). Operational availability only; never affects demand.
+    workflow_availability: dict = field(default_factory=dict)
+    # Months after a shortage opens that a workflow may still land and count as
+    # satisfying it ("before or during the demand window"). Early arrival always
+    # satisfies; only too-late fails.
+    supply_window_grace: float = 1.0
     # Demote keeps a slow combo visible but ranks it last and zeroes NEED
     # unless it proves through (R90 >= prove_bar). Blank field = wildcard.
     demote: list = field(default_factory=lambda: [{"model": "", "ext": "", "int": "N"}])

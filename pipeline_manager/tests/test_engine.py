@@ -274,25 +274,27 @@ def test_committed_pipeline_is_not_re_ordered():
     assert after.need == 0                 # ...so the whole batch is satisfied — no re-order
 
 
-def test_supply_paths_do_not_touch_demand():
-    """3b: PPO supply input never changes need / target / any demand number — the
-    shortage is identical with and without available PPO supply."""
+def test_supply_feasibility_does_not_touch_demand():
+    """3b: the supply layer (PPO input, cycle position, etc.) never changes need /
+    target / any demand number — the shortage is identical with and without it."""
     inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
     sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
     a = engine.run(inv, sales, Settings(order_month=9, mode="CPO"), today=_AS_OF)
     ppo = [{"model": "QX80", "code": "8361", "exterior_color": "XKJ",
             "interior_color": "G", "eta": "september", "source": "other-dealer"}]
-    b = engine.run(inv, sales, Settings(order_month=9, mode="CPO", ppo_units=ppo), today=_AS_OF)
+    b = engine.run(inv, sales, Settings(order_month=9, mode="CPO", ppo_units=ppo,
+                   supply_cycle_position="end"), today=_AS_OF)
     da = {l.key: (l.need, l.order_target, l.proj_at_arrival) for l in a.lines}
     db = {l.key: (l.need, l.order_target, l.proj_at_arrival) for l in b.lines}
     assert da == db
 
 
-def test_supply_path_fit_rewards_window_not_speed():
-    """3b: paths are scored by fit to the shortage window, NOT raw speed. A later
-    arrival that lands in the window outscores an earlier one, and an in-window PPO
-    beats a CPO that arrives after the shortage has already opened. Every shortage
-    gets a CPO candidate and a named recommendation."""
+def test_supply_feasibility_reports_workflows_not_a_ranking():
+    """3b (feasibility model): each workflow answers only 'can I satisfy this
+    shortage — available now, and arriving before/during the demand window?'.
+    Workflows are NOT scored or ranked; there is no fit and no 'winner'. Dealer
+    Trade is immediate; a late Factory Order is infeasible; CTP closes late in the
+    cycle; a PPO landing in the window is feasible."""
     inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
     sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
     key = "QX80|8361|XKJ|G"
@@ -302,29 +304,60 @@ def test_supply_path_fit_rewards_window_not_speed():
                       anticipate_demo_returns=False), today=_AS_OF)
     bl = next(l for l in base.lines if l.key == key)
     assert bl.need > 0 and bl.demand_open is not None
-    open_off = int(round(bl.demand_open))               # shortage opens this many months out
-    assert open_off >= 1
-    # CPO lands AFTER the window opens here — so it is the "late" path.
+    open_off = int(round(bl.demand_open))
+    # Here the Factory Order lands after the demand window (demand opens ~OCT, CPO
+    # arrives ~NOV) — so it should read INFEASIBLE.
     assert base.arrival_windows["QX80"] > open_off + 1
 
-    def ppo(off, src):
+    def ppo(off):
         month = ((om - 1 + off) % 12) + 1
         return {"model": model, "code": code, "exterior_color": ext,
-                "interior_color": interior, "eta": f"{month}/15/2026", "source": src}
+                "interior_color": interior, "eta": f"{month}/15/2026", "source": "dealer-A"}
 
-    # One PPO in the window (offset == open_off) and one arriving a month EARLIER.
+    # End of the cycle -> CTP window is closed; a PPO lands in the window.
     s = Settings(order_month=om, mode="CPO", anticipate_demo_returns=False,
-                 ppo_units=[ppo(open_off, "in-window"), ppo(open_off - 1, "earlier")])
+                 supply_cycle_position="end", ppo_units=[ppo(open_off)])
     res = engine.run(inv, sales, s, today=_AS_OF)
-    row = {r["key"]: r for r in reports.supply_paths(res)}[key]
-    assert any(p["path"] == "CPO" for p in row["paths"])          # CPO always a candidate
-    by_off = {p["arrival_offset"]: p for p in row["paths"] if p["path"] == "PPO"}
-    in_win, earlier = by_off[float(open_off)], by_off[float(open_off - 1)]
-    assert in_win["lands_in_window"]
-    assert in_win["fit"] > earlier["fit"]        # later-but-on-time beats earlier — not just speed
-    cpo = next(p for p in row["paths"] if p["path"] == "CPO")
-    assert in_win["fit"] > cpo["fit"]            # in-window PPO beats the late CPO
-    assert row["recommended"] == "PPO"           # fit-based recommendation, not a CPO default
+    row = {r["key"]: r for r in reports.supply_feasibility(res)}[key]
+    assert row["cycle_position"] == "end"
+    assert "recommended" not in row                           # no winner
+    wf = {w["workflow"]: w for w in row["workflows"]}
+    assert "fit" not in wf["Factory Order"]                   # no competitive score
+    # Dealer Trade — immediate, always feasible.
+    assert wf["Dealer Trade"]["feasible"] and wf["Dealer Trade"]["arrival_offset"] == 0.0
+    # PPO landing in the window -> feasible.
+    assert wf["PPO"]["feasible"] and wf["PPO"]["satisfies_window"]
+    # CTP window closed at end of month -> unavailable, infeasible, with a reason.
+    assert not wf["CTP"]["available"] and not wf["CTP"]["feasible"]
+    assert "closed" in wf["CTP"]["reason"]
+    # Factory Order arrives after the window -> infeasible, reason says so.
+    assert not wf["Factory Order"]["feasible"] and "after" in wf["Factory Order"]["reason"]
+    # The feasible list is the set of feasible workflows — no ranking.
+    assert "Dealer Trade" in row["feasible"] and "PPO" in row["feasible"]
+    assert "CTP" not in row["feasible"] and "Factory Order" not in row["feasible"]
+
+
+def test_supply_feasibility_early_arrival_is_feasible_no_aging_penalty():
+    """3b: 'before or during the window' is feasible — early arrival is NOT
+    penalised (the aging-penalty concept is gone; supply is feasibility, not fit)."""
+    inv = load_inventory(os.path.join(_PKG, "sample_data", "inventory.csv"))
+    sales = load_sales(os.path.join(_PKG, "sample_data", "sales.csv"))
+    key = "QX80|8361|XKJ|G"
+    model, code, ext, interior = key.split("|")
+    om = 9
+    base = engine.run(inv, sales, Settings(order_month=om, mode="CPO",
+                      anticipate_demo_returns=False), today=_AS_OF)
+    bl = next(l for l in base.lines if l.key == key)
+    open_off = int(round(bl.demand_open))
+    # A PPO arriving at the ORDER month (earliest possible, well before the window).
+    ppo = [{"model": model, "code": code, "exterior_color": ext, "interior_color": interior,
+            "eta": f"{om}/15/2026", "source": "early-unit"}]
+    res = engine.run(inv, sales, Settings(order_month=om, mode="CPO",
+                     anticipate_demo_returns=False, ppo_units=ppo), today=_AS_OF)
+    row = {r["key"]: r for r in reports.supply_feasibility(res)}[key]
+    wf = {w["workflow"]: w for w in row["workflows"]}
+    assert wf["PPO"]["arrival_offset"] < open_off      # arrives early
+    assert wf["PPO"]["feasible"]                        # still feasible — no aging penalty
 
 
 def test_executive_demo_board():
