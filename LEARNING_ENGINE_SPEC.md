@@ -1,7 +1,12 @@
-# Learning Engine — Step 6 Specification (FINAL, pre-implementation)
+# Learning Engine — Step 6 Specification
 
-Status: **Approved in principle.** Implementation gated on final go-ahead.
+Status: **Layer 1 (Repository) implemented, validated, pushed.** Layers 2–6 gated.
 Scope: JS-only (no Python mirror). Valuation/retirement output must remain byte-identical after Step 6.
+
+This is no longer a Pipeline Manager feature set — it is the foundation of a
+**reusable dealership operating platform**. Every decision from here optimizes for
+that outcome. The design rules in §0 are permanent and govern the whole project,
+not just the Learning Engine.
 
 The Learning Engine is a separate reusable business engine and the intended
 **institutional memory** of the dealership. It observes what the other engines
@@ -16,6 +21,64 @@ Governing rule:
 
 ---
 
+## 0. Platform-wide design rules (permanent)
+
+These are not Learning-Engine conventions. They govern every engine, object, and
+layer the platform ever grows.
+
+### 0.1 The Repository is the platform contract — never synonymous with a backend
+localStorage is *today's adapter*, nothing more. Every engine believes it is
+talking to **business records**, never to browser storage. The platform is
+expected to run against SQLite, PostgreSQL, SQL Server, cloud APIs, or a dealership
+DMS; swapping the backend must change **zero** engine logic. If an engine would
+have to change because the storage technology changed, the architecture is wrong.
+
+### 0.2 Engines are runtime-agnostic
+No engine may know whether it is running inside Pipeline Manager, inside another
+dealership application, inside a background worker, inside an API, or inside an
+automated test. **If any engine would need to change because the UI changed, the
+architecture is wrong.** Engines depend on repository and data contracts only —
+never on the DOM, the renderer, or a host application.
+
+### 0.3 Separation of concerns (four roles, no overlap)
+| Role | Responsibility | Must never |
+|---|---|---|
+| **Repositories** | persist: store / retrieve / append / query | make judgments |
+| **Engines** | think: predict, evaluate, interpret, learn | render or persist directly |
+| **Renderers** | display | compute business results |
+| **Workflow coordinators** | orchestrate the above | embed engine or persistence logic |
+
+A repository must **never** answer "which recommendation is best?", "what should
+retire first?", or "which prediction should be trusted?". Those are engine
+questions. Repositories answer only store / retrieve / append / query — nothing
+more. Keeping judgment out of persistence is what lets the backend move freely.
+
+### 0.4 Immutable objects are accounting entries, not database rows
+Every immutable object (Prediction Snapshot, Recommendation Record, Observation,
+Learning Signal, Calibration Recommendation, Interpretation) is a **permanent
+historical record**: never edited, never overwritten, never deleted. If something
+changes later, write a **new** record that references the prior one via a
+`supersedes` link. History must read like a ledger — an append-only chain of
+entries and corrections — so the Learning Engine can audit years of dealership
+history and reconstruct exactly what was known at each point in time.
+
+### 0.5 Permanent object identity, independent of VIN
+Every immutable object receives a **globally unique, permanent object ID** that is
+independent of the vehicle. A VIN identifies a *vehicle*; a Prediction Snapshot
+identifies a *business decision* — different identities. One VIN accumulates many
+snapshots, recommendations, observations, and signals over time; each gets its own
+immutable `objectId`. Vehicle identity (VIN) is stored as a *relationship on* the
+object, never *as* the object's identity.
+
+### 0.6 Provenance completeness (the auditor test)
+Every immutable fact must be able to answer: **who** created me, **when**, using
+**which engine versions**, **which configuration**, **which business rules**, and
+**which source data**. If an auditor cannot reconstruct *why* an object existed
+from the object itself, the object model is incomplete and must be extended before
+the object is allowed to persist.
+
+---
+
 ## 1. Standard object model (project-wide)
 
 Every persistent business object in the platform follows the same four-part shape.
@@ -23,10 +86,10 @@ This is now the standard, not a Learning-Engine-only convention.
 
 | Part | Mutability | Purpose |
 |---|---|---|
-| **Identity** | immutable | stable key (id, VIN, object type, created-at) |
-| **Immutable Facts** | frozen at creation | what was true/decided at the moment; never edited |
+| **Identity** | immutable | permanent `objectId` (independent of VIN), object type, created-at; VIN is a *relationship*, not the identity (§0.5) |
+| **Immutable Facts** | frozen at creation | what was true/decided at the moment; never edited (§0.4) |
 | **Mutable Interpretation** | append-only versions | conclusions drawn later; evolves; never overwritten |
-| **Metadata** | provenance | build/engine/config versions, generated-by, generated-on |
+| **Metadata / Provenance** | provenance | who/when/engine versions/config/business rules/source data — the auditor test (§0.6) |
 
 "Append-only versions" means a changed interpretation is written as a *new*
 interpretation record referencing the prior one — the old one survives.
@@ -206,8 +269,8 @@ and is never presented as historical fact.
 
 Do not move to the next layer until the previous passes architecture verification.
 
-1. **Repository abstraction** (interfaces + localStorage adapter + JSON export/import)
-2. **Immutable Prediction Snapshot** (Layer 0 context + Layer 1 snapshot, version-stamped)
+1. **Repository abstraction** (interfaces + localStorage adapter + JSON export/import) — ✅ DONE (`build/repository.js`, commit `4b257cf`)
+2. **Immutable Prediction Snapshot** (Layer 0 context + Layer 1 snapshot, version-stamped) — ◀ current (design in §8)
 3. **Recommendation Record** (Layer 1b, with lifecycle state history)
 4. **Observation Store** (Layer 2, append-only)
 5. **Error Engine** (Layer 3, typed registry + immature classifier)
@@ -223,3 +286,102 @@ Automatic calibration application; weighting/decay math (weights fixed at 1.0);
 Bayesian updates; rolling accuracy windows; dealer/regional adjustments; technician
 quality; auction performance; wholesale-vs-retail split; recommendation-adoption
 scoring; confidence decay; event bus. Data structures must not preclude any of these.
+
+---
+
+## 8. Layer 2 — Prediction Snapshot (concrete design)
+
+A Prediction Snapshot is a permanent accounting entry (§0.4) recording, verbatim,
+what the engines predicted at the moment a management decision was committed (Q1).
+It is written once through `repositories.predictionSnapshots` and never edited,
+overwritten, or deleted.
+
+### 8.1 Record shape (standard object model, §1)
+```
+{
+  // ── Identity (§0.5) ─────────────────────────────────────────────
+  id:        "psnap-<ULID>",     // permanent objectId, independent of VIN
+  objectType:"PredictionSnapshot",
+  createdAt: "2026-07-29T…Z",    // wall-clock capture time
+  supersedes:null,               // objectId of a prior snapshot this corrects (ledger chain, §0.4)
+
+  // ── Immutable Facts ─────────────────────────────────────────────
+  subject: { vin:"…", model:"QX60", modelYear:2026, trim:"…" },   // VIN is a relationship, not identity
+  decisionContext: { ageMonths, mileage, position:"on-lot|pipeline",
+                     baseRetailMedian, compN, dtsMedian,
+                     programContext, ctpState, acquisitionPath,
+                     demandWindow:{…} },                           // Layer 0 photograph
+  prediction: {
+    projectedResale, breakdown:[ {name, premium, n, confidence}, … ],  // base + each attribute premium
+    recommendedRetirementMonth, scenarioTable:[…],                     // from _retireTiming
+    projectedWriteDown, projectedTotalContribution,
+    overallConfidence
+  },
+
+  // ── Mutable Interpretation (added later, never at creation) ──────
+  interpretations: [],           // Errors/Attribution attach here in Layers 5–6, non-destructively
+
+  // ── Metadata / Provenance (§0.6 — the auditor test) ─────────────
+  provenance: {
+    createdBy:      "PredictionSnapshotService",
+    createdAt:      "2026-07-29T…Z",
+    buildId:        "…",         // correlates to a release
+    valuationEngineVersion:  "…",
+    retirementEngineVersion: "…",
+    learningEngineVersion:   "…",
+    configurationVersion:    "…",
+    businessRulesVersion:    "…", // NEW — the rule set in force (see recommendation R2)
+    sourceData: { inventoryDigest:"…", historyDigest:"…" }  // NEW — what data produced it (R3)
+  }
+}
+```
+
+### 8.2 Ledger semantics
+- `save()` on the immutable `predictionSnapshots` repo already rejects re-writing an
+  existing `id` (Layer 1). A "change" is a **new** snapshot whose `supersedes` points
+  at the prior objectId — never an edit. Reading the chain reconstructs history.
+- Nothing deletes. Export/import (Layer 1) carries the full ledger.
+
+### 8.3 What Layer 2 builds
+A thin `PredictionSnapshotService` (engine-side, storage-agnostic) that:
+1. accepts a committed decision + the already-computed prediction/context (it does
+   **not** recompute — it captures what the engines produced);
+2. mints a permanent `objectId`, stamps provenance/versions, freezes facts;
+3. calls `repositories.predictionSnapshots.save(record)`.
+
+The service is a **capture**, not a calculation — it introduces no valuation or
+retirement logic (§0.3), so New Retail and valuation output stay byte-identical.
+Wiring a "Commit Decision" UI trigger is a later, separate concern; Layer 2 delivers
+the service + record contract and is validated headlessly.
+
+### 8.4 Recommendations (surfaced pre-code, per standing policy)
+
+- **R1 — Object IDs use ULID-style sortable identifiers, not random UUIDs.**
+  Rationale: a snapshot ledger is time-ordered; a lexicographically-sortable,
+  timestamp-prefixed id keeps the ledger naturally ordered without a separate sort
+  key and eases future DB indexing. A tiny self-contained generator (no dependency)
+  gives k-sortable ids offline. *Recommend adopt.*
+
+- **R2 — Add `businessRulesVersion` to provenance** (beyond the spec's engine/config
+  versions). Rationale: your §0.6 auditor test explicitly asks "using which business
+  rules?" — engine version answers *how the code computed*, but suppression/demote/
+  override/eligibility rules can change independently of engine code. Without this,
+  two identical-engine snapshots could be irreproducible. *Recommend adopt.*
+
+- **R3 — Add a `sourceData` digest** (hash/fingerprint of the inventory + history
+  feeds that fed the prediction). Rationale: the auditor test asks "using which
+  source data?"; a digest lets the Learning Engine detect when a later re-derivation
+  used different inputs, without storing the whole feed. *Recommend adopt.*
+
+- **R4 — Freeze facts with a deep-frozen capture + a `factsHash`.** Rationale:
+  belt-and-suspenders immutability — a stored `factsHash` lets any later reader
+  *prove* a fact block was not tampered with out-of-band (e.g. a hand-edited
+  localStorage blob). Cheap, and it makes "facts never change" verifiable, not just
+  asserted. *Recommend adopt (small).* 
+
+- **R5 — Keep the snapshot's `prediction` a pure copy of engine output; never let
+  the service reshape or re-derive it.** Rationale: enforces §0.3 (capture, not
+  compute) and guarantees byte-identical valuation. *Recommend adopt (invariant).*
+
+These recommendations extend provenance/identity only; none add business logic to
+the repository or change any engine's computation.
