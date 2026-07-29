@@ -27,7 +27,7 @@ SAMPLE_SALES = open(os.path.join(ROOT, "pipeline_manager", "sample_data", "sales
 
 HTML = open(os.path.join(HERE, "app_template.html"), encoding="utf-8").read()
 REPO = open(os.path.join(HERE, "repository.js"), encoding="utf-8").read()
-LEARNING = open(os.path.join(HERE, "learning_engine.js"), encoding="utf-8").read()
+RECORDS = open(os.path.join(HERE, "records.js"), encoding="utf-8").read()
 ENGINE = open(os.path.join(HERE, "app_engine.js"), encoding="utf-8").read()
 RENDER = open(os.path.join(HERE, "app_render.js"), encoding="utf-8").read()
 WIRING = open(os.path.join(HERE, "app_wiring.js"), encoding="utf-8").read()
@@ -48,7 +48,7 @@ LOANER_HISTORY = open(os.path.join(ROOT, "pipeline_manager", "sample_data",
 
 out = (HTML
        .replace("__REPO__", REPO)
-       .replace("__LEARNING_ENGINE__", LEARNING)
+       .replace("__RECORDS__", RECORDS)
        .replace("__LOANER_ENGINE__", LOANER_ENGINE)
        .replace("__ENGINE__", ENGINE)
        .replace("__RENDER__", RENDER)

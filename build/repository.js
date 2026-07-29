@@ -136,7 +136,7 @@
     adapter = adapter || (typeof localStorage !== "undefined" ? LocalStorageAdapter() : MemoryAdapter());
 
     var predictionSnapshots = Repository(adapter, "prediction_snapshots", { immutableFacts: true });
-    var recommendations = Repository(adapter, "recommendation_records", { immutableFacts: true });
+    var decisions = Repository(adapter, "decisions", { immutableFacts: true });   // platform Decision Records
     var observations = Repository(adapter, "observations", { immutableFacts: true });
     var interpretations = Repository(adapter, "interpretations", { immutableFacts: true });
 
@@ -165,7 +165,7 @@
     return {
       adapter: adapter,
       predictionSnapshots: predictionSnapshots,
-      recommendations: recommendations,
+      decisions: decisions,
       observations: observations,
       interpretations: interpretations,
       exportJSON: exportJSON,

@@ -77,9 +77,44 @@ Every immutable fact must be able to answer: **who** created me, **when**, using
 from the object itself, the object model is incomplete and must be extended before
 the object is allowed to persist.
 
+### 0.7 Business-object heuristic (ask before creating any new persistent object)
+Before introducing a new persistent object, ask: *"Is this a business object, or is
+it merely information that belongs on another business object?"* If it has its own
+**identity, history, provenance, relationships, and can be referenced independently**,
+it deserves to be its own object. Otherwise it stays **embedded**. This is a core
+project heuristic — it is how we decide, e.g., that Decision Context will eventually
+graduate from embedded data to its own referenced object (§0.9).
+
+### 0.8 AI-legibility (every object is self-describing)
+Every immutable object must be understandable by an AI **without engine-specific
+knowledge**. From its fields alone it must answer: *What am I? Why do I exist? Who
+created me? What facts can never change? What interpretations changed over time?
+What other objects am I related to? What business decision was made? What
+ultimately happened?* The foundation's `describe()` assembles these answers from
+standard fields only — no engine coupling. Design every new object so `describe()`
+can answer all eight.
+
+### 0.9 Contexts trend toward first-class objects (design open, don't build yet)
+Every business decision occurs inside a business context (Market, Inventory, Demand,
+Financial, Customer, Program, Competitive, Vehicle, Recommendation). Contexts are
+embedded today, but the model must **not** be designed so every Decision Record
+permanently duplicates hundreds of lines of context. Every record therefore carries
+a `contextRefs:[]` array so contexts can later become their own immutable records
+(a future **Context Engine / Context Registry**) that records merely reference.
+Not implemented now — the model is only kept open for it.
+
 ---
 
-## 1. Standard object model (project-wide)
+## 1. Standard object model (project-wide) — implemented as `PMRecords`
+
+`build/records.js` (`window.PMRecords`) is the **one** executable implementation of
+this model. Every persistent business object is minted through it and inherits:
+identity, immutable facts, provenance, integrity (`factsHash`/`verify`), supersedes
+chains, append-only **interpretations**, append-only **events**, and `describe()`.
+`PMRecords` sits below the engines and beside the repository layer; it captures and
+never thinks (§0.3). The concrete platform records (Prediction Snapshot, Decision
+Record; later Observation, Learning Signal, Calibration) are thin `PMRecords`
+compositions — no duplicated machinery.
 
 Every persistent business object in the platform follows the same four-part shape.
 This is now the standard, not a Learning-Engine-only convention.
@@ -89,6 +124,7 @@ This is now the standard, not a Learning-Engine-only convention.
 | **Identity** | immutable | permanent `objectId` (independent of VIN), object type, created-at; VIN is a *relationship*, not the identity (§0.5) |
 | **Immutable Facts** | frozen at creation | what was true/decided at the moment; never edited (§0.4) |
 | **Mutable Interpretation** | append-only versions | conclusions drawn later; evolves; never overwritten |
+| **Event history** | append-only | lifecycle/business events; history grows around the facts, never edits them |
 | **Metadata / Provenance** | provenance | who/when/engine versions/config/business rules/source data — the auditor test (§0.6) |
 
 "Append-only versions" means a changed interpretation is written as a *new*
@@ -136,18 +172,37 @@ Version stamps on every snapshot (Metadata):
 - Learning Engine Version
 - Configuration Version
 
-### LAYER 1b — Recommendation Record (FACT identity + lifecycle)
-Distinct from the prediction. Prediction = "what did the engines predict?";
-Recommendation = "what did the system recommend, and what did management do?".
+### LAYER 1b — Decision Record (PLATFORM object, not a Learning-Engine object)
+Recommendation Records were **promoted to platform-wide Decision Records**. A
+Decision Record is emitted by *any* engine (Demand, Supply, Valuation, Service
+Loaner, …) with the **same immutable structure**; the Learning Engine, Reporting
+Engine, and future AI consume them. Nothing owns them but the platform.
 
-Recommended vs Actual across: retirement month, write-down, acquisition path
-(CPO/PPO/CTP/Dealer-Trade), CTP change.
+Prediction = "what did the engines predict?"; Decision = "what did an engine
+recommend, and what did management do?". The recommendation never changes; history
+(events, interpretations) grows around it.
 
-**Lifecycle states (historical state, not workflow logic):**
-`Generated → Presented → Accepted → Modified → Rejected → Executed → Cancelled`
-State transitions are appended as history (each with timestamp + provenance), never
-overwritten. This makes future analytics almost free: acceptance rate, most-
-overridden recommendations, managers who consistently outperform the engine.
+**Typed envelope (the permanent platform contract):** `recommendation:{ kind,
+summary, payload }`, where `kind` is a registry (e.g. `loaner-retirement`,
+`ctp-adjustment`, `acquisition`, `trade`, `pricing`, `write-down`, `factory-order`,
+`demand`, `inventory`). Reporting/Learning/AI read `kind`+`summary` generically and
+only interpret `payload` for kinds they understand — one model, engine-specific
+detail, still analyzable.
+
+**Lifecycle as append-only events (historical events, not mutable state):**
+`Generated · Presented · Viewed · Accepted · Modified · Rejected · Executed ·
+Cancelled · Expired · Superseded` — a canonical registry; unknown types are
+rejected so the vocabulary never drifts. Every event carries `actor`+`at`, so
+approval history, multi-user approvals, and confidence changes are all just events.
+Enables acceptance rate, most-overridden recommendations, managers who outperform
+the engine — for free.
+
+**Relationships & references (model open, unused in Step 6):** `supersedes`
+(corrections), `relationships:{parentId, dependsOn, alternativesTo, bundleId}`,
+`basedOn:[snapshotId,…]` (links to the Prediction Snapshots a decision rests on),
+and `contextRefs:[]` (§0.9). Parent/child, dependencies, alternatives, bundles,
+expiration, and versioning are all expressible via references + events — no future
+redesign, no behavior built now.
 
 ### LAYER 2 — Observation (FACT, append-only)
 What actually happened: actual sale price, actual retirement month, actual
@@ -270,12 +325,17 @@ and is never presented as historical fact.
 Do not move to the next layer until the previous passes architecture verification.
 
 1. **Repository abstraction** (interfaces + localStorage adapter + JSON export/import) — ✅ DONE (`build/repository.js`, commit `4b257cf`)
-2. **Immutable Prediction Snapshot** (Layer 0 context + Layer 1 snapshot, version-stamped) — ◀ current (design in §8)
-3. **Recommendation Record** (Layer 1b, with lifecycle state history)
-4. **Observation Store** (Layer 2, append-only)
-5. **Error Engine** (Layer 3, typed registry + immature classifier)
-6. **Learning Signal Engine** (Layer 5, confidence + provenance, non-destructive versions)
-7. **Calibration Recommendation surface** (Layer 6, recommendation-only, approval-gated)
+2. **Immutable Prediction Snapshot** — ✅ DONE, then refactored onto the shared `PMRecords` foundation (`build/records.js`)
+3. **`PMRecords` foundation + platform Decision Record** (typed envelope, lifecycle events, `describe()`) — ✅ DONE (`build/records.js`)
+4. **Observation Store** (append-only) — ◀ next; a `PMRecords` composition on `repositories.observations`
+5. **Error Engine** (typed registry + immature classifier) — Learning Engine *thinking* (reintroduces `learning_engine.js`)
+6. **Learning Signal Engine** (confidence + provenance, non-destructive versions)
+7. **Calibration Recommendation surface** (recommendation-only, approval-gated)
+
+> Note: `build/learning_engine.js` (from the Layer 2 commit) was removed in the
+> refactor — there is no Learning *thinking* code yet. The Learning Engine returns
+> in step 5 (Error Engine) as a consumer of platform records, cleanly separated
+> from the platform record foundation.
 
 Guarantee: valuation and retirement output remain byte-identical throughout Step 6.
 The Learning Engine only observes; it changes no prediction until an approved
