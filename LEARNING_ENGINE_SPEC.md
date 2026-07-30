@@ -184,11 +184,10 @@ Factory allocations, incoming orders, pipeline inventory, dealer trades, vehicle
 substitutions, allocation timing, production scheduling, and arrival forecasting are
 used as **architecture validation tests**: today's model must already express them.
 They are Decision/Observation **kinds** (registry entries) on entity subjects — no
-new object type. Entity-continuity rule: facts about one physical unit across its
-lifecycle (allocation → order → VIN → inventory) share a **stable `unit` entity
-ref**; VIN is an *additional* ref added when assigned. When a stable id was not known
-early, a small **entity-alias** Business Fact bridges the identities so the Timeline
-still unifies. If any future decision would make these harder, stop and surface it.
+new object type. Entity continuity across a unit's lifecycle is governed by the
+identity philosophy in §0.20–§0.21 (accumulated business identifiers + honest
+certainty), not by any single canonical key. If any future decision would make these
+concepts harder to model, stop and surface it.
 
 ### 0.19 The Engine Contract (how any intelligence engine plugs in)
 Every intelligence engine — Learning today, and any future optimization engine —
@@ -200,6 +199,49 @@ obeys one contract so it plugs in without touching existing engines:
   outputs or writes directly into valuation (Rules 4, 6, 7).
 An engine is replaceable (§Rule 10) precisely because nothing outside this contract
 depends on it.
+
+### 0.20 Identity is accumulated business identifiers, not a field
+**Model business reality before software abstractions.** The software never assumes
+a canonical identifier exists; it **discovers and uses whatever the business system
+actually provides**. Identity is therefore not a field —
+
+> **Identity is the accumulated set of business identifiers that describe the same
+> real-world object over time.**
+
+An object's `subject` carries *every* identifier known at that stage as entity refs;
+continuity resolves through **overlapping** identifiers (`forEntity` matches any),
+so no single key must span the whole life. This naturally supports different
+manufacturers, DMS providers, dealer groups, acquisitions, future inventory feeds,
+production ordering, and enterprise deployments without redesign. A synthetic id is
+generated **only** when the source system provides no way whatsoever to relate
+records — never in preference to a real one.
+
+The **Identity Adapter** (per feed/DMS) is responsible for identity: it
+- **discovers** every identifier the business system supplies,
+- **preserves** each exactly as received (no normalization that loses information),
+- **understands** stated relationships between identifiers,
+- **resolves** continuity from overlapping identifiers, and
+- **never invents** an identifier unless the source genuinely offers no way to relate
+  records.
+
+### 0.21 Model certainty honestly (never silently merge)
+If two records cannot be **proven** to represent the same business object, the
+software must not merge them. It must either (a) prove the relationship from
+overlapping business identifiers, (b) prove it through an explicit **alias / bridge**
+Business Fact, or (c) **leave the relationship unresolved** until more facts exist.
+*An unresolved relationship is always preferable to an incorrect one.* This is a
+direct application of §0.17 (incomplete knowledge) to identity.
+
+> **Data note (current feeds, observed):** Serial exists only in the inventory feed
+> and is **two identifiers under one name** — a 6-digit **VIN sequential number**
+> (built units: with Stock#, firm ETA) and a 2-alpha+5-digit **build/order
+> reference** (on-order units: no Stock#, month-level ETA, Location `ONS`). Its value
+> changes at VIN assignment, and the on-order build reference shares **no identifier**
+> with the later arrived record — so that link is **currently unprovable and must
+> stay unresolved** (§0.21). Serial is thus treated as one more adapter-exposed
+> business identifier, never elevated to a canonical role. Across feeds the reliable
+> identifiers are **Stock#** (dealer stages) and **VIN** (once assigned; sales/loaner
+> carry the full VIN, inventory carries only its serial slice).
 
 ---
 
