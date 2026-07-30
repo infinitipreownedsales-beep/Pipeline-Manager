@@ -108,6 +108,16 @@
   ["error", "attribution", "learning-signal"].forEach(function (k) { KNOWLEDGE_KINDS[k] = true; });
   function registerKnowledgeKind(kind) { KNOWLEDGE_KINDS[kind] = true; }
 
+  /* Attribution factor-type registry — VOCABULARY only (engines interpret, this
+     family never judges). Intentionally small and general; dealer-specific
+     intelligence emerges through evidence and Learning Signals, not hardcoded
+     categories. `external-factor` is deliberately NOT seeded (future, not required)
+     — add it via registerAttributionFactor when a feed provides it. */
+  var ATTRIBUTION_FACTORS = {};
+  ["configuration", "timing", "pricing", "incentive", "process", "decision", "data-quality"]
+    .forEach(function (f) { ATTRIBUTION_FACTORS[f] = true; });
+  function registerAttributionFactor(factor) { ATTRIBUTION_FACTORS[factor] = true; }
+
   var byId = function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; };
 
   /* ===================== foundation() =====================
@@ -472,10 +482,12 @@
     DECISION_KINDS: DECISION_KINDS,
     OBSERVATION_KINDS: OBSERVATION_KINDS,
     KNOWLEDGE_KINDS: KNOWLEDGE_KINDS,
+    ATTRIBUTION_FACTORS: ATTRIBUTION_FACTORS,
     registerLifecycleEvent: registerLifecycleEvent,
     registerDecisionKind: registerDecisionKind,
     registerObservationKind: registerObservationKind,
     registerKnowledgeKind: registerKnowledgeKind,
+    registerAttributionFactor: registerAttributionFactor,
     util: { hash: hash, ulid: ulid, deepFreeze: deepFreeze }
   };
 })();

@@ -521,8 +521,8 @@ Do not move to the next layer until the previous passes architecture verificatio
 6. **`PMKnowledge` record family** — one generalized Knowledge Record (kinds: error/attribution/learning-signal), first-class descriptive confidence, role-typed evidence, supersedes; **object model only, no thinking** (§9.1) — ✅ DONE (`build/records.js`; `knowledge` collection)
 7. **Learning Engine thinking** (separate held commits), each honoring the Engine Contract (§0.19), never writing into valuation:
    - 7a. **Error** — belief vs reality over a registered comparison dimension; domain-blind engine + comparison registry; explicit selection provenance; supersede-on-recompute; unresolved-not-guessed. — ✅ DONE (`build/learning_engine.js`, inert producer)
-   - 7b. **Attribution** — assign errors to a responsible signal (Knowledge). — ◀ next
-   - 7c. **Learning-Signal detection** — aggregate patterns across errors/attributions, confidence-weighted (Knowledge).
+   - 7b. **Attribution** — plausible contributing factors for an Error; one Knowledge record per factor hypothesis (competing = siblings); confidence (is-it-real) + strength (how-much); factor-type registry; intentionally immature (caller-supplied hypotheses). — ✅ DONE (`build/learning_engine.js`; `records.js` factor registry)
+   - 7c. **Learning-Signal detection** — aggregate patterns across errors/attributions, confidence-weighted (Knowledge). — ◀ next
    - 7d. **Calibration** — emitted as a Decision Record; Valuation consumes only an *approved* calibration (the only slice that can influence valuation — last, most gated).
 
 > Note: `build/learning_engine.js` (from the Layer 2 commit) was removed in the

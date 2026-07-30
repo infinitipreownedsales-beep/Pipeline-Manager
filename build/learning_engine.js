@@ -193,12 +193,92 @@
   /* Convenience: one-shot derivation with an explicit spec set. */
   function deriveErrors(repositories, opts) { return ErrorEngine(repositories, opts).deriveErrors(); }
 
+  /* ===================== Attribution (Slice 4) =====================
+     Answers only: "What factors are plausible contributors to the observed gap?"
+     — never "who is responsible," never an action. Attribution is Knowledge only
+     (kind:"attribution"); the producer creates NO Decisions, recommendations,
+     valuation changes, accountability, or workflow.
+
+     One Knowledge record PER FACTOR HYPOTHESIS. Competing explanations for one
+     Error are SIBLINGS, never a hierarchy — each with independent identity,
+     confidence, strength, evidence, and supersession history.
+
+     Intentionally IMMATURE (no causal AI): the factor hypotheses are supplied by
+     the caller; this slice only records them as proper Knowledge with correct
+     relationships (evidence, competing siblings, supersession, aggregation-ready).
+     The intelligence matures later via Learning Signals.
+
+     Two independent measures, kept permanently separate:
+       confidence — how likely this factor is actually contributing (0..1)
+       strength   — IF true, how much of the gap it explains (0..1); never a hidden
+                    confidence score.
+     People may appear only as related entities/evidence, never as blame. */
+  function AttributionEngine(repositories, opts) {
+    opts = opts || {};
+    if (!window.PMRecords) throw new Error("LearningEngine: PMRecords not loaded");
+    var K = window.PMRecords.Knowledge(repositories, { clock: opts.clock, rng: opts.rng });
+    var FACTORS = window.PMRecords.ATTRIBUTION_FACTORS;
+
+    function num01(x) { return typeof x === "number" && x >= 0 && x <= 1; }
+
+    return {
+      /* Record one or more competing factor hypotheses for an Error. Each
+         hypothesis: { factor, confidence, strength, support?:[{id,role}],
+                       summary?, supersedes? }. Returns the created attribution
+         Knowledge records (siblings). */
+      attribute: function (errorId, hypotheses) {
+        var err = K.get(errorId);
+        if (!err || err.finding.kind !== "error")
+          throw new Error("AttributionEngine.attribute: '" + errorId + "' is not an Error Knowledge record");
+        hypotheses = hypotheses || [];
+        var dimension = err.finding.payload && err.finding.payload.dimension;
+        // inherit the Error's belief/reality evidence so the chain stays traceable
+        var inherited = (err.evidence || []).filter(function (e) { return e.role === "belief" || e.role === "reality"; });
+        var out = [];
+        hypotheses.forEach(function (h) {
+          if (!h || !h.factor) throw new Error("attribute: hypothesis.factor required");
+          if (!FACTORS[h.factor]) throw new Error("attribute: unregistered factor '" + h.factor + "'");
+          if (!num01(h.confidence)) throw new Error("attribute: confidence (0..1) required — how likely this factor contributed");
+          if (!num01(h.strength)) throw new Error("attribute: strength (0..1) required — how much of the gap it explains if true");
+          var support = (h.support || []).slice();
+          var evidence = [{ id: errorId, role: "explains" }].concat(inherited, support);
+          var finding = {
+            kind: "attribution",
+            summary: h.summary || ("Attribution: " + h.factor + " factor — confidence " + h.confidence +
+              ", explains ~" + Math.round(h.strength * 100) + "% of the gap if true"),
+            confidence: h.confidence,                 // is this factor actually contributing?
+            payload: {
+              factor: h.factor,
+              strength: h.strength,                   // how much of the gap, if true (NOT confidence)
+              errorId: errorId,
+              dimension: dimension == null ? null : dimension
+            }
+          };
+          out.push(K.derive({
+            subject: err.subject, evidence: evidence, finding: finding,
+            derivedBy: "AttributionEngine", supersedes: h.supersedes || null
+          }));
+        });
+        return out;
+      },
+      /* Projection: current (non-superseded) attributions for an Error — the live
+         set of competing hypotheses. */
+      forError: function (errorId) {
+        var all = K.byKind("attribution").filter(function (k) { return k.finding.payload.errorId === errorId; });
+        var ids = {}; all.forEach(function (k) { ids[k.id] = true; });
+        var sup = {}; all.forEach(function (k) { if (k.supersedes && ids[k.supersedes]) sup[k.supersedes] = true; });
+        return all.filter(function (k) { return !sup[k.id]; });
+      }
+    };
+  }
+
   window.LearningEngine = {
     ErrorEngine: ErrorEngine,
     deriveErrors: deriveErrors,
     computeError: computeError,
     registerComparison: registerComparison,
     comparisons: comparisons,
+    AttributionEngine: AttributionEngine,
     SELECTION_RULE: SELECTION_RULE,
     SELECTION_RULE_VERSION: SELECTION_RULE_VERSION,
     util: { getPath: getPath }
