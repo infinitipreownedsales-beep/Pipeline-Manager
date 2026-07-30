@@ -883,10 +883,20 @@
     var type = opts.type || "Record";
     var idPrefix = opts.idPrefix || "rec";
     var category = opts.category || "business-fact";
+    var payloadKey = opts.payloadKey || "facts";   // "facts" (fact family) | "finding" (knowledge)
     var descriptor = opts.descriptor || {};
     var versions = opts.versions || DEFAULT_VERSIONS;
     var clock = opts.clock || function () { return new Date(); };
     var rng = opts.rng || Math.random;
+
+    /* Evidence entries are role-typed (§0.12): "I exist because of this record, in
+       this capacity." A bare id normalizes to {id, role:null}; nothing is lost. */
+    function normalizeEvidence(ev) {
+      return (ev || []).map(function (e) {
+        if (e != null && typeof e === "object") return { id: e.id, role: ("role" in e ? e.role : null) };
+        return { id: e, role: null };
+      });
+    }
 
     function digestSources(sources) {
       var d = {};
@@ -898,15 +908,17 @@
     }
 
     /* The immutable core is everything that can never change: the entity
-       references, the evidence, the supersedes link, and the fact block. It is
-       hashed as one unit, so tampering with any of it is detectable. */
+       references, the role-typed evidence, the supersedes link, and the payload
+       block (named per family via payloadKey). Hashed as one unit, so tampering
+       with any of it is detectable. */
     function coreOf(input, supersedes) {
-      return {
-        subject: clone(input.subject) || [],     // canonical entity references
-        evidence: clone(input.evidence) || [],   // facts this fact exists because of
-        supersedes: supersedes || null,          // correction chain
-        facts: clone(input.facts) || {}          // the frozen fact block
+      var core = {
+        subject: clone(input.subject) || [],              // canonical entity references
+        evidence: normalizeEvidence(input.evidence),      // role-typed {id, role}
+        supersedes: supersedes || null                    // correction chain
       };
+      core[payloadKey] = clone(input.payload) || {};      // the frozen payload block
+      return core;
     }
 
     function mint(input, meta) {
@@ -925,7 +937,6 @@
         subject: core.subject,
         evidence: core.evidence,
         supersedes: core.supersedes,
-        facts: core.facts,
         // Append-only histories (empty at creation)
         interpretations: [],                      // Knowledge attaches here
         events: [],                               // recommendation lifecycle
@@ -942,12 +953,15 @@
           sourceData: digestSources(meta.sources)
         }
       };
+      record[payloadKey] = core[payloadKey];      // frozen payload under its family name
       record.provenance.factsHash = hash(JSON.stringify(core));
       return record;
     }
 
     function coreFromRecord(rec) {
-      return { subject: rec.subject, evidence: rec.evidence, supersedes: rec.supersedes, facts: rec.facts };
+      var core = { subject: rec.subject, evidence: rec.evidence, supersedes: rec.supersedes };
+      core[payloadKey] = rec[payloadKey];
+      return core;
     }
 
     var api = {
@@ -977,6 +991,15 @@
         }).sort(byId);
       },
       forVehicle: function (vin) { return api.forEntity("vehicle", vin); },
+
+      /* Evidence projection (reverse of `evidence`): every record in this
+         collection that cites `id` as evidence — "what rests on this record?".
+         The second Timeline hop (§0.14): Knowledge derived from a fact. */
+      forEvidence: function (id) {
+        return repo.list(function (r) {
+          return (r.evidence || []).some(function (e) { return e.id === id; });
+        }).sort(byId);
+      },
 
       /* Append Knowledge (interpretation) — non-destructive; never edits facts. */
       appendInterpretation: function (id, entry) { return repo.appendVersion(id, entry || {}, "interpretations"); },
@@ -1012,7 +1035,7 @@
           when: rec.createdAt,
           entities: rec.subject || [],
           evidence: rec.evidence || [],
-          immutableFacts: Object.keys(rec.facts || {}),
+          immutablePayload: Object.keys(rec[payloadKey] || {}),
           understandingOverTime: (rec.interpretations || []).length,
           businessEvents: (rec.events || []).length,
           supersedes: rec.supersedes || null,
@@ -1059,7 +1082,7 @@
           prediction: prediction.prediction                                   // engine output, verbatim
         };
         return base.create(
-          { subject: entityRefs(prediction), evidence: prediction.evidence || [], facts: facts },
+          { subject: entityRefs(prediction), evidence: prediction.evidence || [], payload: facts },
           { createdBy: prediction.committedBy || "Prediction Snapshot", sources: prediction.sources, supersedes: prediction.supersedes });
       }
     });
@@ -1093,7 +1116,7 @@
           relationships: decision.relationships || { parentId: null, dependsOn: [], alternativesTo: [], bundleId: null }
         };
         return base.create(
-          { subject: entityRefs(decision), evidence: decision.evidence || decision.basedOn || [], facts: facts },
+          { subject: entityRefs(decision), evidence: decision.evidence || decision.basedOn || [], payload: facts },
           { createdBy: decision.committedBy || (facts.origin.engine || "Decision Record"), sources: decision.sources, supersedes: decision.supersedes });
       },
       forEngine: function (engine) {
@@ -1130,7 +1153,7 @@
           observedAt: observation.observedAt || null   // when the truth became real (may predate recording)
         };
         return base.create(
-          { subject: entityRefs(observation), evidence: observation.evidence || [], facts: facts },
+          { subject: entityRefs(observation), evidence: observation.evidence || [], payload: facts },
           { createdBy: observation.recordedBy || "Observation", sources: observation.sources, supersedes: observation.supersedes });
       },
       /* Truths are not events: block the lifecycle-event path structurally so an
