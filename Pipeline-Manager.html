@@ -708,7 +708,9 @@
     var predictionSnapshots = Repository(adapter, "prediction_snapshots", { immutableFacts: true });
     var decisions = Repository(adapter, "decisions", { immutableFacts: true });   // platform Decision Records
     var observations = Repository(adapter, "observations", { immutableFacts: true });
-    var interpretations = Repository(adapter, "interpretations", { immutableFacts: true });
+    // Knowledge family (Rule 14): each version is an immutable record; understanding
+    // evolves by superseding, never by editing — so immutableFacts holds here too.
+    var knowledge = Repository(adapter, "knowledge", { immutableFacts: true });
 
     /* Export every collection as one JSON document — business records that
        outlive the browser. */
@@ -737,7 +739,7 @@
       predictionSnapshots: predictionSnapshots,
       decisions: decisions,
       observations: observations,
-      interpretations: interpretations,
+      knowledge: knowledge,
       exportJSON: exportJSON,
       importJSON: importJSON
     };
@@ -860,6 +862,13 @@
    "actual-retirement-month-recorded", "actual-acquisition-path-recorded"
   ].forEach(function (k) { OBSERVATION_KINDS[k] = true; });
   function registerObservationKind(kind) { OBSERVATION_KINDS[kind] = true; }
+
+  /* Knowledge-kind registry (Rule 14). A kind exists only if it answers a distinct
+     business question — the registry keeps Knowledge from becoming a dumping ground.
+     Seeded with the understanding kinds the Learning Engine will produce later. */
+  var KNOWLEDGE_KINDS = {};
+  ["error", "attribution", "learning-signal"].forEach(function (k) { KNOWLEDGE_KINDS[k] = true; });
+  function registerKnowledgeKind(kind) { KNOWLEDGE_KINDS[kind] = true; }
 
   var byId = function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; };
 
@@ -1163,18 +1172,72 @@
     });
   }
 
+  /* ============ Knowledge — "What does the system understand?" ===============
+     The Knowledge family (Rule 14): interpretation DERIVED from Business Facts.
+     Unlike a Fact, a Knowledge record can be wrong, updated, superseded, or
+     recomputed — but each version is itself immutable; understanding evolves by
+     SUPERSEDING, never by editing. This slice is only the container; the Learning/
+     Forecast/Risk engines that PRODUCE Knowledge come later and are never its owner
+     (Business Facts → engines → Knowledge → Decision proposals → Decisions).
+
+     Payload lives under `finding` (payloadKey). The typed envelope is
+     `finding:{ kind, summary, confidence, payload }`:
+       - kind        a registered Knowledge kind (distinct business question)
+       - summary     plain-English understanding (explainability, Rule 12)
+       - confidence  MANDATORY, 0..1 — DESCRIPTIVE only. It states how strongly the
+                     system believes something; it never changes valuation, pricing,
+                     allocation, or any decision. Acting on Knowledge requires a
+                     separate Decision Record (kind:"calibration") to be approved.
+       - payload     kind-specific detail (effect size, sample count, basis, …)
+     Evidence is directional (§0.12): Knowledge points at the facts / prior knowledge
+     that support it. Facts never point back — reverse lookup is the forEvidence
+     projection, never a stored dependency. */
+  function Knowledge(repositories, opts) {
+    var base = foundation(repositories, "knowledge", Object.assign({
+      type: "Knowledge Record", idPrefix: "know", category: "knowledge", payloadKey: "finding",
+      descriptor: {
+        purpose: function (r) { return r.finding ? r.finding.summary : null; },
+        confidence: function (r) { return r.finding ? r.finding.confidence : null; }
+      }
+    }, opts || {}));
+    return Object.assign({}, base, {
+      /* Persist a derived piece of understanding. `knowledge`:
+           { subject, evidence:[{id,role}], finding:{kind,summary,confidence,payload},
+             derivedBy?, sources?, supersedes? }
+         This is capture only — no inference, ranking, or optimization happens here. */
+      derive: function (knowledge) {
+        knowledge = knowledge || {};
+        var f = knowledge.finding || {};
+        if (!f.kind) throw new Error("Knowledge.derive: finding.kind required");
+        if (!KNOWLEDGE_KINDS[f.kind]) throw new Error("Knowledge.derive: unregistered kind '" + f.kind + "'");
+        if (typeof f.confidence !== "number" || f.confidence < 0 || f.confidence > 1)
+          throw new Error("Knowledge.derive: finding.confidence (0..1) is required and descriptive");
+        var finding = { kind: f.kind, summary: f.summary || "", confidence: f.confidence, payload: f.payload || {} };
+        return base.create(
+          { subject: entityRefs(knowledge), evidence: knowledge.evidence || [], payload: finding },
+          { createdBy: knowledge.derivedBy || "Knowledge", sources: knowledge.sources, supersedes: knowledge.supersedes });
+      },
+      byKind: function (kind) { return base.list(function (r) { return r.finding && r.finding.kind === kind; }).sort(byId); },
+      /* Knowledge has no recommendation lifecycle; it evolves by superseding. */
+      appendEvent: function () { throw new Error("Knowledge evolves by superseding, not lifecycle events."); }
+    });
+  }
+
   window.PMRecords = {
     foundation: foundation,
     PredictionSnapshots: PredictionSnapshots,
     DecisionRecords: DecisionRecords,
     Observations: Observations,
+    Knowledge: Knowledge,
     DEFAULT_VERSIONS: DEFAULT_VERSIONS,
     LIFECYCLE_EVENTS: LIFECYCLE_EVENTS,
     DECISION_KINDS: DECISION_KINDS,
     OBSERVATION_KINDS: OBSERVATION_KINDS,
+    KNOWLEDGE_KINDS: KNOWLEDGE_KINDS,
     registerLifecycleEvent: registerLifecycleEvent,
     registerDecisionKind: registerDecisionKind,
     registerObservationKind: registerObservationKind,
+    registerKnowledgeKind: registerKnowledgeKind,
     util: { hash: hash, ulid: ulid, deepFreeze: deepFreeze }
   };
 })();

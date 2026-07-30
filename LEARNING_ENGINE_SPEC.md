@@ -517,9 +517,9 @@ Do not move to the next layer until the previous passes architecture verificatio
 3b. **Foundation refactor** — Business-Fact family (Rule 14), `facts:{}` isolation + structural immutability, canonical entity `subject`, `evidence`, business-question descriptors, unified `forEntity` — ✅ DONE (`build/records.js`, `build/repository.js`)
 4. **Observation Store** ("What became true?", append-only truths, typed-kind registry, entity subject, evidence, `appendEvent` blocked) — ✅ DONE (`build/records.js`)
    — Business-Fact family complete (believed / decided / became-true).
-5. **Foundation enhancement** — `payloadKey`, `forEvidence` projection, evidence normalization to `{id,role}` across both families (§9.4) — ◀ next
-6. **`PMKnowledge` record family** — one generalized Knowledge Record (kinds: error/attribution/learning-signal), first-class confidence, role-typed evidence, supersedes; **object model only, no thinking** (§9.1)
-7. **Learning Engine thinking** (separate held commits): Error from (snapshot, observation) → Attribution → Learning-Signal detection → Calibration emitted as a Decision Record; each honors the Engine Contract (§0.19), never writes into valuation.
+5. **Foundation enhancement** — `payloadKey`, `forEvidence` projection, evidence normalization to `{id,role}` across both families (§9.4) — ✅ DONE (`build/records.js`, `build/repository.js`)
+6. **`PMKnowledge` record family** — one generalized Knowledge Record (kinds: error/attribution/learning-signal), first-class descriptive confidence, role-typed evidence, supersedes; **object model only, no thinking** (§9.1) — ✅ DONE (`build/records.js`; `knowledge` collection)
+7. **Learning Engine thinking** (separate held commits): Error from (snapshot, observation) → Attribution → Learning-Signal detection → Calibration emitted as a Decision Record; each honors the Engine Contract (§0.19), never writes into valuation. — ◀ next (awaiting review of the Knowledge object model)
 
 > Note: `build/learning_engine.js` (from the Layer 2 commit) was removed in the
 > refactor — there is no Learning *thinking* code yet. The Learning Engine returns

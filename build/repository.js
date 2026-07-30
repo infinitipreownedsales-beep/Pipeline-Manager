@@ -142,7 +142,9 @@
     var predictionSnapshots = Repository(adapter, "prediction_snapshots", { immutableFacts: true });
     var decisions = Repository(adapter, "decisions", { immutableFacts: true });   // platform Decision Records
     var observations = Repository(adapter, "observations", { immutableFacts: true });
-    var interpretations = Repository(adapter, "interpretations", { immutableFacts: true });
+    // Knowledge family (Rule 14): each version is an immutable record; understanding
+    // evolves by superseding, never by editing — so immutableFacts holds here too.
+    var knowledge = Repository(adapter, "knowledge", { immutableFacts: true });
 
     /* Export every collection as one JSON document — business records that
        outlive the browser. */
@@ -171,7 +173,7 @@
       predictionSnapshots: predictionSnapshots,
       decisions: decisions,
       observations: observations,
-      interpretations: interpretations,
+      knowledge: knowledge,
       exportJSON: exportJSON,
       importJSON: importJSON
     };
