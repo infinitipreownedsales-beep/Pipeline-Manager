@@ -85,6 +85,35 @@
   }
   function comparisons() { return COMPARISONS.slice(); }
 
+  /* ===================== Pattern-spec registry (Slice 5) =====================
+     Data-driven vocabulary for the Learning Signal producer (like COMPARISONS).
+     A pattern spec groups attributions by `factor` within a `scopeEntityType`
+     (optionally constrained to a `dimension`); the engine understands only
+     entities, factors, dimensions, evidence, and scopes — never vehicles, pricing,
+     inventory, or departments. */
+  var PATTERNS = [];
+  function registerPattern(spec) {
+    if (!spec || !spec.factor || !spec.scopeEntityType)
+      throw new Error("registerPattern: factor and scopeEntityType required");
+    PATTERNS.push(spec); return spec;
+  }
+  function patterns() { return PATTERNS.slice(); }
+
+  /* Signal policy — thresholds/ceilings are DATA (config), never hardcoded at call
+     sites. Precision over recall: a missed pattern is acceptable, a false
+     institutional lesson is not — so defaults are conservative and confidence is
+     capped well below certainty. Bumping the policy lets a future aggregation model
+     supersede understanding without rewriting history (payload.policyVersion). */
+  var SIGNAL_POLICY_VERSION = "1.0.0";
+  var DEFAULT_MIN_CASES = 5;              // distinct attributed outcomes required
+  var DEFAULT_CONFIDENCE_CEILING = 0.9;   // provisional confidence never exceeds this
+
+  function median(a) {
+    if (!a.length) return null;
+    var s = a.slice().sort(function (x, y) { return x - y; }), m = Math.floor(s.length / 2);
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  }
+
   /* ===================== Error derivation =====================
      Reads facts, writes Error Knowledge. Pure producer. */
   function ErrorEngine(repositories, opts) {
@@ -272,6 +301,128 @@
     };
   }
 
+  /* ===================== Learning Signal (Slice 5) =====================
+     Institutional memory formation. Answers ONLY: "across many observations, what
+     patterns appear to repeat?" It is Knowledge only (kind:"learning-signal") — no
+     recommendation, correction, optimization, decision, forecast, valuation change,
+     UI, or action. Output is strictly Facts → Knowledge.
+
+     It aggregates ATTRIBUTION records (which already carry factor, confidence,
+     strength, and the evidence chain back to Error→reality) — it does NOT re-derive
+     causal reasoning and does NOT cite Errors directly (the chain stays
+     Snapshot → Observation → Error → Attribution → Learning Signal).
+
+     Two axes, never combined:
+       confidence — how sure the pattern EXISTS (provisional, capped, monotone in
+                    corroboration; never a probability of causation).
+       impact     — how meaningful the pattern is IF true (aggregate strength).
+     Below policy.minCases → NO signal is emitted (raw attributions still hold the
+     information; a Learning Signal means the system crossed from individual
+     explanation into repeatable institutional knowledge). */
+  function LearningSignalEngine(repositories, opts) {
+    opts = opts || {};
+    if (!window.PMRecords) throw new Error("LearningEngine: PMRecords not loaded");
+    var K = window.PMRecords.Knowledge(repositories, { clock: opts.clock, rng: opts.rng });
+    var specs = opts.patterns || PATTERNS;
+    var policy = opts.policy || {};
+    var minCases = (policy.minCases != null) ? policy.minCases : DEFAULT_MIN_CASES;
+    var ceiling = (policy.confidenceCeiling != null) ? policy.confidenceCeiling : DEFAULT_CONFIDENCE_CEILING;
+
+    function liveHeads(kind) {
+      var all = K.byKind(kind), ids = {}, sup = {};
+      all.forEach(function (k) { ids[k.id] = true; });
+      all.forEach(function (k) { if (k.supersedes && ids[k.supersedes]) sup[k.supersedes] = true; });
+      return all.filter(function (k) { return !sup[k.id]; });
+    }
+
+    /* Provisional pattern confidence: rises with consistency (share of the scoped
+       outcomes exhibiting the factor) and corroboration (saturating in case count),
+       capped by the policy ceiling. NOT an average of attribution confidences; NOT
+       a causation probability. Replaceable without changing the Knowledge shape. */
+    function patternConfidence(share, caseCount) {
+      var saturation = Math.min(1, caseCount / (2 * minCases));
+      return Math.round(ceiling * share * saturation * 100) / 100;
+    }
+
+    function currentSignal(patternId) {
+      var s = liveHeads("learning-signal").filter(function (k) { return k.finding.payload.patternId === patternId; });
+      return s.length ? s[s.length - 1] : null;
+    }
+
+    return {
+      deriveSignals: function () {
+        var result = { created: [], superseded: [], noop: 0, belowMin: 0 };
+        var attrs = liveHeads("attribution");
+        specs.forEach(function (spec) {
+          var groups = {};   // scopeEntityId -> { entity, allErr:{}, factorErr:{}, cases:[] }
+          attrs.forEach(function (a) {
+            if (spec.dimension && a.finding.payload.dimension !== spec.dimension) return;
+            (a.subject || []).forEach(function (e) {
+              if (e.type !== spec.scopeEntityType) return;
+              var g = groups[e.id] || (groups[e.id] = { entity: e, allErr: {}, factorErr: {}, cases: [] });
+              g.allErr[a.finding.payload.errorId] = true;
+              if (a.finding.payload.factor === spec.factor) {
+                g.factorErr[a.finding.payload.errorId] = true;
+                g.cases.push(a);
+              }
+            });
+          });
+          Object.keys(groups).forEach(function (entityId) {
+            var g = groups[entityId];
+            var caseCount = Object.keys(g.factorErr).length;   // distinct outcomes exhibiting the factor
+            if (caseCount < minCases) { if (caseCount > 0) result.belowMin++; return; }
+            var denom = Object.keys(g.allErr).length;
+            var share = Math.round((caseCount / Math.max(1, denom)) * 100) / 100;
+            var confidence = patternConfidence(share, caseCount);
+            var impact = Math.round(median(g.cases.map(function (a) { return a.finding.payload.strength; })) * 100) / 100;
+            var patternId = spec.factor + "|" + spec.scopeEntityType + "|" + entityId + "|" + (spec.dimension || "*");
+            var caseIds = g.cases.map(function (a) { return a.id; }).sort();
+            var finding = {
+              kind: "learning-signal",
+              summary: "Across " + caseCount + " " + spec.factor + "-related attribution case(s) scoped to " +
+                spec.scopeEntityType + " " + entityId + (spec.dimension ? (" on " + spec.dimension) : "") +
+                ", " + spec.factor + " attribution appears repeatedly associated with the observed error " +
+                "(pattern confidence " + confidence + ", impact " + impact + "). Descriptive association, not causation.",
+              confidence: confidence,
+              payload: {
+                patternId: patternId, factor: spec.factor,
+                population: { type: spec.scopeEntityType, id: entityId },
+                dimension: spec.dimension || null,
+                caseCount: caseCount, share: share, impact: impact, timeWindow: null,
+                limitations: [
+                  "descriptive association, not causation",
+                  "provisional pattern-confidence (policy " + SIGNAL_POLICY_VERSION + ")",
+                  "no recency or weighting applied"
+                ],
+                policyVersion: SIGNAL_POLICY_VERSION
+              }
+            };
+            var derive = {
+              subject: [g.entity],
+              evidence: g.cases.map(function (a) { return { id: a.id, role: "case" }; }),   // attributions only
+              finding: finding, derivedBy: "LearningSignalEngine"
+            };
+            var head = currentSignal(patternId);
+            if (head) {
+              var p = head.finding.payload;
+              var prevIds = (head.evidence || []).map(function (e) { return e.id; }).sort();
+              var unchanged = p.caseCount === caseCount && p.share === share &&
+                head.finding.confidence === confidence && p.impact === impact &&
+                JSON.stringify(prevIds) === JSON.stringify(caseIds);
+              if (unchanged) { result.noop++; return; }
+              derive.supersedes = head.id;
+              result.superseded.push(K.derive(derive));
+              return;
+            }
+            result.created.push(K.derive(derive));
+          });
+        });
+        return result;
+      }
+    };
+  }
+  function deriveSignals(repositories, opts) { return LearningSignalEngine(repositories, opts).deriveSignals(); }
+
   window.LearningEngine = {
     ErrorEngine: ErrorEngine,
     deriveErrors: deriveErrors,
@@ -279,6 +430,11 @@
     registerComparison: registerComparison,
     comparisons: comparisons,
     AttributionEngine: AttributionEngine,
+    LearningSignalEngine: LearningSignalEngine,
+    deriveSignals: deriveSignals,
+    registerPattern: registerPattern,
+    patterns: patterns,
+    SIGNAL_POLICY_VERSION: SIGNAL_POLICY_VERSION,
     SELECTION_RULE: SELECTION_RULE,
     SELECTION_RULE_VERSION: SELECTION_RULE_VERSION,
     util: { getPath: getPath }
