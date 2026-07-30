@@ -126,11 +126,15 @@ salesperson, technician, repair order, purchase order, factory allocation, vendo
 store, region, or campaign. One fact may point at several. This removes future
 coupling and lets the Timeline expand beyond a single VIN with no redesign.
 
-### 0.12 Evidence, not links (`about → evidence`)
-Every fact carries `evidence:[factId,…]` — *"I exist because of these other
-facts."* This is deliberately framed as **evidence**, not generic relationships,
-because Knowledge (Learning) consumes evidence. It is one of the most important
-fields in the platform.
+### 0.12 Evidence, not links — with roles (`about → evidence`)
+Every record carries `evidence:[{id, role}, …]` — *"I exist because of these other
+records, each in a stated capacity."* Framed as **evidence**, not generic
+relationships, because Knowledge consumes evidence. Roles are **mandatory** (a bare
+id normalizes to `{id, role:null}`) so a future AI understands *why* each piece of
+evidence exists, not merely that it does. Role vocabulary is an extensible registry:
+`belief · reality · cause · case · prior · input · supersedes-basis` (extendable).
+Evidence may reference Business Facts and other Knowledge records alike. One of the
+most important fields in the platform.
 
 ### 0.13 Observations record truths, not events
 An Observation answers *"What became true?"* — not *"What happened?"*. Truths remain
@@ -142,8 +146,60 @@ apart so Observation never drifts into being another event log.
 ### 0.14 The Timeline is a projection, never an object
 "Show me every Business Fact involving this entity" is a **query** across the fact
 collections (`forEntity`), not a stored object. The Timeline owns nothing and
-duplicates nothing. Guard every relationship against making that projection
-impossible; if a design would, stop and surface it.
+duplicates nothing. Knowledge extends it with a second hop: `forEvidence` over the
+fact ids. Full institutional memory of an entity = **facts(entity) ∪
+knowledge(evidence ∈ facts(entity))** — all projection, no stored Timeline. Guard
+every relationship against making that projection impossible; if a design would,
+stop and surface it.
+
+### 0.15 Every decision is judged against the operating-system future
+Two questions are now permanent parts of every architecture review:
+1. *"If this becomes the operating system for a dealership, dealer group,
+   franchise, or enterprise, does the architecture support that without redesign?"*
+2. *"If a completely different optimization engine were written five years from
+   now, would it naturally plug into this architecture?"*
+If either answer is no, stop and surface it before coding. The Learning Engine is
+merely the **first** intelligence layer; the platform is an institutional operating
+system built around business memory.
+
+### 0.16 Dealership-first; external data is optional evidence, never a requirement
+The platform must become highly profitable using **nothing but one dealership's own
+historical operating data**. Competitor data, market/regional/auction/OEM/pricing
+feeds are optional *future evidence sources* — never architectural requirements, and
+we never redesign around them. Business test for every object: *"If I copied this
+software into another dealership tomorrow with no outside data, would it still get
+smarter over time?"* If no, stop and explain why. (External feeds, if ever added,
+enter as additional **Facts** the Knowledge layer may cite as evidence.)
+
+### 0.17 The architecture assumes incomplete knowledge
+Nothing may assume complete information. Facts arrive gradually; observations arrive
+late; confidence and understanding evolve. A missing fact is **not** an error — it
+is lower confidence or a *pending outcome* (a query, never a stored state). Every
+intelligence layer must produce the best supportable recommendation from whatever
+facts exist now, and improve by **recomputing (superseding)** as more facts appear.
+No thinking layer may block on a fact that has not yet arrived.
+
+### 0.18 Production-ordering concepts are native citizens (validation tests, not built now)
+Factory allocations, incoming orders, pipeline inventory, dealer trades, vehicle
+substitutions, allocation timing, production scheduling, and arrival forecasting are
+used as **architecture validation tests**: today's model must already express them.
+They are Decision/Observation **kinds** (registry entries) on entity subjects — no
+new object type. Entity-continuity rule: facts about one physical unit across its
+lifecycle (allocation → order → VIN → inventory) share a **stable `unit` entity
+ref**; VIN is an *additional* ref added when assigned. When a stable id was not known
+early, a small **entity-alias** Business Fact bridges the identities so the Timeline
+still unifies. If any future decision would make these harder, stop and surface it.
+
+### 0.19 The Engine Contract (how any intelligence engine plugs in)
+Every intelligence engine — Learning today, and any future optimization engine —
+obeys one contract so it plugs in without touching existing engines:
+- **reads** Business Facts (via `forEntity`/`forEvidence`) and *approved* calibrations;
+- **emits** Decision Records (recommendations) and Knowledge Records (understanding),
+  registering its own kinds;
+- **never** calls another engine for judgment, and **never** mutates another engine's
+  outputs or writes directly into valuation (Rules 4, 6, 7).
+An engine is replaceable (§Rule 10) precisely because nothing outside this contract
+depends on it.
 
 ---
 
@@ -389,14 +445,15 @@ Do not move to the next layer until the previous passes architecture verificatio
 3. **`PMRecords` foundation + platform Decision Record** (typed envelope, lifecycle events, `describe()`) — ✅ DONE (`build/records.js`)
 3b. **Foundation refactor** — Business-Fact family (Rule 14), `facts:{}` isolation + structural immutability, canonical entity `subject`, `evidence`, business-question descriptors, unified `forEntity` — ✅ DONE (`build/records.js`, `build/repository.js`)
 4. **Observation Store** ("What became true?", append-only truths, typed-kind registry, entity subject, evidence, `appendEvent` blocked) — ✅ DONE (`build/records.js`)
-5. **Error Engine** (typed registry + immature classifier) — Learning Engine *thinking* (reintroduces `learning_engine.js`)
-6. **Learning Signal Engine** (confidence + provenance, non-destructive versions)
-7. **Calibration Recommendation surface** (recommendation-only, approval-gated)
+   — Business-Fact family complete (believed / decided / became-true).
+5. **Foundation enhancement** — `payloadKey`, `forEvidence` projection, evidence normalization to `{id,role}` across both families (§9.4) — ◀ next
+6. **`PMKnowledge` record family** — one generalized Knowledge Record (kinds: error/attribution/learning-signal), first-class confidence, role-typed evidence, supersedes; **object model only, no thinking** (§9.1)
+7. **Learning Engine thinking** (separate held commits): Error from (snapshot, observation) → Attribution → Learning-Signal detection → Calibration emitted as a Decision Record; each honors the Engine Contract (§0.19), never writes into valuation.
 
 > Note: `build/learning_engine.js` (from the Layer 2 commit) was removed in the
 > refactor — there is no Learning *thinking* code yet. The Learning Engine returns
-> in step 5 (Error Engine) as a consumer of platform records, cleanly separated
-> from the platform record foundation.
+> in step 7 (thinking) as a consumer of platform records, cleanly separated from the
+> platform record foundation and the `PMKnowledge` record family.
 
 Guarantee: valuation and retirement output remain byte-identical throughout Step 6.
 The Learning Engine only observes; it changes no prediction until an approved
@@ -506,3 +563,86 @@ the service + record contract and is validated headlessly.
 
 These recommendations extend provenance/identity only; none add business logic to
 the repository or change any engine's computation.
+
+---
+
+## 9. Knowledge family — concrete design (approved, pre-implementation)
+
+The Knowledge family is the **understanding** half of Institutional Memory (§0.10):
+recomputable, confidence-weighted interpretation derived from Business Facts. It is
+a separate family, `PMKnowledge`, built on the **same** `PMRecords.foundation`
+(identity, provenance, evidence, supersedes, integrity, `describe`) — one machinery,
+two families, physically distinct so a fact-consumer can never mistake Knowledge for
+a Fact.
+
+### 9.1 One generalized Knowledge Record (typed envelope)
+Like Decision Records, Knowledge is **one** record type with a typed envelope, not
+four object types.
+
+```
+{ id:"know-<ULID>", objectType:"Knowledge Record", category:"knowledge", createdAt,
+  subject:[{type,id},…],                 // canonical entities (same as facts)
+  evidence:[{id, role},…],               // facts AND other knowledge, role-typed (§0.12)
+  supersedes:null,                       // recompute => new version; chain stays visible (§0.7)
+  finding:{ kind, summary, payload },     // the frozen understanding (payloadKey = "finding")
+  confidence: 0.0–1.0,                    // first-class trust in THIS record (§F7)
+  interpretations:[], events:[],          // inherited (rarely used by knowledge)
+  provenance:{ …versions…, sourceData, factsHash } }
+```
+
+- **kind registry:** `error · attribution · learning-signal · forecast · confidence ·
+  risk` (extendable; a new intelligence engine registers its own kinds — §0.19).
+- **`payloadKey`:** the foundation's immutable payload slot is named per family —
+  `facts` for Business Facts, **`finding`** for Knowledge (business language, Rule 11).
+- **Confidence is first-class** on every Knowledge record; statistical trust must
+  exist before anything may influence valuation.
+- **Supersedes, never edits (§0.7):** a recomputation emits a new immutable version
+  linked to the prior; the chain shows how understanding evolved. *Facts are never
+  recomputed; Knowledge can be.*
+
+### 9.2 Evidence with roles (mandatory — §0.12)
+- **Error** → evidence `[{id:snapshotId, role:"belief"}, {id:observationId, role:"reality"}]`.
+- **Attribution** → `[{id:errorId, role:"cause"}]`.
+- **Learning Signal** → `[{id:errorId, role:"case"}, …]` (the many cases it generalizes).
+Roles let a future AI read *why* each piece of evidence exists without knowing the
+kind's internals.
+
+### 9.3 Calibration is a Decision Record, not Knowledge
+The **insight** ("AWD premium appears overstated ~$650, 94% confident") is a
+**Learning Signal** (Knowledge). The **calibration recommendation** ("reduce AWD
+premium by $650", awaiting approval) is a **Decision Record** `kind:"calibration"`,
+reusing the existing approval **lifecycle events** (Generated→Accepted/Rejected).
+This avoids a duplicate approval mechanism and honors Rules 6/7: Valuation consumes
+only an *approved* calibration, as a separate event, never auto-mutation.
+
+### 9.4 New foundation capabilities this family needs
+- **`payloadKey`** option (facts→`facts`, knowledge→`finding`); `verify`/`describe`
+  generalize to it.
+- **`forEvidence(id)`** projection (reverse of `evidence`): "what records cite this
+  one?" — parallels `forEntity`. Answers "why did this vehicle/allocation lose
+  money?" and "which recommendations outperform?" via relationships, no special-case
+  code.
+- **Evidence normalization** to `[{id, role}]` across *both* families (bare id →
+  `{id, role:null}`) — done now while no data is persisted.
+
+### 9.5 What the New Vehicle Inventory future gets for free
+Every question ("which incoming vehicles are likely mistakes / which allocations to
+trade / which units should be loaners / which orders to modify / which deserve
+pre-arrival marketing / which decisions historically made the most profit / which
+managers outperform / which recommendations to trust over policy") is answerable as:
+Decision/Observation **kinds** (registry) + entity subjects + `forEntity`/
+`forEvidence` projections + confidence — with **no new object type and no new
+philosophy**. "Likely mistakes" runs on Predictions *before* any Observation exists
+(§0.17 incomplete knowledge). Entity-continuity (§0.18) keeps allocation→order→VIN
+one unit in the Timeline.
+
+### 9.6 Implementation slices (each held, each byte-identical valuation)
+1. **Foundation enhancement** — `payloadKey`, `forEvidence`, evidence normalization
+   to `{id,role}` across both families. No new records; all existing checks re-pass.
+2. **`PMKnowledge` record family** — generalized Knowledge Record (kinds:
+   error/attribution/learning-signal), first-class confidence, role-typed evidence,
+   `supersedes`. **Object model only — no thinking.**
+3. **Learning Engine thinking (separate later commits)** — compute Error from a
+   (snapshot, observation) pair; then Attribution; then Learning-Signal detection;
+   then Calibration emitted as a Decision Record. Each honors the Engine Contract
+   (§0.19) and never writes into valuation.
