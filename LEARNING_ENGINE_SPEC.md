@@ -171,6 +171,13 @@ software into another dealership tomorrow with no outside data, would it still g
 smarter over time?"* If no, stop and explain why. (External feeds, if ever added,
 enter as additional **Facts** the Knowledge layer may cite as evidence.)
 
+**Portability over premature scale.** Remain dealership-first; do **not** optimize
+for multi-store / franchise / enterprise scale until the architecture naturally
+requires it. The bar is portability, not pre-built scale: if a future multi-store,
+franchise, or enterprise version can reuse today's core **without rewriting it**, the
+abstraction level is correct. Build for one store; ensure every abstraction is
+portable.
+
 ### 0.17 The architecture assumes incomplete knowledge
 Nothing may assume complete information. Facts arrive gradually; observations arrive
 late; confidence and understanding evolve. A missing fact is **not** an error — it
@@ -218,11 +225,28 @@ records — never in preference to a real one.
 
 The **Identity Adapter** (per feed/DMS) is responsible for identity: it
 - **discovers** every identifier the business system supplies,
-- **preserves** each exactly as received (no normalization that loses information),
+- **preserves** each raw identifier **exactly as received** — original business
+  identifiers are permanent business history and are never normalized away; derived
+  identities are additive and never replace the originals (audit + future
+  reconciliation always have the raw values),
 - **understands** stated relationships between identifiers,
 - **resolves** continuity from overlapping identifiers, and
 - **never invents** an identifier unless the source genuinely offers no way to relate
   records.
+
+**Import-time only (separation of ingestion from business modeling).** The Identity
+Adapter runs entirely at ingestion. By the time a record reaches `PMRecords` it
+already carries the **complete `subject` identity set**; the Business-Fact model
+**never knows how identifiers were resolved**. This keeps data ingestion and business
+modeling cleanly separated (and lets the adapter be replaced per DMS without touching
+any engine).
+
+**Identity relationships carry provenance (design-open, not built now).** When the
+adapter concludes that two identifiers denote the same object, the architecture must
+never *prevent* answering: *why were these linked? which identifiers created the
+link? which import/feed established it? how confident is it?* An adapter-asserted
+link is itself expressible as an **alias / bridge Business Fact** (§0.21) with normal
+provenance — so this is naturally supported the day it is needed.
 
 ### 0.21 Model certainty honestly (never silently merge)
 If two records cannot be **proven** to represent the same business object, the
@@ -231,6 +255,11 @@ overlapping business identifiers, (b) prove it through an explicit **alias / bri
 Business Fact, or (c) **leave the relationship unresolved** until more facts exist.
 *An unresolved relationship is always preferable to an incorrect one.* This is a
 direct application of §0.17 (incomplete knowledge) to identity.
+
+**Unresolved identity is a first-class outcome, not a failure.** When the software
+cannot prove two records describe the same object, leaving them separate is the
+*correct, intentional* result — future evidence may connect them later. The platform
+must never silently guess to avoid an "unresolved" state.
 
 > **Data note (current feeds, observed):** Serial exists only in the inventory feed
 > and is **two identifiers under one name** — a 6-digit **VIN sequential number**
