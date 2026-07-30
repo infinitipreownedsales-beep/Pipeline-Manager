@@ -1,0 +1,302 @@
+# Architecture
+
+Authoritative reference for the Pipeline-Manager tool. Describes the **current**
+state of the codebase. Update this file as each migration phase completes.
+
+The app is a single offline HTML file (`Pipeline-Manager.html`) built by
+`build/gen_pipeline_html.py`, which inlines, in order:
+`app_template.html` + `app_engine.js` + `app_render.js` + `app_wiring.js` +
+`loaner_engine.js` (as `window.LoanerIntel` / `window.DEPR`), plus an embedded
+10-year used-car history CSV and roster/sample data.
+
+`pipeline_manager/` is a Python mirror of the **new-vehicle order engine** used as
+the automated validation backbone (39 tests). It is **not** a full mirror — the
+loaner financial logic is currently JS-only.
+
+---
+
+## Target layers
+
+| Layer | Responsibility | Depends on |
+|-------|----------------|-----------|
+| **L0 Adapters** | Parse/normalize raw input (inventory, sales, DMS fleet export, used-sold export, incentives, color map, ledger). | — |
+| **L1 Historical Analytics** | Resale history: `compsRange`, `age_curves`, `colorGroup`, `salesRate`. (`window.LoanerIntel`.) | L0 |
+| **L2 Financial Kernel** | Domain-agnostic financial **primitives** only: projected resale, write-down, factory incentives, holding cost. Deterministic, side-effect free, no DOM, no globals, unit-testable, Python-portable. Never contains business rules. | L1 |
+| **L3 Business Domains** | Each domain composes kernel primitives + its own rules. Business rules never migrate into the kernel. | L2, L4 |
+| **L4 Decision Engines** | Generic algorithms — rank, optimize, compare, score, forecast — parameterized by a domain-supplied metric. Never contain business rules. | (pure) |
+| **L5 Orchestration** | `runEngine` assembles the `res` object consumed by views. | L3 |
+| **L6 Views** | Render prepared data only. No calculations, recommendations, timing, or business rules. | L5 |
+
+---
+
+## Current module ownership
+
+- **L0 Adapters** — `app_engine.js`: `loadInventory`, `loadSales`. `app_wiring.js`:
+  `importFleet`, `readSold`, `readFleet`, `readIncentives`, `readColorMap`, ledger
+  (`readLedger`/`saveLedger`/`ledgerArray`), `getSettings`.
+- **L1 Analytics** — `loaner_engine.js`: `compsRange`, `age_curves`, `colorGroup`,
+  `colorGroupAnalytics`, `salesRate`, `predictor` *(legacy — see debt)*.
+- **L2 Kernel (primitives, today)** — `_retailAt` (resale), `_writedownAmt`,
+  `incentive`/`modelRebate` (entry-month aware), `_interpRet`, comp helpers
+  (`_wmedComps`, `_wpctComps`).
+- **L3 Domains (today)** —
+  - **Service Loaner**: `serviceLoanerEconomics` (cost model + opportunity;
+    composes L2 primitives — owns velocity/ICV-at-entry/recon), `_retireTiming`
+    (the sole retirement-timing engine), `_fleetCostInfo`, `loanerFleet`,
+    `serviceSelection`, `_diversify`, `acquisitionRecs`, `policyExplorer`,
+    `loanerOutcomes`.
+  - **Retail Ordering** (separate, mature): `buildLines`, `computeMetrics`,
+    `computePositions`, `projectAtArrival`, `priority`, `resolveWindows`.
+  - **Executive Demo** (partial): `computeDemoReturns`, `executiveDemos`.
+- **L4 Decision Engines (today)** — `serviceSelection`/`_diversify` (ranking),
+  `_retireTiming` (optimize-over-months), `loanerOutcomes` (scoring). *Not yet
+  extracted into generic, domain-agnostic algorithms.*
+- **L5 Orchestration** — `runEngine` (`app_engine.js`).
+- **L6 Views** — `app_render.js`: `render` and section renderers
+  (`serviceSelectionRender`, `fleetFlowRender`, `outcomesRender`, `executiveReport`,
+  `loanerRender` *(legacy board — see debt)*, order/overstock/demo/seasonality
+  sections).
+
+---
+
+## Data flow
+
+```
+raw text ─▶ L0 adapters ─▶ getSettings(s) + window.DEPR (L1)
+                              │
+                    runEngine(inv, sales, s, today)  (L5)
+                              │  builds res:
+                              ├─ res.selection      (Service Loaner: rank in-stock)
+                              ├─ res.loanerFleetPlan (fleet + per-unit retire timing)
+                              ├─ res.loanerOutcomes  (predicted vs actual)
+                              ├─ res.acquisitionRecs (what to order)
+                              ├─ res.lines / buildSeq (Retail Ordering)
+                              └─ res.demo…           (Executive Demo)
+                              │
+                         render(res)  (L6)  ── reads res.* only
+```
+
+---
+
+## Single sources of truth
+
+| Calculation | Established SoT | Status |
+|-------------|-----------------|--------|
+| Projected resale | `_retailAt` (comps × continuous age curve × color premium) | **Partial** — legacy `deprResale`/`predictor` still feed the legacy loaner board. Convergence pending. |
+| Write-down | `_writedownAmt` | ✅ Single. |
+| Factory incentive | `incentive` (entry-month aware) | ✅ Single (legacy per-model fallback kept for simple-mode entry). |
+| Retirement timing | `_retireTiming` | ✅ Single. Legacy `loanerTiming` removed (Phase 1); the legacy board now consumes `_retireTiming`. |
+| Recommendation ranking | `serviceSelection` / `_diversify` | **Partial** — `acquisitionRecs` and legacy `allCandidates` scoring overlap. |
+| Fleet flow / cadence | `loanerFleet` | ✅ Single. |
+| Predicted-vs-actual | `loanerOutcomes` | ✅ Single. |
+
+---
+
+## Current business domains
+
+- **Service Loaner** — built (hero workflow). Places units, times retirement,
+  recommends acquisition, scores forecast against actuals.
+- **Retail Ordering** — built, mature, mirrored in Python (39 tests).
+- **Executive Demo** — partial (returns + report).
+- **Wholesale / Used / CPO / CTP / Acquisition** — not yet distinct domains.
+
+---
+
+## Migration status
+
+Target = one financial kernel of pure primitives; Service Loaner economics live in
+the Service Loaner domain; generic decision engines; one loaner screen.
+
+- **Phase 0 — ✅ complete.** Removed the dead "hero recommendation / optimization
+  mode" subsystem (`serviceLoanerRecs`, `serviceRecReason`, `optimizeStrategy`,
+  `deMoney`, `heroRecommendation`, `detailPanel`, `fbRow`/`fbRows`/`srcBadge`,
+  `outMoney`) — unreferenced by any live render path.
+- **Phase 1 — ✅ complete.** Established the L2/L3 boundary: `unitDifference` →
+  `serviceLoanerEconomics` (L3, composes L2 primitives `_retailAt`/`_writedownAmt`/
+  `incentive`); layer banners added. Deleted `loanerTiming`; `_retireTiming` is now
+  the sole retirement-timing engine and the legacy board consumes it. All Service
+  Loaner outputs verified byte-identical before/after.
+- **Phase 2 — ✅ complete (no code change).** Evaluated extracting generic
+  decision engines (`rankBy`/`optimizeMonth`). None met the extraction bar: the
+  month-optimizer (`_retireTiming`) and rank-assignment (`serviceSelection`) each
+  have a single consumer, and the three rankers use *different* metrics
+  (`difference` vs `acquisitionRecs`' history score), so a shared ranker can't
+  reduce duplication until the metric is unified — which changes outputs and is
+  therefore **deferred into Phase 3**. The prior real duplicate (`optimizeStrategy`)
+  was already removed in Phase 0. Extraction would have been a framework over
+  single consumers, so it was correctly declined.
+- **Phase 3 — ⏸ paused; scope to be reconsidered.** Product review concluded that
+  acquisition and placement are **separate business decisions** (see Decision
+  Record below), so the earlier "unify the ranking metric / extract a generic
+  ranker" idea is **withdrawn**. Remaining legitimate Phase 3 cleanup (delete the
+  legacy board, preserve per-model best-buys as a grouping, rewire `buildSequence`
+  intake) is deferred until scope is re-set. No code changed.
+- **Phases 4–5 — pending.** (4) Slim `allCandidates`; delete `loanerEconomics`/
+  `deprResale`. (5) Migrate the depreciation explorer off `predictor`; delete
+  `predictor`/`getComps`.
+
+## Accuracy fixes
+
+- **AF-1 (CPO need was non-monotonic — fixed).** `computeArrivalWindows` measured
+  the production→arrival lead from *all* inventory, including inbound units. Adding
+  confirmed future-production units perturbed the recency-weighted lead → moved the
+  seasonal target → could *raise* the need for the very window being fulfilled
+  ("moving goalposts"). Fixed by measuring the lead **only from arrived (on-lot)
+  units**, so the window — and thus the order target — is independent of the orders
+  being planned. Per-config need is now provably monotonic in added inventory
+  (adding a qualifying unit can only lower it). The window's sole consumers are
+  `buildLines` need + `seasArr`; verified isolated (grid-parity test pins windows;
+  auto-window and residual-inbound tests still pass). Mirrored in `engine.py`.
+
+## Decision Record
+
+- **DR-1 (Acquisition vs. Service Loaner placement are separate decisions).**
+  Acquisition ranks the config space (incl. not-owned) on used-car desirability +
+  coverage/gap + repeatability — a forward capital decision. Placement selects
+  among owned, sunk-cost units on the full loaner P&L. They share the L2 kernel
+  and history data, not an objective function. **Their metrics must NOT be unified
+  without a separate, approved business case.** Ranking acquisition by the loaner
+  `difference` would drop its coverage behavior and degrade the decision.
+- **DR-2 (No generic ranker abstraction yet).** With separate metrics and single
+  consumers, a shared `rankBy`/`optimizeMonth` would be a framework over one
+  caller each. Do not extract until a real second consumer of identical logic
+  exists.
+- **DR-3 (Model visibility is a grouping, not a separate engine).** If/when the
+  legacy board is removed, per-model "best loaner buys" should be preserved as a
+  model filter/grouping on a single ranking — not a separate `loanerScore` system.
+- **DR-4 (`acquisitionRecs` is a loaner lens, permanently isolated from ordering).**
+  `acquisitionRecs` may exist as a Service-Loaner placement/reporting lens and may
+  use depreciation, used gross, resale, and retirement economics to say *"this
+  available unit is a better loaner candidate."* It must **never** influence New
+  Retail demand, factory ordering, allocation, or the build sequence — it cannot
+  say *"therefore order more of this configuration."* (Verified: it is computed
+  independently and consumed only by the loaner executive report; it never feeds
+  need/order-priority/build sequence.)
+- **DR-5 (Dealer Trade is two different systems).** *Historical completed Dealer
+  Trades* = demand intelligence (a real unit left inventory — actual consumption).
+  *Future Dealer Trade acquisition recommendations* = a supply acquisition path
+  (what to request when another dealer asks for one of ours; reads need only).
+  These are different systems and must not be merged.
+- **DR-6 (One Vehicle Valuation Engine; the attribute-premium registry is its ONLY
+  extension point).** `_retailAt` is the single projected-resale engine for the
+  whole dealership. Every resale adjustment is an entry in the `_ATTR_PREMIUMS`
+  registry (`Base + exterior + interior + future attribute premiums`). **Do not**
+  build a second valuation path, duplicate a premium calculation, or write
+  feature-specific resale logic anywhere else — extend the registry instead. Each
+  premium stays independently explainable and carries its own sample count +
+  confidence.
+
+## Demand signal hierarchy (New Retail)
+
+New Retail demand is a **weighted blend of demand signals** — never loaner /
+depreciation / preowned economics (those are supply/placement, not demand). In
+priority order:
+
+1. **Customer retail sales** — *primary demand truth.* Actual consumer purchases
+   (Speed-to-Sell). Highest weight.
+2. **Completed Dealer Trades** — *actual market consumption.* A unit physically
+   left inventory because another market participant created real demand, so it
+   stays **full-weight**, graded exactly like a showroom sale (today: outbound
+   trade log folded into `total`/`r90`/`r180`/`prate`/momentum). Not weakened.
+3. **Dealer Trade Requests** — *leading scarcity / desirability signal.* Other
+   dealers requesting a configuration. **Lower weight** than a sale; it does **not**
+   count as a sale and does **not** alter historical sales metrics. It raises a
+   config's desirability / stocking priority and flags where supply is
+   insufficient — it can influence future configuration mix, but it can never
+   create fake sales history.
+4. **Speed-to-sell** — velocity confirmation (how fast a unit sells once on lot).
+5. **Seasonality** — timing adjustment to the arrival window.
+
+**Anti-double-count rule:** a Dealer Trade Request is a *leading* indicator only.
+If a request converts into a completed Dealer Trade, the **request signal is
+removed** and only the completed-trade event is retained — the same interest is
+never counted twice (once as a request, once as a completed trade).
+
+Implementation note (pending, Step 2.5): (2) already exists (`config.trades` →
+`compute_metrics`, full weight — keep). (3) is a **new, separate** lower-weight
+input (`dealer_trade_requests` + a `dealer_trade_request_weight` setting),
+mirrored in `app_engine.js`, with the anti-double-count rule enforced at ingest.
+The *future Dealer Trade acquisition recommendation* (DR-5, supply path) is
+separate again and lands in the supply-path layer (Step 3), reading need only.
+
+## Boundary corrections
+
+- **BC-1 (New ordering answers only to New Retail demand — Step 1, ✅ done).**
+  The retail build sequence previously reserved factory allocation for the loaner
+  fleet (`eff_alloc = allocation − loaner_reserved`), letting preowned economics
+  shape the factory order. Removed: `reports.build_sequence` /
+  `app_engine.buildSequence` are now retail-only on the **full** allocation, with
+  no fleet reservation and no loaner keys in the ordering output. Loaner fleet
+  placement is preserved as a loaner-side recommendation (`res.loanerFleetOrder`),
+  shown in the Loaner section, fully decoupled from ordering. Demand, Speed-to-Sell,
+  seasonality, order-priority ranking, and need are unchanged. Test rewritten to
+  assert activating the loaner program changes **zero** units of the retail build
+  sequence. (39/39 green.)
+
+## Vehicle Valuation Engine
+
+A reusable, dealership-wide engine responsible **only** for projected market value.
+`_retailAt` is that engine; nothing else projects resale.
+
+- **Single engine, deterministic, explainable.** One input → one output; run twice,
+  same numbers. Every projected value decomposes into an auditable build-up.
+- **The build-up:** `Projected Resale = Base Value + Exterior Premium + Interior
+  Premium + Future Attribute Premiums`. `base + Σ premiums = final`, exactly — never
+  a hidden blended adjustment.
+- **Attribute-premium registry (`_ATTR_PREMIUMS`) is the ONLY extension point.** Each
+  attribute independently computes a capped (±15% of base) median price delta of
+  matching comps vs. the rest, and carries its **sample count** and **confidence
+  (0–1)**. Additive under one combined guard; if clipped, premiums scale
+  proportionally so the breakdown still sums to the applied total.
+- **Future attributes extend the registry, never a parallel engine:** package
+  content, wheel package, drivetrain (AWD/RWD/4WD), option/technology/tow/
+  performance/appearance groups, certified status, previous-loaner status, mileage
+  bands, market scarcity, regional preference, historical retail performance, actual
+  dealer-gross history, and prediction-vs-actual learning adjustments.
+
+**Feature Complete vs. Data Limited (important — not a bug).** The **interior**
+premium is *feature-complete*: fully wired through the engine, validated to compute
+correctly on synthetic data, explainable, sample-counted, confidence-scored. It
+currently produces **$0** adjustment **only because production data has no usable
+interior history** for INFINITI QX (the column is blank, and inventory stores an
+interior *code* while history stores a *name*). This is an intentional **data
+limitation**, not an unfinished implementation. It activates automatically when
+reliable interior data — plus the documented interior code→group map — exists.
+Future contributors must not "fix" the $0 output; there is nothing to fix in the
+engine.
+
+## System architecture: a collection of reusable business engines
+
+Pipeline Manager is evolving from one application into independent business engines
+with defined responsibilities. These boundaries are **architectural contracts**: no
+engine may duplicate another's responsibility, each stays independently testable, and
+each should be reusable outside Pipeline Manager.
+
+| Engine | Responsibility (only this) |
+|--------|----------------------------|
+| **Demand Engine** | What inventory should exist (historical retail sales + speed-to-sell + seasonality). Never reads supply/loaner/valuation. |
+| **Supply Engine** | Which operational workflows can satisfy an identified shortage now (CPO/PPO/CTP/Dealer-Trade feasibility by cycle position + arrival). Never changes demand. |
+| **Vehicle Valuation Engine** | Projected market value via the attribute-premium registry (`_retailAt`). The single valuation source. |
+| **Service Loaner Engine** | Placement, retirement timing, write-down strategy, financial optimization — consumes the Valuation Engine; never touches New Retail demand/ordering/allocation. |
+| **Learning Engine** | Compares predictions against actual outcomes and produces calibration signals; never rewrites history or mutates the deterministic engines directly. |
+| **Reporting Engine** | Explains every recommendation in an auditable, management-friendly form. |
+
+## Noted micro-duplicates (not decision logic; addressed opportunistically)
+
+- Identical trim-head helpers: `_trimHead` (engine) and an inline `firstWord` in
+  `acquisitionRecs`. Zero-risk to merge but outside Phase 2's decision-engine
+  scope; fold into whichever phase next edits `acquisitionRecs` (Phase 3).
+- Two different `median` implementations (`_fleetCostInfo.med`,
+  `idealOrderRender.med`) — reconcile only when a phase already changes those
+  outputs, since they compute differently.
+
+## Known technical debt (live duplicates awaiting the phases above)
+
+- Two resale paths: `_retailAt` (new) vs `deprResale`/`predictor` (legacy board).
+- Multiple acquisition rankings: `serviceSelection`-derived vs `acquisitionRecs`
+  vs legacy `buildSeq.fleetUnits`.
+- Some math still executes in views (`unitStackInner` recomputes comps;
+  `fleetFlowRender` does date math) — to move into L5 output.
+- Standalone `Loaner-Intelligence.html` build (`loaner_render.js`,
+  `loaner_template.html`, `gen_loaner_html.py`) is superseded by the integrated
+  module.
