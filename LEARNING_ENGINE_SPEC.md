@@ -388,7 +388,7 @@ Do not move to the next layer until the previous passes architecture verificatio
 2. **Immutable Prediction Snapshot** — ✅ DONE, then refactored onto the shared `PMRecords` foundation (`build/records.js`)
 3. **`PMRecords` foundation + platform Decision Record** (typed envelope, lifecycle events, `describe()`) — ✅ DONE (`build/records.js`)
 3b. **Foundation refactor** — Business-Fact family (Rule 14), `facts:{}` isolation + structural immutability, canonical entity `subject`, `evidence`, business-question descriptors, unified `forEntity` — ✅ DONE (`build/records.js`, `build/repository.js`)
-4. **Observation Store** ("What became true?", append-only truths, typed-kind registry, entity subject, evidence) — ◀ next; a `PMRecords` composition on `repositories.observations`
+4. **Observation Store** ("What became true?", append-only truths, typed-kind registry, entity subject, evidence, `appendEvent` blocked) — ✅ DONE (`build/records.js`)
 5. **Error Engine** (typed registry + immature classifier) — Learning Engine *thinking* (reintroduces `learning_engine.js`)
 6. **Learning Signal Engine** (confidence + provenance, non-destructive versions)
 7. **Calibration Recommendation surface** (recommendation-only, approval-gated)

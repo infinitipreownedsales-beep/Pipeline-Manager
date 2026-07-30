@@ -850,6 +850,17 @@
    "write-down", "factory-order", "demand", "inventory"].forEach(function (k) { DECISION_KINDS[k] = true; });
   function registerDecisionKind(kind) { DECISION_KINDS[kind] = true; }
 
+  /* Observation-kind registry — TRUTHS that became real (§0.13), not events.
+     Each names something that is now permanently true of an entity. Extendable. */
+  var OBSERVATION_KINDS = {};
+  ["retailed", "wholesaled", "retired", "exported", "transferred", "written-off",
+   "sent-to-auction", "write-down-completed", "certification-completed",
+   "reconditioning-completed", "mileage-recorded", "sale-price-recorded",
+   "actual-gross-recorded", "actual-days-to-sale-recorded",
+   "actual-retirement-month-recorded", "actual-acquisition-path-recorded"
+  ].forEach(function (k) { OBSERVATION_KINDS[k] = true; });
+  function registerObservationKind(kind) { OBSERVATION_KINDS[kind] = true; }
+
   var byId = function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; };
 
   /* ===================== foundation() =====================
@@ -1091,15 +1102,56 @@
     });
   }
 
+  /* ============ Observations — "What became true?" ==========================
+     A Business Fact recording a truth that became real for an entity. NOT an
+     event, NOT a recommendation, NOT learning (§0.13). Append-only: a late
+     observation is a new record; a correction is a superseding observation —
+     never an edit and never a lifecycle event. Observations do not pre-link to
+     predictions or decisions; Learning correlates them by entity via the Timeline
+     projection. Their `evidence` therefore cites source facts only when one truth
+     literally rests on another (e.g. gross recorded rests on sale-price recorded),
+     not the recommendation they happen to fulfill. */
+  function Observations(repositories, opts) {
+    var base = foundation(repositories, "observations", Object.assign({
+      type: "Observation", idPrefix: "obs",
+      descriptor: {
+        purpose: function () { return "Records what actually became true for this entity."; },
+        truth: function (r) { return r.facts.observation ? { kind: r.facts.observation.kind, summary: r.facts.observation.summary } : null; }
+      }
+    }, opts || {}));
+    return Object.assign({}, base, {
+      observe: function (observation) {
+        observation = observation || {};
+        var o = observation.observation || {};
+        if (!o.kind) throw new Error("Observations.observe: observation.kind required");
+        if (!OBSERVATION_KINDS[o.kind]) throw new Error("Observations.observe: unregistered kind '" + o.kind + "'");
+        var facts = {
+          observation: { kind: o.kind, summary: o.summary || "", payload: o.payload || {} },
+          observedAt: observation.observedAt || null   // when the truth became real (may predate recording)
+        };
+        return base.create(
+          { subject: entityRefs(observation), evidence: observation.evidence || [], facts: facts },
+          { createdBy: observation.recordedBy || "Observation", sources: observation.sources, supersedes: observation.supersedes });
+      },
+      /* Truths are not events: block the lifecycle-event path structurally so an
+         Observation can never drift into an event log (§0.13). Correct via a new
+         superseding observation instead. */
+      appendEvent: function () { throw new Error("Observations are truths, not events; record a superseding observation to correct."); }
+    });
+  }
+
   window.PMRecords = {
     foundation: foundation,
     PredictionSnapshots: PredictionSnapshots,
     DecisionRecords: DecisionRecords,
+    Observations: Observations,
     DEFAULT_VERSIONS: DEFAULT_VERSIONS,
     LIFECYCLE_EVENTS: LIFECYCLE_EVENTS,
     DECISION_KINDS: DECISION_KINDS,
+    OBSERVATION_KINDS: OBSERVATION_KINDS,
     registerLifecycleEvent: registerLifecycleEvent,
     registerDecisionKind: registerDecisionKind,
+    registerObservationKind: registerObservationKind,
     util: { hash: hash, ulid: ulid, deepFreeze: deepFreeze }
   };
 })();
