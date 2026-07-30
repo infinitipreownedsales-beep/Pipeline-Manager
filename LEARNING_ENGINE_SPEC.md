@@ -519,7 +519,11 @@ Do not move to the next layer until the previous passes architecture verificatio
    — Business-Fact family complete (believed / decided / became-true).
 5. **Foundation enhancement** — `payloadKey`, `forEvidence` projection, evidence normalization to `{id,role}` across both families (§9.4) — ✅ DONE (`build/records.js`, `build/repository.js`)
 6. **`PMKnowledge` record family** — one generalized Knowledge Record (kinds: error/attribution/learning-signal), first-class descriptive confidence, role-typed evidence, supersedes; **object model only, no thinking** (§9.1) — ✅ DONE (`build/records.js`; `knowledge` collection)
-7. **Learning Engine thinking** (separate held commits): Error from (snapshot, observation) → Attribution → Learning-Signal detection → Calibration emitted as a Decision Record; each honors the Engine Contract (§0.19), never writes into valuation. — ◀ next (awaiting review of the Knowledge object model)
+7. **Learning Engine thinking** (separate held commits), each honoring the Engine Contract (§0.19), never writing into valuation:
+   - 7a. **Error** — belief vs reality over a registered comparison dimension; domain-blind engine + comparison registry; explicit selection provenance; supersede-on-recompute; unresolved-not-guessed. — ✅ DONE (`build/learning_engine.js`, inert producer)
+   - 7b. **Attribution** — assign errors to a responsible signal (Knowledge). — ◀ next
+   - 7c. **Learning-Signal detection** — aggregate patterns across errors/attributions, confidence-weighted (Knowledge).
+   - 7d. **Calibration** — emitted as a Decision Record; Valuation consumes only an *approved* calibration (the only slice that can influence valuation — last, most gated).
 
 > Note: `build/learning_engine.js` (from the Layer 2 commit) was removed in the
 > refactor — there is no Learning *thinking* code yet. The Learning Engine returns
