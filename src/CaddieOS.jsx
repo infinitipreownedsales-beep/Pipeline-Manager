@@ -6,6 +6,8 @@ import { dailyProfile, reliabilityFrom } from "./player.js";
 import { centerX, holeContext, lieAt } from "./geometry.js";
 import { decideShot } from "./decision.js";
 
+// Visible build/version stamp — shown in the header so the running tool is identifiable.
+const BUILD = "v11 · play-first engine";
 // CADDIE OS v10 — DYNAMIC ROUND ENGINE
 // Every shot logs the club actually used (tap to change, layups tappable).
 // Hot/cold detection per club · one-tap bench from the alert ·
@@ -550,6 +552,7 @@ export default function CaddieOS(){
   const [dir,setDir]=useState(null);
   const [decision,setDecision]=useState(null);  // the play-first engine's full recommendation
   const [obsv,setObsv]=useState(null);          // golfer's route observation (only when material)
+  const [showConf,setShowConf]=useState(false); // expand the six confidence components on the live card
   const [showRep,setShowRep]=useState(false);
   const [imp,setImp]=useState(null);        // staged import awaiting confirmation
   const [impErr,setImpErr]=useState("");
@@ -738,7 +741,7 @@ export default function CaddieOS(){
   };
 
   useEffect(()=>{ if(undoRef.current){undoRef.current=false;return;}   // Back-undo: keep the reopened result state
-    setAsked(false);setAskObs(false);setObsv(null);setDecision(null);setAwaitResult(false);setAwaitDrop(null);setDropPos(null);setShowAlt(false);setMapExpanded(false);setQYards("");setResDir("line");
+    setAsked(false);setAskObs(false);setObsv(null);setDecision(null);setShowConf(false);setAwaitResult(false);setAwaitDrop(null);setDropPos(null);setShowAlt(false);setMapExpanded(false);setQYards("");setResDir("line");
     if(!live||live.onGreen){setSel(null);return;}
     const hp=getPlan(CH[live.hole]);
     const bk=(!learned&&live.strokes<hp.length)?bookChipOf(hp[live.strokes].c,P):null;
@@ -822,7 +825,7 @@ export default function CaddieOS(){
       <div style={{background:"#1a3a2e",padding:"12px 14px 9px",position:"sticky",top:0,zIndex:50}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
-            <div style={{color:"#86efac",fontSize:9,letterSpacing:3,fontWeight:800}}>CADDIE OS</div>
+            <div style={{color:"#86efac",fontSize:9,letterSpacing:3,fontWeight:800}}>CADDIE OS <span style={{opacity:.6,letterSpacing:1,fontWeight:600}}>· {BUILD}</span></div>
             <div style={{color:"white",fontSize:14,fontWeight:800}}>{P.name} · {(live&&courses[live.course]?courses[live.course]:courses[courseSel]).name} <button onClick={()=>setTourn(!tourn)} style={{marginLeft:6,border:"none",borderRadius:6,padding:"2px 8px",fontSize:9,fontWeight:800,cursor:"pointer",verticalAlign:"middle",background:tourn?"#fcd34d":"rgba(255,255,255,0.14)",color:tourn?"#1a3a2e":"#86efac"}}>{tourn?"TOURN ON":"TOURN"}</button></div>
           </div>
           {live&&<div style={{textAlign:"right"}}>
@@ -1086,10 +1089,19 @@ export default function CaddieOS(){
                     <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:6}}>The picture</div>
                     <div style={{fontFamily:SERIF,fontSize:15,color:INK,lineHeight:1.5}}>{cap0(D.startLine)} · {D.trajectory} · {D.landing}.</div>
                     <div style={{fontFamily:SERIF,fontSize:14,color:PINE,marginTop:4,fontWeight:700}}>{D.cue}</div>
-                    <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:10}}>
-                      {[["you",c.player],["today",c.form],["course",c.course],["read",c.observation],["play",c.play],["swing",c.execution]].map(([l,v])=>pill(l,v))}
-                    </div>
-                    {c.overall!=null&&<div style={{color:MUTE,fontSize:11,marginTop:8}}>Overall <b style={{color:col(c.overall)}}>{c.overall}/100</b> — a plan is only as strong as its weakest link.</div>}
+                    {/* On-course, the live card stays a single clean read: one confidence dot + a
+                        tap to expand the six components. Everything is preserved in the record. */}
+                    {c.overall!=null&&<button onClick={()=>setShowConf(!showConf)} style={{marginTop:10,border:"none",background:"transparent",padding:0,cursor:"pointer",display:"flex",alignItems:"center",gap:7,color:MUTE,fontSize:12}}>
+                      <span style={{width:9,height:9,borderRadius:9,background:col(c.overall)}}></span>
+                      <span>Confidence <b style={{color:col(c.overall)}}>{c.overall}/100</b></span>
+                      <span style={{fontSize:11,opacity:.7}}>{showConf?"hide ▾":"details ›"}</span>
+                    </button>}
+                    {showConf&&<>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:10}}>
+                        {[["you",c.player],["today",c.form],["course",c.course],["read",c.observation],["play",c.play],["swing",c.execution]].map(([l,v])=>pill(l,v))}
+                      </div>
+                      <div style={{color:MUTE,fontSize:11,marginTop:8}}>Overall is the weakest link — a plan is only as strong as its shakiest part.</div>
+                    </>}
                   </div>;})()}
                 {tgt&&<div style={{marginTop:14,background:"#fff",borderRadius:16,padding:"12px 12px 6px",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
                   <div style={{textAlign:"center",color:INK,fontSize:14,fontWeight:700,marginBottom:2}}>Can't get home — aim here</div>
