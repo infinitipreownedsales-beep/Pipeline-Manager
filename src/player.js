@@ -49,12 +49,19 @@ export function reliabilityFrom(confidenceScore, stat) {
  *   opts.warmup : optional { fam: [warmUpShot, ...] } — pre-round range shots (same
  *                 shape as logged shots) that seed today's starting form. Absent = no-op.
  *   opts.fams   : optional extra families to include (so clubs with no shots yet appear).
+ *   opts.adj    : optional { fam: yds } — today's carry calibration (from live shots
+ *                 coming up short/long). Kept SEPARATE: longTerm.carry is untouched,
+ *                 today.carry / effCarry fold it in. Absent = no delta.
+ *   opts.benched: optional [fam] — clubs benched for today. They stay in the model
+ *                 (with benched:true + why) but are excluded from competitive execution.
  *
  * Returns { [fam]: {
  *   carry, sd,                       // permanent effective carry + dispersion
+ *   effCarry,                        // TODAY's carry = permanent + today's calibration (adj)
  *   confidence, reliability, state, streak, n,   // TODAY's blended form
- *   longTerm: { carry, sd, n },      // permanent ability, isolated
- *   today:    { confidence, n },     // this round only, isolated
+ *   benched, benchReason,            // benched-for-today flag (club STAYS in the model)
+ *   longTerm: { carry, sd, n },      // permanent ability, isolated (never moved by a round)
+ *   today:    { confidence, n, carry, adj },     // this round only, isolated
  *   warmup:   { n } | null,          // warm-up seed applied, if any
  * } }
  */
@@ -62,11 +69,15 @@ export function dailyProfile(profile, shots = [], opts = {}) {
   const carries = (profile && profile.carries) || {};
   const clubStats = (profile && profile.clubStats) || {};
   const warmup = opts.warmup || {};
+  const adj = opts.adj || {};                        // today's carry calibration, kept separate
+  const benched = new Set(opts.benched || []);       // clubs sat down for today (still modeled)
 
-  // Every family we might be asked about: carries + the 52° wedge + anything hit + warm-up + caller extras.
+  // Every family we might be asked about: carries + the 52° wedge + anything hit +
+  // warm-up + benched (they must NOT vanish) + caller extras.
   const fams = new Set(["52", ...Object.keys(carries), ...(opts.fams || [])]);
   (shots || []).forEach(s => { if (s && !s.pen) fams.add(famOf(s.c)); });
   Object.keys(warmup).forEach(f => fams.add(f));
+  benched.forEach(f => fams.add(f));
 
   const model = {};
   fams.forEach(fam => {
@@ -80,14 +91,20 @@ export function dailyProfile(profile, shots = [], opts = {}) {
     const todayOnly = warm.length ? clubConfidence(today, stat) : cc;
     const carry = carries[fam] != null ? carries[fam] : (stat ? stat.carry : null);
     const sd = stat ? stat.sd : null;
+    // Today's carry calibration folds in HERE only — permanent ability is untouched.
+    const delta = adj[fam] || 0;
+    const effCarry = carry != null ? carry + delta : null;
+    const isBenched = benched.has(fam);
 
     model[fam] = {
-      carry, sd,
+      carry, sd, effCarry,
       confidence: cc.score,
       reliability: reliabilityFrom(cc.score, stat),
       state: cc.state, streak: cc.streak, n: cc.n,
+      benched: isBenched,
+      benchReason: isBenched ? (cc.state === "cold" ? "cold today" : "benched for today") : null,
       longTerm: { carry, sd, n: stat ? stat.n : 0 },
-      today: { confidence: todayOnly.score, n: today.length },
+      today: { confidence: todayOnly.score, n: today.length, carry: effCarry, adj: delta },
       warmup: warm.length ? { n: warm.length } : null,
     };
   });

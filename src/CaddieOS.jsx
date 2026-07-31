@@ -3,6 +3,8 @@ import { whisper, humanClub, teeWhisper, puttWhisper, benchWhisper, clubConfiden
 import { MAPPED } from "./holes/index.js";
 import { recoveryPlan, isRecoveryLie } from "./recovery.js";
 import { dailyProfile, reliabilityFrom } from "./player.js";
+import { centerX, holeContext, lieAt } from "./geometry.js";
+import { decideShot } from "./decision.js";
 
 // CADDIE OS v10 — DYNAMIC ROUND ENGINE
 // Every shot logs the club actually used (tap to change, layups tappable).
@@ -358,45 +360,8 @@ const smoothPath=pts=>{ if(pts.length<2) return "";
   return d;};
 
 // Normalized centerline x (0..1, left→right) at depth d (0..1, tee→green).
-const centerX=(path,d)=>{const p=Array.isArray(path)&&path.length>=2?path:[[0,.5],[1,.5]];
-  for(let i=0;i<p.length-1;i++){const[d0,x0]=p[i],[d1,x1]=p[i+1];
-    if(d<=d1||i===p.length-2){const t=Math.max(0,Math.min(1,(d-d0)/((d1-d0)||1)));return x0+(x1-x0)*t;}}
-  return p[p.length-1][1];};
-
-// holeContext(h, d, x) — from a ball placed at normalized (d,x) on hole h, read the
-// location the engine needs: which side of the fairway, and whether trees on that
-// side block the line forward. This is the missing link that lets Recovery Mode
-// know WHERE the ball is, not just how far it sits from the green.
-function holeContext(h,d,x){
-  const cx=centerX(h&&h.path,d);
-  const dx=x-cx;                                    // + = right of center, − = left
-  const side=dx<-0.09?"left":dx>0.09?"right":"center";
-  const off=Math.abs(dx)>0.14;                      // meaningfully off the short grass
-  let blocked=false;
-  const haz=Array.isArray(h&&h.hazards)?h.hazards:[];
-  if(off){const sd=side==="left"?"L":side==="right"?"R":null;
-    blocked=haz.some(z=>z.type==="trees"&&z.side===sd&&(z.from??0)<=d+0.03&&(z.to??1)>=d-0.03);}
-  return {side,blocked,off};
-}
-
-// lieAt(h, d, x) — read the LIE from a tapped map spot, so a tap alone can set the
-// lie (fairway/rough/bunker/recovery) as a smart default the player can still change.
-// Reads structured hazards (side bands + positioned pools) at that point.
-function lieAt(h,d,x){
-  const {side,off}=holeContext(h,d,x);
-  const haz=Array.isArray(h&&h.hazards)?h.hazards:[];
-  const sd=side==="left"?"L":side==="right"?"R":null;
-  const covers=type=>haz.some(z=>{
-    if(z.type!==type)return false;
-    if(Array.isArray(z.pool)){const[d0,d1,x0,x1]=z.pool;
-      return d>=Math.min(d0,d1)&&d<=Math.max(d0,d1)&&x>=Math.min(x0,x1)&&x<=Math.max(x0,x1);}
-    return z.side===sd&&(z.from??0)<=d&&(z.to??1)>=d;
-  });
-  if(off&&covers("trees")) return {lie:"TREES",label:"Recovery"};
-  if(covers("sand"))       return {lie:"FBUNK",label:"Bunker"};
-  if(off)                  return {lie:"ROUGH",label:"Rough"};
-  return {lie:"FW",label:"Fairway"};
-}
+// Hole geometry (centerX / holeContext / lieAt) now lives in the pure geometry.js
+// module, so the map and the decision engine read ONE source of truth. Imported above.
 
 // Yardage for a hole from the chosen tee (falls back to the hole's flag distance).
 const TEES=[["blue","Blue"],["white","White"],["gold","Gold"],["red","Red"],["green","Green"]];
@@ -546,6 +511,7 @@ const lieName={FW:"fairway",FRINGE:"fringe",FIRST:"first cut",ROUGH:"rough",DEEP
 export default function CaddieOS(){
   const [tab,setTab]=useState("caddie");
   const [asked,setAsked]=useState(false);        // whisper flow: has the player asked this shot?
+  const [askObs,setAskObs]=useState(false);      // route-observation prompt (only when material)
   const [awaitResult,setAwaitResult]=useState(false); // waiting for the six-zone result tap
   const [awaitDrop,setAwaitDrop]=useState(null);   // after water: {dir} → tap the map to place the drop
   const [dropPos,setDropPos]=useState(null);       // pending drop position {d,x} from the map tap
@@ -582,6 +548,8 @@ export default function CaddieOS(){
   const [lie,setLie]=useState("FW");
   const [wind,setWind]=useState("NONE");
   const [dir,setDir]=useState(null);
+  const [decision,setDecision]=useState(null);  // the play-first engine's full recommendation
+  const [obsv,setObsv]=useState(null);          // golfer's route observation (only when material)
   const [showRep,setShowRep]=useState(false);
   const [imp,setImp]=useState(null);        // staged import awaiting confirmation
   const [impErr,setImpErr]=useState("");
@@ -740,6 +708,11 @@ export default function CaddieOS(){
   // Recovery-mode inputs: the bag (carry + confidence) and the player's money number.
   const wedgeDist=(P.w52&&P.w52.fs)?Math.round((P.w52.fs[0]+P.w52.fs[1])/2):100;
   const recoBag=()=>Object.keys(P.carries).map(k=>({k,carry:E.eff(k),rel:reliability(k)}));
+  // The play-first engine's bag: today's effective carry + today's trust + benched flag,
+  // straight from the Player Model so improvement, decline and benching all flow through.
+  const decisionBag=()=>Object.keys(P.carries).map(k=>{const m=playerDaily[k];
+    return {k,carry:E.eff(k),rel:reliability(k),sd:(m&&m.sd)||(cstat(k)&&cstat(k).sd)||10,
+      benched:(live&&live.bench||[]).includes(k)||!!(m&&m.benched),state:m&&m.state};});
   const H=live?CH[live.hole]:null;
   // Live distances to key marks (carry hazard / dogleg corner) from the ball's spot.
   const holeMarks=(()=>{if(!H||!live)return [];const covered=H.y-live.rem;const m=[];
@@ -753,9 +726,19 @@ export default function CaddieOS(){
   const lieExtra=live?Math.round(live.rem*(lieFactor(lie)-1)):0;          // yards the lie adds
   const R=live&&!live.onGreen?E.rec(effRem):null;
   const L=live&&!live.onGreen&&(!R||R.zone==="adv")?E.layup(live.rem).filter(o=>o.r.zone!=="adv"):null;
+  // The single decision authority. Builds the situation from the map + Player Model and
+  // returns ONE complete play (destination, route, flight, club, confidence, record).
+  const scoreCeiling=(P.w52&&P.w52.fs)?P.w52.fs[1]:34;
+  const runDecision=(v,obsOv)=>{if(!H||!live)return null;
+    const ev=Math.round(v*windMul*lieFactor(lie));
+    const from=live.ballX!=null?{d:live.ballD,x:live.ballX}:null;
+    return decideShot({hole:H,from,rem:v,effRem:ev,lie,wind,strokes:live.strokes,
+      player:playerDaily,bag:decisionBag(),wedgeDist,observation:obsOv!==undefined?obsOv:obsv,scoreCeiling,
+      scoring:(r)=>{const rr=E.rec(Math.round(r*windMul*lieFactor(lie)));const chip=rr?rr.chip:"52½";return {chip,carry:E.chipCarry(chip)};}});
+  };
 
   useEffect(()=>{ if(undoRef.current){undoRef.current=false;return;}   // Back-undo: keep the reopened result state
-    setAsked(false);setAwaitResult(false);setAwaitDrop(null);setDropPos(null);setShowAlt(false);setMapExpanded(false);setQYards("");setResDir("line");
+    setAsked(false);setAskObs(false);setObsv(null);setDecision(null);setAwaitResult(false);setAwaitDrop(null);setDropPos(null);setShowAlt(false);setMapExpanded(false);setQYards("");setResDir("line");
     if(!live||live.onGreen){setSel(null);return;}
     const hp=getPlan(CH[live.hole]);
     const bk=(!learned&&live.strokes<hp.length)?bookChipOf(hp[live.strokes].c,P):null;
@@ -775,9 +758,13 @@ export default function CaddieOS(){
   const logShot=(gain,g,syn,dirOv,endLie,typeOv,penalty,nextBall)=>{
     // Record where this shot FINISHED (from the ball marker) so the round builds a
     // shot-by-shot path on the map. nextBall (a drop) seeds the NEXT shot's spot.
+    // The decision record travels WITH the shot: the situation, the plays weighed, why
+    // the losers were cut, the pick, its expected outcome and confidence — plus the
+    // actual result, so the app can learn from what really happened later.
+    const rec=decision&&decision.record?{...decision.record,actual:{gain,end:endLie||(g?"green":null),dir:dirOv!==undefined?dirOv:dir}}:null;
     const shot={c:sel||"?",from:live.rem,gain,exp:E.chipCarry(sel||"CHIP"),g:g?1:0,p:syn?1:0,h:live.hole+1,lie,dir:dirOv!==undefined?dirOv:dir,
       end:endLie||null,type:typeOv||shotType(live.rem,E.chipCarry(sel||"CHIP")>=live.rem-6,g),tourn:tourn?1:0,
-      atX:live.ballX!=null?live.ballX:null,atD:live.ballD!=null?live.ballD:null};
+      atX:live.ballX!=null?live.ballX:null,atD:live.ballD!=null?live.ballD:null,rec};
     let l={...live,strokes:live.strokes+1,shots:[...(live.shots||[]),shot],
       ballX:nextBall?nextBall.x:null,ballD:nextBall?nextBall.d:null};
     // P6 fix: a Water outcome must apply its penalty in the SAME state update.
@@ -905,7 +892,7 @@ export default function CaddieOS(){
               <button onClick={()=>{buzz();playHoleNow(i);}} style={{width:"100%",border:"none",borderRadius:16,padding:"15px",background:PINE,color:PAPER,fontSize:16,fontWeight:700,cursor:"pointer"}}>Play this hole now</button>
             </div>;
           }
-          const phase=live.onGreen?"putt":awaitDrop?"drop":awaitResult?"result":asked?"whisper":"question";
+          const phase=live.onGreen?"putt":awaitDrop?"drop":awaitResult?"result":askObs?"observe":asked?"whisper":"question";
           const y=parseInt(qYards)||live.rem;
           return <div style={{padding:"8px 16px 14px"}}>
             {/* Universal Back — steps to the previous screen; undoes a too-fast tap. */}
@@ -983,8 +970,12 @@ export default function CaddieOS(){
               </div>
               {(()=>{const needPlace=live.strokes>0&&Array.isArray(H.path)&&live.ballX==null;
                 return <button className="tapbtn" disabled={needPlace} onClick={()=>{if(needPlace)return;buzz();const v=parseInt(qYards)||live.rem;
-                if(isRecoveryLie(lie)){const loc=live.ballX!=null?holeContext(H,live.ballD,live.ballX):{};const plan=recoveryPlan(v,lie,{bag:recoBag(),wedgeDist,side:loc.side,blocked:loc.blocked});saveLive({...live,rem:v});setSel(plan.best?plan.best.club:Object.keys(P.carries)[0]);}
-                else {const ev=Math.round(v*windMul*lieFactor(lie));const pk=E.pick(ev,reliability);saveLive({...live,rem:v});setSel(pk.chip);}
+                saveLive({...live,rem:v});
+                // ONE authority: the play-first engine decides the play + club + record.
+                const dec=runDecision(v);
+                // Only pause to ask the golfer a route observation when it could change the play.
+                if(dec&&dec.askObservation&&obsv==null){setDecision(dec);setAskObs(true);return;}
+                setDecision(dec);if(dec)setSel(dec.club);
                 setAsked(true);setShowAlt(false);}} style={{width:"100%",border:"none",borderRadius:16,padding:"14px",fontSize:17,fontWeight:700,cursor:needPlace?"default":"pointer",background:needPlace?"#d9d5cc":PINE,color:needPlace?"#8a8578":PAPER,letterSpacing:.4}}>{needPlace?"Tap your ball on the map first":live.strokes===0?"Tee off":"Read it"}</button>;})()}
               {(()=>{const hs=(live.shots||[]).map((x,gi)=>({x,gi})).filter(o=>o.x.h===live.hole+1);if(!hs.length)return null;
                 return <div style={{marginTop:20,background:"#fff",borderRadius:16,padding:12,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
@@ -1007,6 +998,21 @@ export default function CaddieOS(){
                     </div>;})}
                 </div>;})()}
             </div>}
+
+            {phase==="observe"&&(()=>{
+              // The ONE thing the caddie can't honestly know: the window on your line.
+              // The golfer reports only the observation — the engine still picks the play.
+              const opts=[["clear","Normal flight is clear"],["high","Gotta go high"],["low","Gotta stay low"],["curve","Need to curve it"],["nowindow","No usable window"]];
+              const commit=(val)=>{buzz();setObsv(val);const dec=runDecision(live.rem,val);setDecision(dec);if(dec)setSel(dec.club);setAskObs(false);setAsked(true);};
+              return <div style={arrive}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+                  <div style={{color:MUTE,fontSize:14}}><span style={{color:INK,fontWeight:700}}>one look</span> · {live.rem}y · {lieLabel.toLowerCase()}</div>
+                  <button onClick={()=>{setAskObs(false);}} style={{border:"none",background:"transparent",color:MUTE,fontSize:13,cursor:"pointer"}}>↩ back</button>
+                </div>
+                <div style={{fontFamily:SERIF,fontSize:23,color:INK,marginBottom:4}}>What's your window?</div>
+                <div style={{color:MUTE,fontSize:13,marginBottom:16,lineHeight:1.4}}>Something's on your line. Tell me only what I can't see from the data — I'll pick the play.</div>
+                {opts.map(([val,lab])=>(<button key={val} className="tapbtn" onClick={()=>commit(val)} style={{display:"block",width:"100%",textAlign:"left",border:"2px solid #e7e2d8",background:"#fff",borderRadius:14,padding:"15px",marginBottom:10,cursor:"pointer",fontSize:16,fontWeight:700,color:INK}}>{lab}</button>))}
+              </div>;})()}
 
             {phase==="whisper"&&isRecoveryLie(lie)&&(()=>{
               // RECOVERY MODE — objective switches to lowest expected strokes, not "reach green".
@@ -1071,6 +1077,20 @@ export default function CaddieOS(){
                   <div style={{fontFamily:SERIF,fontSize:44,color:GOLD,letterSpacing:.3,marginBottom:16,textWrap:"balance"}}>{W.club}</div>
                   {W.lines.map((l,i)=>(<div key={i} style={{fontFamily:SERIF,fontSize:20,color:PAPER,lineHeight:1.5,marginBottom:10,opacity:.96}}>{l}</div>))}
                 </div>
+                {decision&&(()=>{ // The picture (aim · trajectory · landing) + one cue, and the DISTINCT confidences.
+                  const D=decision,c=D.confidence||{};
+                  const col=v=>v>=70?"#1a7f37":v>=45?"#8a6d2f":"#a3402f";
+                  const pill=(lab,v)=>v==null?null:<div key={lab} style={{fontSize:11,fontWeight:700,color:col(v),background:v>=70?"#eaf3ec":v>=45?"#f6efe1":"#f6ece9",borderRadius:9,padding:"4px 8px"}}>{lab} {v}</div>;
+                  const cap0=t=>String(t||"").charAt(0).toUpperCase()+String(t||"").slice(1);
+                  return <div style={{marginTop:14,background:"#fff",borderRadius:16,padding:14,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+                    <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:6}}>The picture</div>
+                    <div style={{fontFamily:SERIF,fontSize:15,color:INK,lineHeight:1.5}}>{cap0(D.startLine)} · {D.trajectory} · {D.landing}.</div>
+                    <div style={{fontFamily:SERIF,fontSize:14,color:PINE,marginTop:4,fontWeight:700}}>{D.cue}</div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:10}}>
+                      {[["you",c.player],["today",c.form],["course",c.course],["read",c.observation],["play",c.play],["swing",c.execution]].map(([l,v])=>pill(l,v))}
+                    </div>
+                    {c.overall!=null&&<div style={{color:MUTE,fontSize:11,marginTop:8}}>Overall <b style={{color:col(c.overall)}}>{c.overall}/100</b> — a plan is only as strong as its weakest link.</div>}
+                  </div>;})()}
                 {tgt&&<div style={{marginTop:14,background:"#fff",borderRadius:16,padding:"12px 12px 6px",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
                   <div style={{textAlign:"center",color:INK,fontSize:14,fontWeight:700,marginBottom:2}}>Can't get home — aim here</div>
                   <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>Advance ~{tgt.carry}y to the short grass, leaves ~{tgt.leaves} in</div>
