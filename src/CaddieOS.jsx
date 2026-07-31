@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { whisper, humanClub, teeWhisper, puttWhisper, benchWhisper, clubConfidence } from "./whisper.js";
 import { MAPPED } from "./holes/index.js";
 import { recoveryPlan, isRecoveryLie } from "./recovery.js";
+import { dailyProfile, reliabilityFrom } from "./player.js";
 
 // CADDIE OS v10 — DYNAMIC ROUND ENGINE
 // Every shot logs the club actually used (tap to change, layups tappable).
@@ -730,12 +731,12 @@ export default function CaddieOS(){
   // fixed hot/cold engine. Reused for club selection, chip badges, and the bench prompt.
   const shotsOf=fm=>allShots.filter(s=>famOf(s.c)===fm);
   const confOf=fm=>clubConfidence(shotsOf(fm),cstat(fm));
-  const reliability=fm=>{
-    let score=confOf(fm).score;
-    const cs=cstat(fm),sidePct=sideProven(cs)?cs.side.pct:null;
-    if(sidePct!=null&&sidePct>=72) score-=8;           // a PROVEN one-way miss is less trustworthy
-    return Math.max(0,Math.min(100,Math.round(score)));
-  };
+  // Player Model — one normalized daily profile (permanent ability + today's form,
+  // + an inert warm-up seam). The decision engine reads reliability from it; the value
+  // is identical to the prior definition, so this centralizes without changing behavior.
+  const playerDaily=dailyProfile(P,allShots,{warmup:(live&&live.warmup)||null});
+  const reliability=fm=>{const m=playerDaily[fm];
+    return m?m.reliability:reliabilityFrom(clubConfidence(shotsOf(fm),cstat(fm)).score,cstat(fm));};
   // Recovery-mode inputs: the bag (carry + confidence) and the player's money number.
   const wedgeDist=(P.w52&&P.w52.fs)?Math.round((P.w52.fs[0]+P.w52.fs[1])/2):100;
   const recoBag=()=>Object.keys(P.carries).map(k=>({k,carry:E.eff(k),rel:reliability(k)}));
