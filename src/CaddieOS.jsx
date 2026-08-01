@@ -7,7 +7,7 @@ import { centerX, holeContext, lieAt } from "./geometry.js";
 import { decideShot } from "./decision.js";
 
 // Visible build/version stamp — shown in the header so the running tool is identifiable.
-const BUILD = "v12.1 · par-3 fix";
+const BUILD = "v12.2 · distance-fit";
 // CADDIE OS v10 — DYNAMIC ROUND ENGINE
 // Every shot logs the club actually used (tap to change, layups tappable).
 // Hot/cold detection per club · one-tap bench from the alert ·
@@ -1169,10 +1169,14 @@ export default function CaddieOS(){
                     <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8}}>Confidence — {c.overall}/100 overall</div>
                     {comp.map(([lab,v])=>v==null?null:<div key={lab} style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}><span style={{color:INK}}>{lab}</span><b style={{color:bandCol(v>=72?"High":v>=52?"Solid":"Limited")}}>{v}</b></div>)}
                     <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",margin:"12px 0 6px"}}>Plays I compared (before I called it)</div>
-                    {cands.slice(0,6).map((o,i)=>{const chosen=o.club===D.club&&o.kind===D.kind;
-                      return <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,fontSize:12,padding:"3px 0",borderTop:i?"1px solid #f2efe8":"none"}}>
-                        <span style={{color:chosen?INK:MUTE,fontWeight:chosen?800:600}}>{chosen?"✓ ":""}{o.club} · {o.kind}{o.leaves!=null?` · leaves ${o.leaves}`:""}{o.water>0.05?` · ${Math.round(o.water*100)}% water`:""}</span>
-                        <span style={{color:o.executable?MUTE:"#a3402f",whiteSpace:"nowrap"}}>{o.executable?`exp ${o.ev}`:"cut"}</span>
+                    {cands.slice(0,8).map((o,i)=>{const chosen=o.club===D.club&&o.kind===D.kind;
+                      const fitTag=o.fit?{fits:"fits",short:"short",long:"long"}[o.fit]:null;
+                      return <div key={i} style={{padding:"4px 0",borderTop:i?"1px solid #f2efe8":"none"}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,fontSize:12}}>
+                          <span style={{color:chosen?INK:MUTE,fontWeight:chosen?800:600}}>{chosen?"✓ ":""}{o.club}{o.effCarry?` ${o.effCarry}y`:""} · {o.kind}{fitTag?` · ${fitTag}`:""}{o.pOn!=null?` · ${Math.round(o.pOn*100)}% on`:""}</span>
+                          <span style={{color:o.executable?MUTE:"#a3402f",whiteSpace:"nowrap",fontWeight:700}}>{o.executable?`exp ${o.ev}`:"cut"}</span>
+                        </div>
+                        {!o.executable&&o.elim&&<div style={{color:"#a3402f",fontSize:11,marginTop:1,opacity:.85}}>{o.elim}</div>}
                       </div>;})}
                   </div>;})()}
                 <button onClick={()=>{buzz();setAwaitResult(true);}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:19,fontWeight:800,cursor:"pointer",background:GOLD,color:PINE,letterSpacing:1,marginTop:14}}>PLAY IT</button>

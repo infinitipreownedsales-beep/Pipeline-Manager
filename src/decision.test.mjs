@@ -232,7 +232,8 @@ const fairwayLang = d => /fairway/i.test(d.startLine+" "+d.landing) || /fairway 
   ok("short par-3 → a green-targeting ATTACK", d.kind === "attack" && d.play.destination.label === "the green");
   ok("short par-3 selects a realistic scoring club (PW/9i-ish), NOT the 3-wood", ["PW","9i","8i"].includes(d.club) && d.club !== "3W");
   ok("short par-3 uses NO fairway-position language", !fairwayLang(d));
-  ok("short par-3 does not even offer the 3-wood as a play", !d.record.candidates.some(c => c.club === "3W"));
+  ok("short par-3 keeps the 3-wood only as an eliminated (long) non-executable play", (() => {
+    const c = d.record.candidates.find(x => x.club === "3W"); return c && c.executable === false && c.fit === "long"; })());
 }
 // Medium par 3 (~165) — best green-targeting middle iron, not the longest club.
 {
@@ -248,7 +249,8 @@ const fairwayLang = d => /fairway/i.test(d.startLine+" "+d.landing) || /fairway 
   const d = decideShot(base({ hole: H, from: null, rem: 200, effRem: 200, lie: "FW", strokes: 0, bag: p3bag() }));
   ok("long par-3 → green-targeting attack", d.kind === "attack" && d.reach === true);
   ok("long par-3 fits the green (4h ~205), not simply the longest (Dr 250)", d.club !== "Dr");
-  ok("long par-3 never offers a materially-over club (Dr) as an attack", !d.record.candidates.some(c => c.kind === "attack" && c.club === "Dr"));
+  ok("long par-3 does not EXECUTE a materially-over club (Dr)", (() => {
+    const c = d.record.candidates.find(x => x.club === "Dr"); return !c || (c.executable === false && c.fit === "long"); })());
 }
 // Par-3 forced carry — water short of the green. A green-targeting play with carry margin.
 {
@@ -307,6 +309,82 @@ const fairwayLang = d => /fairway/i.test(d.startLine+" "+d.landing) || /fairway 
   ok("consistency: a map aim target exists for the call", d.aim && d.aim.d != null);
   ok("consistency: record's selected club matches the surfaced club", d.record.selected.club === d.club);
 }
+
+// ===========================================================================
+// PART 6 — DISTANCE-FIT: a club is only executable for a green play when its real carry
+// distribution fits the green's depth window. Reliability never overrides physics.
+const H3 = { n:3, par:3, y:110, path:[[0,0.60],[0.5,0.585],[1,0.52]], carry:95, green:{ toPin:110, raised:true },
+  hazards:[{type:"water",pool:[0.16,0.80,0.06,0.60]},{type:"water",pool:[0.80,0.97,0.66,0.90]},{side:"R",type:"trees",from:0.05,to:0.92},{side:"L",type:"trees",from:0.82,to:1.00}] };
+const p3 = (over={}) => { const C = { Dr:245, "3W":190, "7i":140, "9i":125, PW:115 };
+  return Object.entries(C).map(([k,carry]) => ({ k, carry, rel: over[k]?.rel ?? 72, sd: over[k]?.sd ?? 6, benched: over[k]?.benched || false })); };
+const par3base = o => ({ wedgeDist:100, wind:"NONE", scoreCeiling:90, scoring:r=>({chip:"PW",carry:r}), player:{}, ...o });
+const noFairway = d => !/fairway/i.test(d.startLine+" "+d.landing) && !/fairway finder/i.test(d.cue||"");
+const cand = (d,club) => d.record.candidates.find(c => c.club === club);
+
+// Exact Hole 3 — the reported case. 115 yds, PW115/9i125/7i140/3W190.
+{
+  const d = decideShot(par3base({ hole: H3, from:null, rem:115, effRem:115, lie:"FW", strokes:0, bag: p3() }));
+  ok("Hole 3: 3-wood is physically incompatible (long, excluded)", cand(d,"3W").fit==="long" && cand(d,"3W").executable===false);
+  ok("Hole 3: normal 7-iron is physically incompatible (long, excluded)", cand(d,"7i").fit==="long" && cand(d,"7i").executable===false);
+  ok("Hole 3: PW and 9i are evaluated with real carry + fit", cand(d,"PW").fit==="fits" && cand(d,"9i").fit==="fits");
+  ok("Hole 3: the pick is a fitting green-targeting club (PW or 9i)", ["PW","9i"].includes(d.club) && d.kind==="attack");
+  ok("Hole 3: selected is the lowest-EV executable play", (()=>{const ex=d.record.candidates.filter(c=>c.executable); return d.record.selected.ev===Math.min(...ex.map(c=>c.ev));})());
+  ok("Hole 3: recommendation targets the green", d.play.destination.label==="the green");
+  ok("Hole 3: no fairway-position language", noFairway(d));
+  ok("Hole 3: record proves WHY 7i and 3W were eliminated (distance)", /past|target|back/i.test(cand(d,"7i").elim) && /past|target|back/i.test(cand(d,"3W").elim));
+  ok("Hole 3: diagnostic record carries the full fit fields", (()=>{const c=cand(d,"9i");
+    return ["motion","effCarry","fit","front","target","back","pShort","pOn","pLong","ev"].every(k=>k in c);})());
+}
+// 1. 115 calm → a fitting scoring club.
+{ const d = decideShot(par3base({ hole:H3, from:null, rem:115, effRem:115, lie:"FW", strokes:0, bag:p3() }));
+  ok("115 calm → fitting green attack, no fairway lang", d.kind==="attack" && cand(d,d.club).fit==="fits" && noFairway(d)); }
+// 2. 115 into moderate wind (plays ~124) → still green-targeting, a fitting club, 7i still excluded.
+{ const d = decideShot(par3base({ hole:H3, from:null, rem:115, effRem:124, lie:"FW", wind:"INTO", strokes:0, bag:p3() }));
+  ok("115 into wind → green attack with a fitting club", d.kind==="attack" && cand(d,d.club).fit==="fits");
+  ok("115 into wind → normal 7-iron still doesn't fit at execution", cand(d,"7i").executable===false || cand(d,"7i").fit!=="fits"); }
+// 3. 115 helping wind (plays ~107) → fitting shorter club, still green-targeting.
+{ const d = decideShot(par3base({ hole:H3, from:null, rem:115, effRem:107, lie:"FW", wind:"DOWN", strokes:0, bag:p3() }));
+  ok("115 downwind → fitting green attack", d.kind==="attack" && cand(d,d.club).fit==="fits"); }
+// 4. Elevated green — needs more effective carry (plays ~128). The fit window shifts up.
+{ const d = decideShot(par3base({ hole:H3, from:null, rem:115, effRem:128, lie:"FW", strokes:0, bag:p3() }));
+  ok("elevated green → window target tracks plays-like carry", cand(d,d.club).target===128 && d.kind==="attack"); }
+// 5. Downhill target — needs less effective carry (plays ~104).
+{ const d = decideShot(par3base({ hole:H3, from:null, rem:115, effRem:104, lie:"FW", strokes:0, bag:p3() }));
+  ok("downhill green → fitting club near the reduced carry", d.kind==="attack" && cand(d,d.club).fit==="fits"); }
+// 6. Front water requiring carry margin — a club that can't clear the front is excluded (short).
+{ const WC = { ...H3, carry: 120 };   // forced carry to the front is 120
+  const d = decideShot(par3base({ hole:WC, from:null, rem:125, effRem:125, lie:"FW", strokes:0, bag:p3() }));
+  ok("front-carry par-3 → a club that can't clear the front is SHORT-excluded", cand(d,"PW").fit==="short" || cand(d,"PW").executable===false); }
+// 7. Severe long trouble — an overshooting club is excluded (long), not chosen for distance.
+{ const d = decideShot(par3base({ hole:H3, from:null, rem:115, effRem:115, lie:"FW", strokes:0, bag:p3() }));
+  ok("overshoot control: 7i/3W/Dr all cut as long", ["7i","3W","Dr"].every(k=>cand(d,k).fit==="long")); }
+// 8. A demonstrated (normal) full club whose distribution fits is used — motion stays 'normal',
+//    never an invented partial.
+{ const d = decideShot(par3base({ hole:H3, from:null, rem:125, effRem:125, lie:"FW", strokes:0, bag:p3() }));
+  ok("fitting full club is used with a demonstrated (normal) motion", cand(d,d.club).motion==="normal" && cand(d,d.club).fit==="fits"); }
+// 9. An unproven partial 7-iron is NOT invented to fit 115 — the 7i is excluded, not 'taken off'.
+{ const d = decideShot(par3base({ hole:H3, from:null, rem:115, effRem:115, lie:"FW", strokes:0, bag:p3() }));
+  ok("no invented partial: 7-iron excluded rather than 'take something off'", cand(d,"7i").executable===false && d.record.selected.motion==="normal"); }
+// 10. A 140-yard target → the normal 7-iron becomes a valid fit.
+{ const d = decideShot(par3base({ hole:{...H3,y:140}, from:null, rem:140, effRem:140, lie:"FW", strokes:0, bag:p3() }));
+  ok("140y target → 7-iron now FITS and can be the play", cand(d,"7i").fit==="fits"); }
+// 11. A 190-yard target → the 3-wood may become valid when it fits (and is trusted).
+{ const d = decideShot(par3base({ hole:{...H3,y:190}, from:null, rem:190, effRem:190, lie:"FW", strokes:0, bag:p3({ "3W":{rel:80,sd:11} }) }));
+  ok("190y target → 3-wood now FITS", cand(d,"3W").fit==="fits"); }
+// 12. Bench: a benched club is not considered even where it would fit.
+{ const d = decideShot(par3base({ hole:{...H3,y:190}, from:null, rem:190, effRem:190, lie:"FW", strokes:0, bag:p3({ "3W":{benched:true} }) }));
+  ok("benched 3-wood is not the pick even on a 190 hole", d.club!=="3W"); }
+// 13. Availability ≠ suitability: an ENABLED 3-wood on a 115 hole is still rejected on distance.
+{ const d = decideShot(par3base({ hole:H3, from:null, rem:115, effRem:115, lie:"FW", strokes:0, bag:p3() /* 3W available, not benched */ }));
+  ok("enabled 3-wood still fails distance fit on a 115 hole", cand(d,"3W").executable===false && cand(d,"3W").fit==="long"); }
+// 14. No exact-fit club → one deliberate, honest call (never a fairway-finder, never invented motion).
+{ const bag = p3().filter(c=>["9i","7i"].includes(c.k));   // only 125 & 140 available for a 105 target
+  const d = decideShot(par3base({ hole:H3, from:null, rem:105, effRem:105, lie:"FW", strokes:0, bag }));
+  ok("no-fit par-3 → exactly one deliberate call", !!d.club && !!d.kind);
+  ok("no-fit par-3 → honest (not a fairway-position play), normal motion", d.kind!=="position" && d.record.selected.motion==="normal" && noFairway(d)); }
+// 15. Displayed club always equals the stored execution.
+{ const d = decideShot(par3base({ hole:H3, from:null, rem:115, effRem:115, lie:"FW", strokes:0, bag:p3() }));
+  ok("displayed club matches the decision record's execution", d.club===d.record.selected.club && d.record.selected.kind===d.kind); }
 
 console.log("\n" + (fail ? fail + " FAILED ❌" : "ALL " + n + " PASS ✅"));
 process.exit(fail ? 1 : 0);

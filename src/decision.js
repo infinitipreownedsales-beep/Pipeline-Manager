@@ -102,19 +102,74 @@ function flightFor(obstructed, observation) {
   return { flight: "normal", route: "direct", forced: false };
 }
 
-// Build one complete play object (destination, route, flight, execution, EV).
+// Normal CDF (logistic approximation) — for landing-distribution probabilities.
+const ncdf = z => 1 / (1 + Math.exp(-1.702 * z));
+
+/**
+ * greenWindow(hole, target, dNow) — the ACTUAL longitudinal landing window for a
+ * green-targeting shot, in "carry-to-pin" yards. Derived from mapped data when present,
+ * else a conservative estimate. The green is NOT a single point: a club must fit this
+ * depth, not merely reach normalized map distance 0.985.
+ *   front : minimum carry to hold the front / clear a forced carry
+ *   target: carry to the pin (plays-like distance)
+ *   back  : maximum carry before the ball flies through/over the green
+ */
+function greenWindow(hole, target, dNow) {
+  const g = (hole && hole.green) || {};
+  // green depth (yards): mapped depth if we have it, else a conservative estimate that
+  // grows a little with distance (longer shots meet slightly deeper greens on average).
+  let depth = g.depth != null ? g.depth
+    : (g.front != null && g.back != null) ? Math.abs(g.back - g.front)
+    : clamp(10, 20, Math.round(target * 0.10));
+  const half = depth / 2;
+  // forced carry (water/waste short of the green) as seen from THIS ball position.
+  let forced = 0;
+  if (hole && hole.carry) {
+    const covered = Math.round((dNow || 0) * (hole.y || 0));
+    forced = Math.max(0, hole.carry - covered);
+  }
+  const front = Math.max(target - half, forced + 1);
+  const back = target + half + 3;   // a touch long into the fringe is still "on", beyond is through
+  return { front: Math.round(front), target: Math.round(target), back: Math.round(back), forced: Math.round(forced), depth: Math.round(depth) };
+}
+
+// Distance-fit of ONE club-and-motion against the green window, from its expected carry
+// and dispersion. short | fits | long  (physical compatibility — NOT reliability).
+function fitOf(eff, sd, win) {
+  const s = Math.max(sd || 8, 4);
+  if (eff - 0.5 * s > win.back)
+    return { fit: "long", reason: `~${Math.round(eff)}y carry flies past the ${win.target}y target (green plays to ~${win.back} at the back)` };
+  if (eff + 0.6 * s < win.front)
+    return { fit: "short", reason: `~${Math.round(eff)}y carry is short of the ${win.front}y front${win.forced ? ` — must carry ${win.forced}` : ""}` };
+  return { fit: "fits", reason: null };
+}
+
+// Where the club's carry distribution lands relative to the green: P(short/on/long).
+function landingProbs(eff, sd, win) {
+  const s = Math.max(sd || 8, 4);
+  const pShort = ncdf((win.front - eff) / s);
+  const pLong = 1 - ncdf((win.back - eff) / s);
+  const pOn = clamp(0, 1, 1 - pShort - pLong);
+  return { short: +pShort.toFixed(2), on: +pOn.toFixed(2), long: +pLong.toFixed(2) };
+}
+
+// Build one complete play object (destination, route, flight, execution, EV). The EV is
+// sampled at the ball's REAL landing (o.evD/o.evX) — which for a green shot is where the
+// club actually carries to, NOT the pin — so overshoot and short misses cost honestly.
 function buildPlay(ctx, o) {
   const { hole, from } = ctx;
   const dNow = from ? from.d : 0, xNow = from ? from.x : centerX(hole && hole.path, 0);
   const obstructed = forwardObstruction(hole, dNow, xNow, o.destD);
   const f = flightFor(obstructed, ctx.observation);
   const sc = scatter(hole, o.sd, o.rel);
-  const exp = exposure(hole, o.destD, o.destX, sc.sdD, sc.sdX);
+  const eD = o.evD != null ? o.evD : o.destD, eX = o.evX != null ? o.evX : o.destX;
+  const exp = exposure(hole, eD, eX, sc.sdD, sc.sdX);
   const remAfter = o.leaves != null ? o.leaves : remainingYards(hole, o.destD);
   const ev = +(1 + restES(remAfter, exp)).toFixed(2);
   return {
     kind: o.kind,
     club: o.club,
+    motion: o.motion || "normal",
     destination: { d: o.destD, x: o.destX, label: o.destLabel },
     distance: o.distance,
     leaves: remAfter,
@@ -127,6 +182,11 @@ function buildPlay(ctx, o) {
     scatter: sc,
     reach: !!o.reach,
     rel: o.rel,
+    effCarry: o.effCarry != null ? o.effCarry : null,
+    fit: o.fit || null,
+    win: o.win || null,
+    probs: o.probs || null,
+    preElim: o.preElim || null,
     ev,
   };
 }
@@ -162,20 +222,33 @@ function standardCandidates(ctx) {
   const teePosition = kindOf === "tee_position";
   const greenTargeting = kindOf === "approach" || par3Tee;   // destination IS the green
 
-  const reachers = usable.filter(c => c.carry >= effRem - 6);
-  // ── ATTACK THE GREEN — for every green-targeting shot (approach OR par-3 tee) that
-  //    can honestly get home. Generate a play for each club whose carry FITS the green
-  //    window; clubs that materially fly past are not offered (a 190y 3W is not an
-  //    attack for a 118y par 3). If nothing fits, the least-overshoot club stands in. ──
-  if (reachers.length && greenTargeting) {
-    const window = reachers.filter(c => c.carry <= effRem + 18);
-    const pool = window.length ? window : [reachers.slice().sort((a, b) => a.carry - b.carry)[0]];
-    pool.forEach(pick => cands.push(buildPlay(ctx, {
-      kind: "attack", club: pick.k, sd: pick.sd, rel: pick.rel,
-      destD: 0.985, destX: cx, destLabel: "the green",
-      distance: rem, leaves: 0, reach: true,
-      intent: "at the flag — center of the green is the miss",
-    })));
+  // ── ATTACK THE GREEN — distance-fit per club. The strategic destination is the green,
+  //    but each club is projected to its OWN real landing and classified short / fits /
+  //    long against the green's physical depth window. Only clubs that FIT become live
+  //    attack candidates; short and long clubs are kept (pre-eliminated, with the reason)
+  //    so the record proves why a 140y 7-iron or a 190y 3-wood can't play a 115y green. ──
+  if (greenTargeting) {
+    const win = greenWindow(hole, effRem, dNow);
+    usable.forEach(c => {
+      const eff = c.carry;                                   // effective (plays-like) carry
+      const a = fitOf(eff, c.sd, win);
+      const probs = landingProbs(eff, c.sd, win);
+      const trueCarry = eff / playFactor;
+      const landD = clamp(dNow + 0.005, 0.999, dAfterCarry(hole, dNow, trueCarry));
+      const overshoot = eff - win.target;                   // + = past the pin
+      const leaves = a.fit === "long" ? Math.max(4, Math.round(overshoot))
+        : a.fit === "short" ? Math.max(0, Math.round(win.target - eff)) : 0;
+      const play = buildPlay(ctx, {
+        kind: "attack", club: c.k, sd: c.sd, rel: c.rel,
+        destD: 0.985, destX: cx, destLabel: "the green",     // communicated destination
+        evD: landD, evX: centerX(hole && hole.path, landD),  // EV sampled at the REAL landing
+        distance: rem, leaves, reach: a.fit !== "short",
+        effCarry: Math.round(eff), fit: a.fit, win, probs,
+        preElim: a.fit === "fits" ? null : a.reason,
+        intent: "at the flag — center of the green is the miss",
+      });
+      cands.push(play);
+    });
   }
 
   // ── LAY UP TO YOUR NUMBER — a green-targeting shot that chooses to stop short at a
@@ -199,23 +272,24 @@ function standardCandidates(ctx) {
     }
   }
 
-  // ── POSITION (par-4/5 tee) or SHORT (green-targeting that falls short). On a par-4/5
-  //    tee every club is a position option; on a green-targeting shot a club that can't
-  //    reach becomes a play-short lay-up — never a "fairway finder". ──
-  usable.forEach(c => {
-    if (greenTargeting && c.carry >= effRem - 6) return;   // reachers are ATTACKs above
-    const trueCarry = c.carry / playFactor;
-    const destD = dAfterCarry(hole, dNow, trueCarry);
-    if (destD <= dNow + 0.01) return;                      // no forward progress
-    const leaves = Math.max(0, rem - c.carry);
-    cands.push(buildPlay(ctx, {
-      kind: teePosition ? "position" : "layup", club: c.k, sd: c.sd, rel: c.rel,
-      destD, destX: centerX(hole && hole.path, destD),
-      destLabel: leaves > 0 ? `${leaves} out` : "pin-high",
-      distance: c.carry, leaves, reach: leaves <= 6,
-      intent: teePosition ? "find the fairway and set up the next one" : `play short to ${leaves} — a number you trust`,
-    }));
-  });
+  // ── POSITION — par-4/5 tee only: every club is a landing-zone option (driver vs 3W vs
+  //    iron compete on the safe score). Green-targeting shots are fully covered by the
+  //    distance-fit attack + lay-up blocks above, so they don't run this. ──
+  if (teePosition) {
+    usable.forEach(c => {
+      const trueCarry = c.carry / playFactor;
+      const destD = dAfterCarry(hole, dNow, trueCarry);
+      if (destD <= dNow + 0.01) return;                    // no forward progress
+      const leaves = Math.max(0, rem - c.carry);
+      cands.push(buildPlay(ctx, {
+        kind: "position", club: c.k, sd: c.sd, rel: c.rel,
+        destD, destX: centerX(hole && hole.path, destD),
+        destLabel: leaves > 0 ? `${leaves} out` : "pin-high",
+        distance: c.carry, leaves, reach: leaves <= 6,
+        intent: "find the fairway and set up the next one",
+      }));
+    });
+  }
 
   return cands;
 }
@@ -337,16 +411,21 @@ export function decideShot(ctx) {
     return finalize(ctx, recovery ? "recovery" : "standard", sel, [sel], confidenceOf(ctx, sel, null), recoData, "Smooth and advance.");
   }
 
-  // ── Rank by expected score (lowest EV first). ──
-  candidates.sort((a, b) => a.ev - b.ev);
+  // ── Rank by expected score (lowest EV first); ties break to the more on-target play
+  //    (higher probability of finishing on the green). ──
+  candidates.sort((a, b) => a.ev - b.ev || ((b.probs ? b.probs.on : 0) - (a.probs ? a.probs.on : 0)));
 
-  // ── The play↔execution feedback loop. Walk best-EV first; keep the first play we
-  //    can actually EXECUTE — a reliable club, and a flight the golfer can produce for
-  //    the route. Eliminations are recorded, not hidden. Never pick an ideal
-  //    destination we can't hit. ──
-  const ranked = candidates.map(c => ({ ...c, elim: null, executable: true }));
+  // ── The play↔execution feedback loop, in the required order: (1) remove physically
+  //    incompatible executions and unsupported motions (distance fit), (2) remove
+  //    untrusted clubs / impossible routes, (3) among what survives, take the lowest
+  //    expected score. A reliable club that flies 25y past the green never beats a
+  //    fitting one — physical distance fit is checked BEFORE reliability. ──
+  // Physically incompatible executions (short / long / unsupported motion) are eliminated
+  // UP FRONT — regardless of where the loop stops — so the record shows every one of them.
+  const ranked = candidates.map(c => ({ ...c, elim: c.preElim || null, executable: !c.preElim }));
   let selected = null;
   for (const c of ranked) {
+    if (!c.executable) continue;                                // already cut on distance fit
     const rel = c.rel != null ? c.rel : 60;
     if (rel < RELIABLE) { c.executable = false; c.elim = `club not trusted enough today (${round(rel)}/100)`; continue; }
     if (c.flightForced && c.flight === "sideways" && c.kind !== "punch" && c.kind !== "hero") {
@@ -354,11 +433,12 @@ export function decideShot(ctx) {
     }
     selected = c; break;
   }
-  // Nothing cleared the trust bar → automatically fall to the next-lowest-EV play we
-  // can execute at all: the most reliable advance. Protect today's score, honestly.
+  // Nothing survived → one deliberate, honest call: the CLOSEST physical fit to the
+  // target (least over/under-shoot), then the most reliable — never inventing a motion.
   if (!selected) {
-    selected = ranked.slice().sort((a, b) => (b.rel || 0) - (a.rel || 0) || a.ev - b.ev)[0];
-    selected.elim = null; selected.executable = true;
+    const missOf = x => x.win && x.effCarry != null ? Math.abs(x.effCarry - x.win.target) : 9999;
+    selected = ranked.slice().sort((a, b) => missOf(a) - missOf(b) || (b.rel || 0) - (a.rel || 0) || a.ev - b.ev)[0];
+    selected.executable = true;
     selected.underProtest = true;
   }
 
@@ -414,18 +494,26 @@ function finalize(ctx, mode, sel, ranked, confidence, recoData, cue) {
       from: ctx.from ? { d: ctx.from.d, x: ctx.from.x } : null, strokes: ctx.strokes,
       context: ctx.context || null,
     },
-    // Every play weighed BEFORE the caddie spoke: club+flight, today's trust, the
-    // expected score, the severe-miss exposure, and the expected next position. This
-    // is the internal comparison behind the single call (surfaced under "Why?").
+    // Every execution weighed BEFORE the caddie spoke: club + motion, effective carry
+    // and its spread, the derived green window (front / target / back / forced carry),
+    // the distance-fit verdict, the short/on/long landing odds, the miss exposure, the
+    // expected next position, the EV, and any elimination reason. This is the internal
+    // comparison behind the single call (surfaced under "Why?").
     candidates: ranked.map(c => ({
-      kind: c.kind, club: c.club, flight: c.flight || null, ev: c.ev,
+      kind: c.kind, club: c.club, motion: c.motion || "normal", flight: c.flight || null, ev: c.ev,
+      effCarry: c.effCarry != null ? c.effCarry : null,
+      fit: c.fit || null,
+      front: c.win ? c.win.front : null, target: c.win ? c.win.target : null,
+      back: c.win ? c.win.back : null, forced: c.win ? c.win.forced : null,
+      pShort: c.probs ? c.probs.short : null, pOn: c.probs ? c.probs.on : null, pLong: c.probs ? c.probs.long : null,
       rel: c.rel != null ? Math.round(c.rel) : null,
       leaves: c.leaves != null ? c.leaves : null,
       water: c.exposure ? c.exposure.water : null,
       executable: c.executable !== false, elim: c.elim || null,
     })),
     selected: {
-      kind: sel.kind, club: sel.club, route: sel.route, flight: sel.flight, ev: sel.ev,
+      kind: sel.kind, club: sel.club, motion: sel.motion || "normal", route: sel.route, flight: sel.flight, ev: sel.ev,
+      fit: sel.fit || null, effCarry: sel.effCarry != null ? sel.effCarry : null,
       destination: sel.destination, distance: sel.distance, leaves: sel.leaves, intent: sel.intent,
     },
     expected: { ev: sel.ev, leaves: sel.leaves },
