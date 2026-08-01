@@ -14,7 +14,7 @@ export const MAPPED_HOLES = [bp01, bp02, bp03, bp04, bp05, bp06, bp07, bp08, bp0
 
 export const MAPPED = {
   bpmapped: {
-    name: "Bay Pointe (mapped)",
+    name: "Bay Pointe CC",
     holes: MAPPED_HOLES,
     ref: "flag",       // distances read "to the flag", matching how Shot Scope measures
     mapped: true,

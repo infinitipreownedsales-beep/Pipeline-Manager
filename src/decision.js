@@ -124,6 +124,7 @@ function buildPlay(ctx, o) {
     obstructed,
     intent: o.intent,
     exposure: exp,
+    scatter: sc,
     reach: !!o.reach,
     rel: o.rel,
     ev,
@@ -222,8 +223,11 @@ function recoveryCandidates(ctx) {
 }
 
 // -------------------------- confidence components ----------------------------
-// DISTINCT signals, never one overloaded number. Overall is the WEAKEST link
-// (a plan is only as trustworthy as its shakiest part) — no fabricated precision.
+// DISTINCT signals, never one overloaded number. Overall is a robust blend that
+// leans on the components that could actually change the play (execution + play
+// separation + today's form) and is capped by the club you'll physically hit — a
+// single low-but-irrelevant component (e.g. an unmapped hole) can't collapse it,
+// and we never claim more confidence than the execution can honestly carry.
 function confidenceOf(ctx, sel, second) {
   const model = ctx.player || {};
   const m = model[famOf(sel.club)] || null;
@@ -238,9 +242,15 @@ function confidenceOf(ctx, sel, second) {
   const margin = second ? clamp(0, 1, (second.ev - sel.ev) / 0.6) : 0.6;
   const play = round(55 + margin * 40);
   const execution = m ? clamp(0, 100, round(m.reliability)) : 60;
-  const parts = [player, form, course, observation, play, execution].filter(v => v != null);
-  const overall = parts.length ? Math.min(...parts) : null;
-  return { player, form, course, observation, play, execution, overall };
+  // Weighted blend, execution/play/form heaviest; light components can't tank it.
+  const W = { player: 0.10, form: 0.18, course: 0.10, observation: 0.10, play: 0.22, execution: 0.30 };
+  const comp = { player, form, course, observation, play, execution };
+  let acc = 0, sw = 0;
+  for (const k in W) if (comp[k] != null) { acc += W[k] * comp[k]; sw += W[k]; }
+  let overall = sw ? round(acc / sw) : null;
+  if (overall != null && execution != null) overall = Math.min(overall, execution + 12); // honesty cap
+  const band = overall == null ? null : overall >= 72 ? "High" : overall >= 52 ? "Solid" : "Limited";
+  return { player, form, course, observation, play, execution, overall, band };
 }
 
 /**
@@ -346,20 +356,26 @@ function cueFor(sel) {
   return "Smooth and committed.";
 }
 
-// A picture, not numbers: where to aim, what the ball should do, where it lands.
+// A picture, not numbers: where to aim, what the ball should do, where it finishes.
+// Language is shaped by the KIND of play so a tee shot never reads like an approach
+// and a lay-up never tells the golfer to control the final resting spot.
 function pictureOf(ctx, sel) {
-  const dest = sel.destination || {};
-  const startLine = sel.route === "over" ? "over the trouble, at the flag"
-    : sel.route === "around" ? "start it at the edge and shape it back"
-    : sel.route === "out" || sel.route === "sideways" ? "sideways to the open grass"
-    : dest.label === "the green" ? "at the flag, center is plenty"
-    : `at ${dest.label || "the fat side"}`;
+  const isRec = sel.kind === "punch" || sel.kind === "hero" || sel.route === "out" || sel.route === "sideways";
+  let startLine;
+  if (sel.route === "over") startLine = "over the trouble, at the flag";
+  else if (sel.route === "around") startLine = "start it at the edge and let it turn back";
+  else if (isRec) startLine = "out to the open side";
+  else if (sel.kind === "attack") startLine = "at the flag — center is plenty";
+  else startLine = "at the middle of the fairway";
   const trajectory = sel.flight === "high" ? "high and soft"
     : sel.flight === "low" ? "low and running"
     : sel.flight === "shaped" ? "a working ball"
     : "your stock flight";
-  const landing = sel.reach ? "carrying to the green"
-    : sel.leaves > 0 ? `landing about ${sel.leaves} short, in position` : "in the short grass";
+  let landing;
+  if (sel.kind === "attack" || sel.reach) landing = "onto the green";
+  else if (isRec) landing = sel.leaves > 0 ? `back in play, about ${sel.leaves} to the pin` : "back in the short grass";
+  else if (sel.kind === "layup") landing = `leaving about ${sel.leaves} in`;
+  else landing = `into the fairway, about ${sel.leaves} to the green`;    // tee / position
   return { startLine, trajectory, landing };
 }
 
@@ -372,9 +388,18 @@ function finalize(ctx, mode, sel, ranked, confidence, recoData, cue) {
       rem: ctx.rem, effRem: ctx.effRem, lie: ctx.lie, wind: ctx.wind,
       from: ctx.from ? { d: ctx.from.d, x: ctx.from.x } : null, strokes: ctx.strokes,
     },
-    candidates: ranked.map(c => ({ kind: c.kind, club: c.club, ev: c.ev, executable: c.executable !== false, elim: c.elim || null })),
+    // Every play weighed BEFORE the caddie spoke: club+flight, today's trust, the
+    // expected score, the severe-miss exposure, and the expected next position. This
+    // is the internal comparison behind the single call (surfaced under "Why?").
+    candidates: ranked.map(c => ({
+      kind: c.kind, club: c.club, flight: c.flight || null, ev: c.ev,
+      rel: c.rel != null ? Math.round(c.rel) : null,
+      leaves: c.leaves != null ? c.leaves : null,
+      water: c.exposure ? c.exposure.water : null,
+      executable: c.executable !== false, elim: c.elim || null,
+    })),
     selected: {
-      kind: sel.kind, club: sel.club, route: sel.route, flight: sel.flight,
+      kind: sel.kind, club: sel.club, route: sel.route, flight: sel.flight, ev: sel.ev,
       destination: sel.destination, distance: sel.distance, leaves: sel.leaves, intent: sel.intent,
     },
     expected: { ev: sel.ev, leaves: sel.leaves },
@@ -383,11 +408,17 @@ function finalize(ctx, mode, sel, ranked, confidence, recoData, cue) {
     underProtest: !!sel.underProtest,
     actual: null,     // filled when the shot's result is logged
   };
+  // A dispersion footprint for the map (Part 7) — the honest scatter this club/flight
+  // produces for this golfer around the intended landing. Standard plays only.
+  const dest = sel.destination || {};
+  const dispersion = (dest.d != null && dest.x != null && sel.scatter)
+    ? { d: dest.d, x: dest.x, rx: sel.scatter.sdX * 1.6, ry: sel.scatter.sdD * 1.6 } : null;
   return {
     mode, club: sel.club, kind: sel.kind, flight: sel.flight, route: sel.route,
     play: { kind: sel.kind, destination: sel.destination, distance: sel.distance, leaves: sel.leaves, intent: sel.intent, ev: sel.ev },
     startLine: pic.startLine, trajectory: pic.trajectory, landing: pic.landing, cue,
     reach: !!sel.reach, leaves: sel.leaves, intent: sel.intent,
+    aim: dest.d != null ? { d: dest.d, x: dest.x, label: null } : null, dispersion,
     confidence, candidates: ranked, record,
     askObservation: !!ctx.askObservation,
     recovery: recoData ? recoData.plan : null,

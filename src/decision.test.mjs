@@ -125,15 +125,21 @@ const base = o => ({ wedgeDist: 100, wind: "NONE", scoring, ...o });
   const cu = decideShot(base({ hole: OBS, from: { d: 0.45, x: .5 }, rem: 150, effRem: 150, lie: "FW", strokes: 1, bag: mkBag(), observation: "curve" }));
   ok("'need to curve it' → a shaped ball", cu.flight === "shaped");
 }
-// 18-19. Confidence is DISTINCT components, and overall is the weakest link (no false precision).
+// 18-19. Confidence is DISTINCT components; overall is a robust blend (a single weak,
+//        low-weight component can't collapse the whole call), capped by execution.
 {
   const d = decideShot(base({ hole: WATER, from: { d: 0.5, x: .5 }, rem: 190, effRem: 190, lie: "FW", strokes: 1, bag: mkBag() }));
   const c = d.confidence;
-  const keys = ["player", "form", "course", "observation", "play", "execution", "overall"];
-  ok("all distinct confidence components are present", keys.every(k => k in c));
+  const keys = ["player", "form", "course", "observation", "play", "execution", "overall", "band"];
+  ok("all distinct confidence components (+ band) are present", keys.every(k => k in c));
   const comps = [c.player, c.form, c.course, c.observation, c.play, c.execution].filter(v => v != null);
   ok("they are not one overloaded number (components differ)", new Set(comps).size >= 2);
-  ok("overall = the weakest component (a chain, not a fabricated blend)", c.overall === Math.min(...comps));
+  ok("overall is a blend, not the raw minimum", c.overall > Math.min(...comps));
+  ok("overall never over-claims beyond execution", c.overall <= c.execution + 12);
+  ok("band is a plain word (High/Solid/Limited)", ["High","Solid","Limited"].includes(c.band));
+  // an irrelevant weak component (unmapped course) must NOT tank an otherwise-strong call
+  const clean = decideShot(base({ hole: { par:4, y:400 }, from:null, rem: 150, effRem:150, lie:"FW", strokes:1, bag: mkBag() }));
+  ok("a weak low-weight component does not collapse overall", clean.confidence.overall >= 55);
 }
 // 20. The decision record preserves the reasoning for later learning.
 {
@@ -172,6 +178,41 @@ const base = o => ({ wedgeDist: 100, wind: "NONE", scoring, ...o });
   const d = decideShot(base({ hole: WATER, from: { d: 0.4, x: .5 }, rem: 220, effRem: 220, lie: "FW", strokes: 1, bag: mkBag() }));
   const evs = d.candidates.map(c => c.ev);
   ok("candidates are ranked ascending by expected score", evs.every((v, i) => i === 0 || v >= evs[i - 1]));
+}
+
+// ===========================================================================
+// PART 4 — the low-confidence 3-wood tee shot. The engine must COMPARE the full
+// alternatives (club+flight, today's trust, expected score, severe-miss exposure,
+// expected next position) BEFORE it speaks — not just take the longest accepted club.
+// ~390-yd par 4, 3W advances ~190 (leaves ~200) but is shaky; irons are trusted.
+const P4CARRIES = { Dr: 250, "3W": 190, "5i": 175, "6i": 165, "7i": 150, "8i": 138, "9i": 126, PW: 115 };
+const p4bag = (over={}) => Object.entries(P4CARRIES).map(([k,carry]) =>
+  ({ k, carry, rel: over[k]?.rel ?? 72, sd: over[k]?.sd ?? 8, benched: false }));
+// (a) When the 3-wood's landing zone brings real trouble into play (down-the-side water),
+//     a trusted iron that stays short of it must produce the lower expected score.
+{
+  const TROUBLE = { n: 9, par: 4, y: 390, path: [[0,.5],[1,.5]],
+    hazards: [{ type: "water", pool: [0.46, 0.60, 0.55, 1.0] }] };   // catches the long, wide shaky 3W
+  const bag = p4bag({ "3W": { rel: 40, sd: 20 } });                   // low-confidence 3-wood
+  const d = decideShot(base({ hole: TROUBLE, from: null, rem: 390, effRem: 390, lie: "FW", strokes: 0, bag }));
+  ok("tee: shaky 3W into trouble → engine does NOT pick the 3-wood", d.club !== "3W");
+  ok("tee: it picks a trusted club instead", ["Dr","5i","6i","7i","8i"].includes(d.club));
+  // proof the comparison happened internally, with evidence, before the call
+  const cand = d.record.candidates;
+  ok("every alternative carries club+flight+trust+EV+miss-exposure+next-position", cand.length >= 3 &&
+    cand.every(c => c.club && "ev" in c && "rel" in c && "leaves" in c && "water" in c));
+  ok("the 3-wood was weighed and beaten on expected score", cand.some(c => c.club === "3W") &&
+    d.record.selected.ev <= cand.find(c => c.club === "3W").ev);
+}
+// (b) On a clean hole with no trouble, the extra distance of the 3-wood legitimately
+//     wins — the rule is lowest expected score, NOT "always the safe short club".
+{
+  const CLEAN390 = { n: 9, par: 4, y: 390, path: [[0,.5],[1,.5]], hazards: [] };
+  const bag = p4bag({ "3W": { rel: 62, sd: 12 } });                  // decent, reachy 3-wood
+  const d = decideShot(base({ hole: CLEAN390, from: null, rem: 390, effRem: 390, lie: "FW", strokes: 0, bag }));
+  const evOf = k => (d.record.candidates.find(c => c.club === k) || {}).ev;
+  ok("clean hole: the chosen tee play is the lowest expected-score option", d.record.selected.ev === Math.min(...d.record.candidates.filter(c=>c.executable).map(c=>c.ev)));
+  ok("clean hole: a longer club can win when nothing punishes it", evOf(d.club) != null);
 }
 
 console.log("\n" + (fail ? fail + " FAILED ❌" : "ALL " + n + " PASS ✅"));

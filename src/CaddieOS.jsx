@@ -7,7 +7,7 @@ import { centerX, holeContext, lieAt } from "./geometry.js";
 import { decideShot } from "./decision.js";
 
 // Visible build/version stamp — shown in the header so the running tool is identifiable.
-const BUILD = "v11 · play-first engine";
+const BUILD = "v12 · clean caddie";
 // CADDIE OS v10 — DYNAMIC ROUND ENGINE
 // Every shot logs the club actually used (tap to change, layups tappable).
 // Hot/cold detection per club · one-tap bench from the alert ·
@@ -20,6 +20,13 @@ const DEF_PROFILE = {
   cues:{ full:"SMOOTH 74 — controlled is straight", wedge:"Rotation sets distance — hands passive" },
   feels:{ "52":"Rotation sets distance — hands passive, glove logo down","PW":"Smooth 74 + full finish — never decelerate","9i":"Smooth 74 — trust the number","7i":"Smooth 74 — stand closer","8i":"Smooth 74 — stand closer, fairway lie only","3W":"Left edge, full commit — or step off","CHIP":"One look · commit · land it and let it run","PUTT":"Back of cup — two-putt ceiling" }
 };
+// Persisted-shape version. Bump when the stored profile/live shape changes; the loader
+// tolerates older data (missing fields fall back to defaults).
+const SCHEMA = 2;
+// A clean first-use player: no clubs, no history, no cues/feels — but the engine-safe
+// scaffolding (wedge windows) kept so the app never crashes on an empty profile.
+const CLEAN_PROFILE = { name:"", carries:{}, clubStats:{}, w52:DEF_PROFILE.w52, cues:DEF_PROFILE.cues, feels:{}, schemaV:SCHEMA };
+
 const BP_HOLES = [
  {n:1,par:4,y:360,tgt:5,gap:false,r3:null,star:false,vibe:"Opening statement. Tight corridor, water breathing on the left — but this hole folds to three smooth swings. Set the tone: unhurried, left-center, rotation wedge to the middle.",hz:"Water LEFT full length · elevated green",cue:"Two smooth 7-irons, ¾ wedge, two putts.",plan:[{c:"7i",a:"Left-center corridor",t:"Smooth 74, stand closer. Corridor first, distance second."},{c:"7i",a:"Left-center advance",t:"Same swing again. Leaves 80y — a number you own."},{c:"52° ¾",a:"CENTER green",t:"80–84 window. Glove logo down, rotation stops the club."}]},
  {n:2,par:4,y:381,carry:191,carryLabel:"the creek",tgt:5,gap:false,r3:null,star:false,vibe:"The gut check. One committed 3W over the creek is the whole hole — everything after is routine. You've cleared it before. Left edge, full send, then back to smooth.",hz:"MUST CARRY creek 191y · water L · pond R of green",cue:"One committed swing, then smooth home.",plan:[{c:"3W",a:"LEFT EDGE — full commit",t:"Governor suspended for ONE swing. Right bias 22–42y, so left edge. Step off if not 100% in."},{c:"9i",a:"Center advance",t:"Back to smooth 74. Leaves 66y."},{c:"52° firm ½",a:"Center-LEFT",t:"Mid-gap number: firm half, one pick, zero doubt. Pond right — never right."}]},
@@ -376,7 +383,7 @@ const teeYardOf=(h,t)=>(h&&h.tees&&t&&h.tees[t]!=null)?h.tees[t]:(h?h.y:0);
 // read for angle-aware decisions. Falls back to hz text for un-mapped holes.
 // When onPlace is given, the map becomes tappable: a tap drops the ball marker and
 // reports normalized (d,x) back so the engine learns where the shot finished.
-const HoleView=({h,P,ball,onPlace,shots,target,tee,compact,big})=>{
+const HoleView=({h,P,ball,onPlace,shots,target,dispersion,tee,compact,big})=>{
   const HZ=(h.hz||"").toUpperCase();
   const W=220,Ht=300,L=28,Rr=192,uw=Rr-L,teeY=254,greenY=48,span=teeY-greenY;
   const yAt=d=>teeY-Math.max(0,Math.min(1,d))*span;                 // d 0..1 (tee→green) → y
@@ -472,12 +479,17 @@ const HoleView=({h,P,ball,onPlace,shots,target,tee,compact,big})=>{
     {/* shot path — the round as it played */}
     {pathPts.length>=2&&<><polyline points={pathPts.map(p=>p.join(",")).join(" ")} fill="none" stroke="#a3402f" strokeWidth={2} strokeDasharray="4 3" opacity={0.75}/>
       {shotPts.map(([x,y],i)=><circle key={"sp"+i} cx={x} cy={y} r={3.5} fill="#a3402f" opacity={0.8}/>)}</>}
-    {/* aim target — where to advance to when you can't reach the green */}
+    {/* dispersion footprint — the honest scatter this club/flight produces for THIS
+        golfer, so the map answers "why does this target fit me?" (no false precision) */}
+    {dispersion&&(()=>{const dX=xAt(dispersion.x),dY=yAt(dispersion.d);
+      const rx=Math.max(9,(dispersion.rx||0.14)*uw), ry=Math.max(9,(dispersion.ry||0.06)*span);
+      return <ellipse cx={dX} cy={dY} rx={rx} ry={ry} fill="rgba(111,174,124,0.22)" stroke="#6fae7c" strokeWidth={1.5} strokeDasharray="3 3"/>;})()}
+    {/* aim target — the caddie's intended landing center */}
     {target&&(()=>{const tgX=xAt(target.x),tgY=yAt(target.d);return <g>
-      <circle cx={tgX} cy={tgY} r={11} fill="rgba(200,162,74,0.18)" stroke="#c8a24a" strokeWidth={2.5}/>
-      <line x1={tgX-14} y1={tgY} x2={tgX+14} y2={tgY} stroke="#c8a24a" strokeWidth={2}/>
-      <line x1={tgX} y1={tgY-14} x2={tgX} y2={tgY+14} stroke="#c8a24a" strokeWidth={2}/>
-      <text x={tgX} y={tgY-17} textAnchor="middle" fontSize={9} fill="#8a7327" fontWeight={800}>{target.label||"aim here"}</text></g>;})()}
+      <circle cx={tgX} cy={tgY} r={9} fill="rgba(200,162,74,0.22)" stroke="#c8a24a" strokeWidth={2.5}/>
+      <line x1={tgX-13} y1={tgY} x2={tgX+13} y2={tgY} stroke="#c8a24a" strokeWidth={2}/>
+      <line x1={tgX} y1={tgY-13} x2={tgX} y2={tgY+13} stroke="#c8a24a" strokeWidth={2}/>
+      {target.label&&<text x={tgX} y={tgY-15} textAnchor="middle" fontSize={9} fill="#8a7327" fontWeight={800}>{target.label}</text>}</g>;})()}
     {/* placed ball — where the shot finished */}
     {ball&&<g><circle cx={bx} cy={by} r={7} fill="#fff" stroke="#a3402f" strokeWidth={2.5}/><circle cx={bx} cy={by} r={2.5} fill="#a3402f"/>
       <text x={bx} y={by-11} textAnchor="middle" fontSize={8.5} fill="#a3402f" fontWeight={800}>ball</text></g>}
@@ -493,6 +505,8 @@ const S = {
   inp:{padding:"11px 12px",fontSize:16,fontWeight:700,border:"2px solid #d1d1d6",borderRadius:12,boxSizing:"border-box",background:"white",minWidth:0},
   pill:(bg,fg)=>({display:"inline-block",background:bg,color:fg,borderRadius:20,padding:"3px 10px",fontSize:11,fontWeight:800}),
 };
+// One full-width objection button (the "Not comfortable?" panel).
+const objBtn={display:"block",width:"100%",textAlign:"left",border:"1px solid #e7e2d8",background:"#fbfaf7",borderRadius:12,padding:"12px 13px",marginBottom:8,cursor:"pointer",fontSize:15,fontWeight:700,color:"#233b30"};
 
 // The Whisper aesthetic: a caddie's leather yardage book meets a meditation app.
 const PINE="#122b21", PAPER="#faf8f4", GOLD="#c8a24a", INK="#233b30", MUTE="#6b7d72";
@@ -540,7 +554,7 @@ export default function CaddieOS(){
   const [delArm,setDelArm]=useState(null);
   const [newName,setNewName]=useState("");
   const [newCarry,setNewCarry]=useState("");
-  const [courseSel,setCourseSel]=useState("bp");
+  const [courseSel,setCourseSel]=useState("bpmapped");   // the mapped Bay Pointe is the default
   const [teeSel,setTeeSel]=useState("white");   // chosen tee set (applies to the whole round)
   const undoRef=useRef(false);                   // Back-button undo sets this so the reset effect skips
   const [mapExpanded,setMapExpanded]=useState(false);   // full-screen map for placing the ball
@@ -552,15 +566,23 @@ export default function CaddieOS(){
   const [dir,setDir]=useState(null);
   const [decision,setDecision]=useState(null);  // the play-first engine's full recommendation
   const [obsv,setObsv]=useState(null);          // golfer's route observation (only when material)
-  const [showConf,setShowConf]=useState(false); // expand the six confidence components on the live card
+  const [showConf,setShowConf]=useState(false); // expand the confidence detail / "Why?" on the live card
+  const [teeEdit,setTeeEdit]=useState(false);            // compact tee correction on the tee shot
+  const [firstDecision,setFirstDecision]=useState(null); // the caddie's ORIGINAL call this shot (preserved)
+  const [objections,setObjections]=useState([]);         // objections the golfer raised (history)
+  const [objExclude,setObjExclude]=useState([]);         // clubs excluded for THIS shot's recompute only
   const [showRep,setShowRep]=useState(false);
   const [imp,setImp]=useState(null);        // staged import awaiting confirmation
   const [impErr,setImpErr]=useState("");
   const [dragOver,setDragOver]=useState(false);
+  const [dataArm,setDataArm]=useState(null);       // armed destructive player-data action
   const [impCourses,setImpCourses]=useState({}); // courses imported from Shot Scope reads
   const [holeJson,setHoleJson]=useState("");     // paste box for a hole/course JSON
   const [holeMsg,setHoleMsg]=useState("");
   const courses={...COURSES,...impCourses};        // built-in + imported, used everywhere
+  // De-duplicated list for the START picker: the mapped Bay Pointe supersedes the old
+  // scripted "bp" (same practical course), so the golfer sees one clean choice.
+  const startCourses=Object.entries(courses).filter(([k])=>!(k==="bp"&&courses.bpmapped));
   const undoShot=()=>{
     if(live.onGreen&&live.putts>0){saveLive({...live,putts:live.putts-1});return;}
     const hs=live.shots||[];let idx=-1;
@@ -630,7 +652,7 @@ export default function CaddieOS(){
     setHoleMsg(`Imported ${holes.length} hole${holes.length>1?"s":""} — "${next[key].name}". Pick it on the CADDIE screen to play.`);
   };
   const deleteCourse=key=>{const n={...impCourses};delete n[key];setImpCourses(n);store.set("caddie:holes",n);if(courseSel===key)setCourseSel("bp");};
-  const saveLive=l=>{setLive(l);store.set("caddie:live",l);};
+  const saveLive=l=>{const lv=(l&&typeof l==="object")?{...l,v:SCHEMA}:l;setLive(lv);store.set("caddie:live",lv);};
 
   // --- Launch-monitor import: read file → parse → clean → stage for confirmation ---
   const handleImportFiles=fileList=>{
@@ -713,9 +735,9 @@ export default function CaddieOS(){
   const recoBag=()=>Object.keys(P.carries).map(k=>({k,carry:E.eff(k),rel:reliability(k)}));
   // The play-first engine's bag: today's effective carry + today's trust + benched flag,
   // straight from the Player Model so improvement, decline and benching all flow through.
-  const decisionBag=()=>Object.keys(P.carries).map(k=>{const m=playerDaily[k];
+  const decisionBag=(exclude=[])=>Object.keys(P.carries).map(k=>{const m=playerDaily[k];
     return {k,carry:E.eff(k),rel:reliability(k),sd:(m&&m.sd)||(cstat(k)&&cstat(k).sd)||10,
-      benched:(live&&live.bench||[]).includes(k)||!!(m&&m.benched),state:m&&m.state};});
+      benched:(live&&live.bench||[]).includes(k)||!!(m&&m.benched)||exclude.includes(k),state:m&&m.state};});
   const H=live?CH[live.hole]:null;
   // Live distances to key marks (carry hazard / dogleg corner) from the ball's spot.
   const holeMarks=(()=>{if(!H||!live)return [];const covered=H.y-live.rem;const m=[];
@@ -732,16 +754,19 @@ export default function CaddieOS(){
   // The single decision authority. Builds the situation from the map + Player Model and
   // returns ONE complete play (destination, route, flight, club, confidence, record).
   const scoreCeiling=(P.w52&&P.w52.fs)?P.w52.fs[1]:34;
-  const runDecision=(v,obsOv)=>{if(!H||!live)return null;
-    const ev=Math.round(v*windMul*lieFactor(lie));
+  // ov (all optional): { obsv, lie, exclude } — objection overrides applied synchronously
+  // so a recompute uses the corrected input immediately (React state is async).
+  const runDecision=(v,ov={})=>{if(!H||!live)return null;
+    const useLie=ov.lie||lie, useObs=ov.obsv!==undefined?ov.obsv:obsv, exclude=ov.exclude||objExclude;
+    const ev=Math.round(v*windMul*lieFactor(useLie));
     const from=live.ballX!=null?{d:live.ballD,x:live.ballX}:null;
-    return decideShot({hole:H,from,rem:v,effRem:ev,lie,wind,strokes:live.strokes,
-      player:playerDaily,bag:decisionBag(),wedgeDist,observation:obsOv!==undefined?obsOv:obsv,scoreCeiling,
-      scoring:(r)=>{const rr=E.rec(Math.round(r*windMul*lieFactor(lie)));const chip=rr?rr.chip:"52½";return {chip,carry:E.chipCarry(chip)};}});
+    return decideShot({hole:H,from,rem:v,effRem:ev,lie:useLie,wind,strokes:live.strokes,
+      player:playerDaily,bag:decisionBag(exclude),wedgeDist,observation:useObs,scoreCeiling,
+      scoring:(r)=>{const rr=E.rec(Math.round(r*windMul*lieFactor(useLie)));const chip=rr?rr.chip:"52½";return {chip,carry:E.chipCarry(chip)};}});
   };
 
   useEffect(()=>{ if(undoRef.current){undoRef.current=false;return;}   // Back-undo: keep the reopened result state
-    setAsked(false);setAskObs(false);setObsv(null);setDecision(null);setShowConf(false);setAwaitResult(false);setAwaitDrop(null);setDropPos(null);setShowAlt(false);setMapExpanded(false);setQYards("");setResDir("line");
+    setAsked(false);setAskObs(false);setObsv(null);setDecision(null);setFirstDecision(null);setObjections([]);setObjExclude([]);setShowConf(false);setAwaitResult(false);setAwaitDrop(null);setDropPos(null);setShowAlt(false);setMapExpanded(false);setQYards("");setResDir("line");
     if(!live||live.onGreen){setSel(null);return;}
     const hp=getPlan(CH[live.hole]);
     const bk=(!learned&&live.strokes<hp.length)?bookChipOf(hp[live.strokes].c,P):null;
@@ -754,7 +779,26 @@ export default function CaddieOS(){
     else {setLie("FW");setLieLabel("Fairway");}
   },[live?live.hole:-1,live?live.strokes:-1,live?live.onGreen:false,live&&live.bench?live.bench.join(","):""]);
 
-  const startRound=()=>{const N=(courses[courseSel]||COURSES.bp).holes.length;saveLive({course:courseSel,tee:teeSel,hole:0,strokes:0,rem:teeYardOf(CH[0],teeSel),onGreen:false,putts:0,pen:0,i35At:null,teeAck:false,bench:[],shots:[],scores:Array(N).fill(null),puttsArr:Array(N).fill(null),convs:Array(N).fill(null)});};
+  const startRound=()=>{const N=(courses[courseSel]||COURSES.bpmapped||COURSES.bp).holes.length;saveLive({course:courseSel,tee:teeSel,hole:0,strokes:0,rem:teeYardOf(CH[0],teeSel),onGreen:false,putts:0,pen:0,i35At:null,teeAck:false,bench:[],shots:[],scores:Array(N).fill(null),puttsArr:Array(N).fill(null),convs:Array(N).fill(null),v:SCHEMA});};
+  // ===== PLAYER-DATA CONTROLS (Part 11) — persistence keys are: caddie:profile (player),
+  // caddie:rounds (history), caddie:live (active round + its decision records), caddie:holes
+  // (imported courses). Mapped courses live in code and always remain. Every write stamps a
+  // schema version (Part 12) so older saved shapes stay readable. =====
+  const clearUIState=()=>{setDecision(null);setFirstDecision(null);setObjections([]);setObjExclude([]);setSel(null);setAsked(false);setAskObs(false);setObsv(null);setDataArm(null);};
+  const resetTodayForm=()=>{ if(live)saveLive({...live,warmup:null,bench:[],dismiss:[],teeAdj:null}); setDataArm(null); setMeMsg("Today's form reset — warm-up and temporary adjustments cleared. Long-term data and past rounds untouched."); };
+  const clearCurrentRound=()=>{ saveLive(null); store.set("caddie:live",null); clearUIState(); setMeMsg("Current round cleared. Completed rounds and long-term data untouched."); };
+  const resetClubData=(club)=>{ const carries={...P.carries}; delete carries[club];
+    const clubStats={...(P.clubStats||{})}; delete clubStats[csKey(club)];
+    const feels={...(P.feels||{})}; delete feels[club];
+    const p={...P,carries,clubStats,feels,schemaV:SCHEMA,updated:new Date().toISOString()};
+    setP(p); store.set("caddie:profile",p); setDataArm(null); setMeMsg(`${club} data cleared — every other club is untouched.`); };
+  const clearAllPlayerData=(keepCourses)=>{ const clean={...CLEAN_PROFILE};
+    setP(clean); store.set("caddie:profile",clean);
+    setRounds([]); store.set("caddie:rounds",[]);
+    saveLive(null); store.set("caddie:live",null);
+    if(!keepCourses){ setImpCourses({}); store.set("caddie:holes",{}); }
+    clearUIState(); setTourn(false);
+    setMeMsg(keepCourses?"Fresh start — all player data cleared, your course files kept.":"All player data cleared. The app is back to a clean first-use state; mapped courses remain."); };
   const addPenalty=()=>saveLive({...live,pen:(live.pen||0)+1,shots:[...(live.shots||[]),{pen:1,from:live.rem,c:"Penalty",h:live.hole+1}]});
   // P3: classify the shot from context so the golfer never labels it by hand.
   const shotType=(from,reach,g)=>live.strokes===0?"tee":g?"approach":from<=34?"pitch":reach?"approach":"positioning";
@@ -764,7 +808,14 @@ export default function CaddieOS(){
     // The decision record travels WITH the shot: the situation, the plays weighed, why
     // the losers were cut, the pick, its expected outcome and confidence — plus the
     // actual result, so the app can learn from what really happened later.
-    const rec=decision&&decision.record?{...decision.record,actual:{gain,end:endLie||(g?"green":null),dir:dirOv!==undefined?dirOv:dir}}:null;
+    // History stays honest: the caddie's ORIGINAL call (before any objection) is kept
+    // as `original`; `objections` logs what the golfer flagged; `accepted`/`actual` are
+    // what was actually played. An override never rewrites the first recommendation.
+    const rec=decision&&decision.record?{...decision.record,
+      original:(firstDecision&&firstDecision.record&&firstDecision.club!==(sel||decision.club))?{selected:firstDecision.record.selected,confidence:firstDecision.record.confidence}:null,
+      objections:objections.length?objections.slice():null,
+      accepted:{club:sel||decision.club,kind:decision.record.selected.kind},
+      actual:{gain,end:endLie||(g?"green":null),dir:dirOv!==undefined?dirOv:dir,club:sel||decision.club}}:null;
     const shot={c:sel||"?",from:live.rem,gain,exp:E.chipCarry(sel||"CHIP"),g:g?1:0,p:syn?1:0,h:live.hole+1,lie,dir:dirOv!==undefined?dirOv:dir,
       end:endLie||null,type:typeOv||shotType(live.rem,E.chipCarry(sel||"CHIP")>=live.rem-6,g),tourn:tourn?1:0,
       atX:live.ballX!=null?live.ballX:null,atD:live.ballD!=null?live.ballD:null,rec};
@@ -825,7 +876,7 @@ export default function CaddieOS(){
       <div style={{background:"#1a3a2e",padding:"12px 14px 9px",position:"sticky",top:0,zIndex:50}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
-            <div style={{color:"#86efac",fontSize:9,letterSpacing:3,fontWeight:800}}>CADDIE OS <span style={{opacity:.6,letterSpacing:1,fontWeight:600}}>· {BUILD}</span></div>
+            <div style={{color:"#86efac",fontSize:9,letterSpacing:3,fontWeight:800}}>CADDIE OS</div>
             <div style={{color:"white",fontSize:14,fontWeight:800}}>{P.name} · {(live&&courses[live.course]?courses[live.course]:courses[courseSel]).name} <button onClick={()=>setTourn(!tourn)} style={{marginLeft:6,border:"none",borderRadius:6,padding:"2px 8px",fontSize:9,fontWeight:800,cursor:"pointer",verticalAlign:"middle",background:tourn?"#fcd34d":"rgba(255,255,255,0.14)",color:tourn?"#1a3a2e":"#86efac"}}>{tourn?"TOURN ON":"TOURN"}</button></div>
           </div>
           {live&&<div style={{textAlign:"right"}}>
@@ -845,38 +896,48 @@ export default function CaddieOS(){
       {tab==="caddie"&&<div style={{padding:0}}>
         <style>{WSTYLE}</style>
 
-        {!live&&<div style={{padding:"22px 18px"}}>
-          <div style={{fontFamily:SERIF,fontSize:30,color:INK,lineHeight:1.2,marginBottom:6}}>Ready when you are.</div>
-          <div style={{color:MUTE,fontSize:15,marginBottom:20,fontFamily:SERIF}}>Tell me the number and your lie. I'll take care of the rest.</div>
-          <div style={{display:"flex",gap:10,marginBottom:12}}>
-            {Object.entries(courses).map(([k,c])=>(
-              <button key={k} onClick={()=>setCourseSel(k)} style={{flex:1,border:"none",borderRadius:16,padding:"14px 10px",fontSize:14,fontWeight:700,cursor:"pointer",background:courseSel===k?PINE:"#fff",color:courseSel===k?PAPER:INK,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>{c.name}</button>))}
-          </div>
-          {(()=>{const ch=(courses[courseSel]||COURSES.bp).holes;const t0=ch&&ch[0]&&ch[0].tees;if(!t0)return null;
-            return <div style={{marginBottom:12}}>
-              <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:6,textAlign:"center"}}>Playing from</div>
-              <div style={{display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap",marginTop:0}}>
-                {TEES.filter(([k])=>t0[k]!=null).map(([k,lab])=>{const on=teeSel===k;
-                  return <button key={k} onClick={()=>setTeeSel(k)} style={{border:"none",borderRadius:14,padding:"9px 13px",fontSize:13,fontWeight:700,cursor:"pointer",background:on?PINE:"#fff",color:on?PAPER:INK,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.06)"}}>{lab}</button>;})}
-              </div>
-            </div>;})()}
-          <button onClick={()=>{buzz();startRound();}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:18,fontWeight:700,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4}}>Start the round</button>
-          {!P.clubStats&&<button onClick={()=>setTab("me")} style={{width:"100%",marginTop:10,border:"none",background:"transparent",color:INK,fontSize:13,textDecoration:"underline",cursor:"pointer"}}>First time? Upload your launch-monitor data →</button>}
-          <div style={{marginTop:18,background:"#fff",borderRadius:16,padding:16,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
-            <button onClick={()=>setPrepOpen(!prepOpen)} style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",background:"none",border:"none",cursor:"pointer",padding:0}}>
-              <span style={{fontFamily:SERIF,fontSize:17,color:INK}}>Warm up first</span>
-              <span style={{color:MUTE,fontSize:20}}>{prepOpen?"–":"+"}</span>
+        {!live&&(()=>{
+          const cName=(courses[courseSel]||COURSES.bpmapped||COURSES.bp).name;
+          const ch=(courses[courseSel]||COURSES.bpmapped||COURSES.bp).holes;
+          const t0=ch&&ch[0]&&ch[0].tees;
+          const teeLab=(TEES.find(([k])=>k===teeSel)||["",""])[1]||"White";
+          return <div style={{padding:"26px 18px"}}>
+          <div style={{fontFamily:SERIF,fontSize:30,color:INK,lineHeight:1.2,marginBottom:20}}>Ready when you are, {P.name||"golfer"}.</div>
+          {/* The plan for today — calm and immediate. */}
+          <div style={{background:"#fff",borderRadius:18,padding:"18px 18px",boxShadow:"0 1px 4px rgba(0,0,0,.06)",marginBottom:16}}>
+            <button onClick={()=>setPrepSec(prepSec==="course"?"":"course")} style={{width:"100%",textAlign:"left",background:"none",border:"none",cursor:"pointer",padding:0,display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+              <span style={{fontFamily:SERIF,fontSize:22,color:INK}}>{cName}</span>
+              <span style={{color:MUTE,fontSize:12}}>change ›</span>
             </button>
-            {prepOpen&&<div style={{marginTop:10,color:INK,fontSize:14,lineHeight:1.7}}>
-              <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:4}}>Body · 8 min</div>
-              Glute bridges, world's-greatest stretch, torso rotations, then ten swings building to your smooth tempo.
-              <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",margin:"12px 0 4px"}}>Range · fresh first</div>
-              Check alignment, then your wedge windows before anything else. Five smooth 9-irons, five 7s at tempo. Finish on the greens: pace ladder 10/20/30, then five chips — walk to the first tee on a make.
-              <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",margin:"12px 0 4px"}}>Fuel</div>
-              Eat 2–3 hours out, top up every six holes, sip water every hole. Dehydration shows up as a chunked iron before it feels like thirst.
+            {prepSec==="course"&&<div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:10}}>
+              {startCourses.map(([k,c])=>(<button key={k} onClick={()=>{setCourseSel(k);setPrepSec("");}} style={{border:"none",borderRadius:12,padding:"9px 12px",fontSize:13,fontWeight:700,cursor:"pointer",background:courseSel===k?PINE:"#f1efe9",color:courseSel===k?PAPER:INK}}>{c.name}</button>))}
             </div>}
+            {t0&&<><div style={{height:1,background:"#f0eee8",margin:"14px 0"}}></div>
+            <button onClick={()=>setPrepSec(prepSec==="tees"?"":"tees")} style={{width:"100%",textAlign:"left",background:"none",border:"none",cursor:"pointer",padding:0,display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+              <span style={{fontFamily:SERIF,fontSize:18,color:INK}}>{teeLab} tees</span>
+              <span style={{color:MUTE,fontSize:12}}>change ›</span>
+            </button>
+            {prepSec==="tees"&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:10}}>
+              {TEES.filter(([k])=>t0[k]!=null).map(([k,lab])=>{const on=teeSel===k;
+                return <button key={k} onClick={()=>{setTeeSel(k);setPrepSec("");}} style={{border:"none",borderRadius:12,padding:"8px 12px",fontSize:13,fontWeight:700,cursor:"pointer",background:on?PINE:"#f1efe9",color:on?PAPER:INK}}>{lab} <span style={{opacity:.7}}>{t0[k]}</span></button>;})}
+            </div>}</>}
           </div>
-        </div>}
+          <button onClick={()=>{buzz();startRound();}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:18,fontWeight:800,cursor:"pointer",background:PINE,color:PAPER,letterSpacing:.4}}>Start round</button>
+          {/* Secondary — quiet, never competing with Start. */}
+          <div style={{display:"flex",gap:8,justifyContent:"center",marginTop:14,flexWrap:"wrap"}}>
+            <button onClick={()=>setPrepOpen(!prepOpen)} style={{border:"none",background:"transparent",color:MUTE,fontSize:13,cursor:"pointer",textDecoration:"underline"}}>Quick warm-up</button>
+            <span style={{color:"#d9d5cc"}}>·</span>
+            <button onClick={()=>setTab("me")} style={{border:"none",background:"transparent",color:MUTE,fontSize:13,cursor:"pointer",textDecoration:"underline"}}>Player &amp; data</button>
+          </div>
+          {prepOpen&&<div style={{marginTop:14,background:"#fff",borderRadius:16,padding:16,boxShadow:"0 1px 4px rgba(0,0,0,.06)",color:INK,fontSize:14,lineHeight:1.7}}>
+            <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:4}}>Body · 8 min</div>
+            Glute bridges, world's-greatest stretch, torso rotations, then ten swings building to your smooth tempo.
+            <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",margin:"12px 0 4px"}}>Range · fresh first</div>
+            Check alignment, then your wedge windows before anything else. Five smooth 9-irons, five 7s at tempo. Finish on the greens: pace ladder 10/20/30, then five chips — walk to the first tee on a make.
+            <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",margin:"12px 0 4px"}}>Fuel</div>
+            Eat 2–3 hours out, top up every six holes, sip water every hole.
+          </div>}
+        </div>;})()}
 
         {live&&(()=>{
           if(viewHole!=null&&viewHole!==live.hole){const i=viewHole,h=CH[i],sc=live.scores[i];
@@ -922,11 +983,16 @@ export default function CaddieOS(){
                   </div>
                   <button className="tapbtn" onClick={()=>goHole(live.hole+1)} disabled={!canR} style={navBtn(canR)}>›</button>
                 </div>;})()}
-              {/* Tee picker on the tee shot — set the day's tee; the distance re-defaults. */}
-              {live.strokes===0&&H.tees&&<div style={{display:"flex",gap:4,justifyContent:"center",marginBottom:6,flexWrap:"wrap",marginTop:0}}>
-                {TEES.filter(([k])=>H.tees[k]!=null).map(([k,lab])=>{const on=(live.tee||teeSel)===k;
-                  return <button key={k} className="tapbtn" onClick={()=>{setTeeSel(k);saveLive({...live,tee:k,rem:teeYardOf(H,k)});setQYards("");}} style={{border:"none",borderRadius:12,padding:"5px 9px",fontSize:11,fontWeight:700,cursor:"pointer",background:on?INK:"#fff",color:on?PAPER:MUTE,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.05)"}}>{lab} <span style={{opacity:.7}}>{H.tees[k]}</span></button>;})}
-              </div>}
+              {/* Tee is chosen at round setup — on the tee we just confirm it, with a small
+                  correction if they moved up/back. No big control row. */}
+              {live.strokes===0&&H.tees&&(()=>{const cur=live.tee||teeSel;const lab=(TEES.find(([k])=>k===cur)||["",""])[1]||"Tee";
+                return <div style={{textAlign:"center",marginBottom:6}}>
+                  <button onClick={()=>setTeeEdit(!teeEdit)} style={{border:"none",background:"transparent",color:MUTE,fontSize:12,cursor:"pointer"}}>{lab} tees · {teeYardOf(H,cur)}y <span style={{textDecoration:"underline"}}>change</span></button>
+                  {teeEdit&&<div style={{display:"flex",gap:4,justifyContent:"center",flexWrap:"wrap",marginTop:6}}>
+                    {TEES.filter(([k])=>H.tees[k]!=null).map(([k,tl])=>{const on=cur===k;
+                      return <button key={k} className="tapbtn" onClick={()=>{setTeeSel(k);saveLive({...live,tee:k,rem:teeYardOf(H,k)});setQYards("");setTeeEdit(false);}} style={{border:"none",borderRadius:12,padding:"6px 10px",fontSize:12,fontWeight:700,cursor:"pointer",background:on?INK:"#fff",color:on?PAPER:MUTE,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.05)"}}>{tl} <span style={{opacity:.7}}>{H.tees[k]}</span></button>;})}
+                  </div>}
+                </div>;})()}
               {/* Hole overview — small preview that opens a FULL-SCREEN map for placing
                   the ball, so the tap target is big while the shot screen stays no-scroll. */}
               {Array.isArray(H.path)&&(()=>{
@@ -963,10 +1029,11 @@ export default function CaddieOS(){
                 <button onClick={()=>setQYards(String(y+1))} style={{border:"none",background:"#fff",width:40,height:40,borderRadius:20,fontSize:22,color:INK,cursor:"pointer",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>+</button>
               </div>
               <div style={{textAlign:"center",color:MUTE,fontSize:10,marginBottom:6}}>{courses[live.course]&&courses[live.course].ref==="flag"?"to the flag":"to the middle"}{live.strokes>0&&Array.isArray(H.path)?" · tap or rangefinder":""}</div>
-              <div style={{display:"flex",gap:4,justifyContent:"flex-start",flexWrap:"nowrap",overflowX:"auto",marginBottom:6,padding:"0 2px 2px",WebkitOverflowScrolling:"touch"}}>
-                {[["Tee","FW"],["Fairway","FW"],["Fringe","FRINGE"],["First cut","FIRST"],["Rough","ROUGH"],["Deep","DEEP"],["Bunker","FBUNK"],["Recovery","TREES"]].map(([lab,v])=>{const on=lieLabel===lab;
+              {/* Lie only matters after the tee — on the tee it's known, so we hide it. */}
+              {live.strokes>0&&<div style={{display:"flex",gap:4,justifyContent:"flex-start",flexWrap:"nowrap",overflowX:"auto",marginBottom:6,padding:"0 2px 2px",WebkitOverflowScrolling:"touch"}}>
+                {[["Fairway","FW"],["Fringe","FRINGE"],["First cut","FIRST"],["Rough","ROUGH"],["Deep","DEEP"],["Bunker","FBUNK"],["Recovery","TREES"]].map(([lab,v])=>{const on=lieLabel===lab;
                   return <button key={lab} className="tapbtn" onClick={()=>{setLie(v);setLieLabel(lab);}} style={{flexShrink:0,border:"none",borderRadius:16,padding:"6px 11px",fontSize:12,fontWeight:600,cursor:"pointer",background:on?PINE:"#fff",color:on?PAPER:INK,boxShadow:on?"none":"0 1px 3px rgba(0,0,0,.06)"}}>{lab}</button>;})}
-              </div>
+              </div>}
               <div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:6}}>
                 {[["NONE","calm"],["INTO","into"],["DOWN","down"],["CROSS","cross"]].map(([k,l])=>(
                   <button key={k} onClick={()=>setWind(k)} style={{border:"none",borderRadius:14,padding:"4px 11px",fontSize:12,fontWeight:600,cursor:"pointer",background:wind===k?INK:"transparent",color:wind===k?PAPER:MUTE}}>{l}</button>))}
@@ -1006,7 +1073,7 @@ export default function CaddieOS(){
               // The ONE thing the caddie can't honestly know: the window on your line.
               // The golfer reports only the observation — the engine still picks the play.
               const opts=[["clear","Normal flight is clear"],["high","Gotta go high"],["low","Gotta stay low"],["curve","Need to curve it"],["nowindow","No usable window"]];
-              const commit=(val)=>{buzz();setObsv(val);const dec=runDecision(live.rem,val);setDecision(dec);if(dec)setSel(dec.club);setAskObs(false);setAsked(true);};
+              const commit=(val)=>{buzz();setObsv(val);const dec=runDecision(live.rem,{obsv:val});if(!firstDecision&&decision)setFirstDecision(decision);setDecision(dec);if(dec)setSel(dec.club);setAskObs(false);setAsked(true);};
               return <div style={arrive}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
                   <div style={{color:MUTE,fontSize:14}}><span style={{color:INK,fontWeight:700}}>one look</span> · {live.rem}y · {lieLabel.toLowerCase()}</div>
@@ -1018,156 +1085,112 @@ export default function CaddieOS(){
               </div>;})()}
 
             {phase==="whisper"&&isRecoveryLie(lie)&&(()=>{
-              // RECOVERY MODE — objective switches to lowest expected strokes, not "reach green".
+              // RECOVERY — same play-first flow: the objective is the lowest expected score,
+              // the window is the physical destination + simplest executable route. ONE call;
+              // the plays weighed sit behind Why?.
               const loc=live.ballX!=null?holeContext(H,live.ballD,live.ballX):{};
               const plan=recoveryPlan(live.rem,lie,{bag:recoBag(),wedgeDist,side:loc.side,blocked:loc.blocked});
-              const opt=plan.options.find(o=>o.club===sel)||plan.best;
-              const whyBest=plan.best&&plan.best.kind==="hero"?"the window's worth the risk here.":"punching or laying up beats the hero shot here.";
+              const opt=plan.best||plan.options[0];
+              const club=opt?humanClub(famOf(opt.club),opt.club):"—";
               return <div style={arrive}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-                  <div style={{color:MUTE,fontSize:14}}><span style={{color:"#a3402f",fontWeight:800}}>RECOVERY</span> · {live.rem}y · {lieLabel.toLowerCase()}</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                  <div style={{color:MUTE,fontSize:13}}><span style={{color:"#a3402f",fontWeight:800}}>RECOVERY</span> · Hole {H.n||live.hole+1} · {live.rem}y · {lieLabel.toLowerCase()}</div>
                   <button onClick={()=>{setAsked(false);setShowAlt(false);}} style={{border:"none",background:"transparent",color:MUTE,fontSize:13,cursor:"pointer"}}>↩ back</button>
                 </div>
-                <div style={{background:PINE,borderRadius:28,padding:"24px 22px",boxShadow:"0 10px 30px rgba(18,43,33,.18)"}}>
+                {Array.isArray(H.path)&&<div style={{background:"#fff",borderRadius:16,padding:8,boxShadow:"0 1px 4px rgba(0,0,0,.06)",marginBottom:12}}>
+                  <HoleView h={H} P={P} tee={live.tee} compact ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)}/>
+                </div>}
+                <div style={{background:PINE,borderRadius:24,padding:"20px 20px",boxShadow:"0 10px 30px rgba(18,43,33,.18)"}}>
                   <div style={{color:"#e7b7a6",fontSize:11,letterSpacing:2,textTransform:"uppercase",marginBottom:2,fontWeight:800}}>Objective</div>
-                  <div style={{fontFamily:SERIF,fontSize:22,color:PAPER,marginBottom:plan.sideNote?2:8}}>{plan.objective}</div>
-                  {plan.sideNote&&<div style={{color:"#e7b7a6",fontSize:12,marginBottom:8,opacity:.9}}>{plan.sideNote.replace(/^\s*—\s*/,"")}</div>}
-                  <div style={{fontFamily:SERIF,fontSize:36,color:GOLD,marginBottom:8}}>{opt?humanClub(famOf(opt.club),opt.club):"—"}</div>
-                  <div style={{fontFamily:SERIF,fontSize:18,color:PAPER,lineHeight:1.45,opacity:.96}}>{opt?opt.reason:""}</div>
+                  <div style={{fontFamily:SERIF,fontSize:21,color:PAPER,marginBottom:plan.sideNote?2:10}}>{plan.objective}</div>
+                  {plan.sideNote&&<div style={{color:"#e7b7a6",fontSize:12,marginBottom:10,opacity:.9}}>{plan.sideNote.replace(/^\s*—\s*/,"")}</div>}
+                  <div style={{fontFamily:SERIF,fontSize:34,color:GOLD,marginBottom:8}}>{club}</div>
+                  <div style={{fontFamily:SERIF,fontSize:16,color:PAPER,lineHeight:1.4,opacity:.96}}>{opt?opt.reason:""}</div>
                 </div>
-                <div style={{marginTop:14}}>
-                  {plan.options.map((o,i)=>{const on=o.club===sel&&opt&&o.kind===opt.kind;const isBest=plan.best&&o.kind===plan.best.kind;
-                    return <button key={i} className="tapbtn" onClick={()=>setSel(o.club)} style={{display:"block",width:"100%",textAlign:"left",border:on?"2px solid #1a3a2e":"2px solid #e7e2d8",background:on?"#eef1ea":"#fff",borderRadius:14,padding:"11px 13px",marginBottom:8,cursor:"pointer"}}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
-                        <span style={{fontSize:15,fontWeight:800,color:INK}}>{on?"✓ ":""}{o.label} · {o.club}{o.kind==="hero"?` · ${o.prob}% comes off`:""}</span>
-                        <span style={{fontSize:13,fontWeight:800,color:isBest?"#1a7f37":MUTE,whiteSpace:"nowrap"}}>exp {o.ev}{isBest?" ✓":""}</span>
-                      </div>
-                      <div style={{fontSize:12,color:MUTE,marginTop:2}}>{o.reason}</div>
-                    </button>;})}
-                </div>
-                <div style={{color:MUTE,fontSize:12,fontStyle:"italic",fontFamily:SERIF,margin:"2px 4px 0"}}>Why — lowest expected score to the hole; {whyBest}</div>
-                <button className="tapbtn" onClick={()=>{buzz();setAwaitResult(true);}} style={{width:"100%",border:"none",borderRadius:18,padding:"20px",fontSize:19,fontWeight:800,cursor:"pointer",background:GOLD,color:PINE,letterSpacing:1,marginTop:14}}>HIT IT</button>
+                <button onClick={()=>setShowConf(!showConf)} style={{marginTop:12,width:"100%",border:"1px solid #e7e2d8",background:"#fff",borderRadius:12,padding:"10px 12px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",color:INK,fontSize:14,fontWeight:700}}>
+                  <span>Lowest expected score to the hole</span><span style={{color:MUTE,fontSize:13}}>{showConf?"hide Why ▾":"Why? ›"}</span>
+                </button>
+                {showConf&&<div style={{marginTop:8,background:"#fff",borderRadius:14,padding:13,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+                  <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8}}>Plays I compared</div>
+                  {plan.options.map((o,i)=>{const isBest=plan.best&&o.kind===plan.best.kind;
+                    return <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,fontSize:12,padding:"4px 0",borderTop:i?"1px solid #f2efe8":"none"}}>
+                      <span style={{color:isBest?INK:MUTE,fontWeight:isBest?800:600}}>{isBest?"✓ ":""}{o.label} · {o.club}{o.kind==="hero"?` · ${o.prob}% comes off`:""}</span>
+                      <span style={{color:isBest?"#1a7f37":MUTE,fontWeight:700,whiteSpace:"nowrap"}}>exp {o.ev}</span>
+                    </div>;})}
+                </div>}
+                <button className="tapbtn" onClick={()=>{buzz();if(opt)setSel(opt.club);setAwaitResult(true);}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:19,fontWeight:800,cursor:"pointer",background:GOLD,color:PINE,letterSpacing:1,marginTop:14}}>PLAY IT</button>
               </div>;})()}
 
-            {phase==="whisper"&&!isRecoveryLie(lie)&&(()=>{
-              const fam=famOf(sel||"7i");
-              const sideC=(()=>{const c=cstat(fam);if(sideProven(c))return{dir:c.side.dir,pct:c.side.pct};const b=dirBias(fam);if(b)return{dir:b[0],pct:parseInt(b.slice(1))};return null;})();
-              const carrySel=E.chipCarry(sel||"CHIP");
-              const reach=carrySel>=effRem-6;              // wind-aware: can this club get home?
-              const leaves=Math.max(0,live.rem-carrySel);  // yards left uses the real distance
-              // Can't get home? Don't just say "too far" — pick a spot to advance TO and
-              // show it on the map. Target sits one club's carry up the play line, then
-              // we nudge it off whichever hazard is nearest so it lands in the short grass.
-              const tgt=(()=>{
-                if(reach||!Array.isArray(H.path)||live.rem<=34) return null;
-                const dNow=live.ballX!=null?live.ballD:(live.strokes===0?0:Math.max(0,1-live.rem/H.y));
-                const dTgt=Math.max(dNow+0.03,Math.min(0.96,dNow+carrySel/H.y));
-                let x=centerX(H.path,dTgt);
-                (H.hazards||[]).forEach(z=>{if((z.from??0)-0.05<=dTgt&&(z.to??1)+0.05>=dTgt){
-                  if(z.side==="L"&&x<0.62)x=Math.min(0.8,x+0.12); if(z.side==="R"&&x>0.38)x=Math.max(0.2,x-0.12);}});
-                return {d:dTgt,x,label:`aim · leaves ${leaves}`,carry:carrySel,leaves};
-              })();
-              const shaky=fam!=="chip"&&reliability(fam)<55; // this club is unreliable for the player
-              const cc=confOf(fam);
-              const W=whisper({fam,chip:sel,eff:E.eff(fam),stat:disp(fam),conf:cc.score,hot:cc.state==="hot",cold:cc.state==="cold",adj:flags.adj[fam]||null,side:sideC,feel:(P.feels&&P.feels[fam])||null,hole:{dzL:H.dzL,dzR:H.dzR,favor:live.strokes===0?H.favor:null},i35:live.rem<=34,reach,leaves,shaky,wind});
+            {phase==="whisper"&&!isRecoveryLie(lie)&&decision&&(()=>{
+              // ONE authoritative call, straight from decideShot(): club, aim, flight,
+              // landing, one optional cue — no saved club-feel, no competing strategy.
+              const D=decision, fam=famOf(D.club||"7i"), club=humanClub(fam,D.club);
+              const c=D.confidence||{};
+              const bandCol=b=>b==="High"?"#1a7f37":b==="Solid"?"#8a6d2f":"#a3402f";
+              const showFlight=D.flight&&!["normal","your stock flight","committed","low"].includes(D.flight);
+              const shotsHere=(live.shots||[]).filter(s=>s.h===live.hole+1);
+              const overridden=firstDecision&&firstDecision.club!==D.club;
+              const cap0=t=>String(t||"").charAt(0).toUpperCase()+String(t||"").slice(1);
+              // An objection → the caddie RE-PICKS (it never hands strategy back). The
+              // original call is preserved (firstDecision) so history isn't rewritten.
+              const objectWith=(reason,ov)=>{buzz();if(!firstDecision)setFirstDecision(decision);setObjections(o=>[...o,reason]);
+                const dec=runDecision(live.rem,ov);setDecision(dec);if(dec)setSel(dec.club);setShowAlt(false);};
+              const distrust=()=>{const nx=[...objExclude,fam];setObjExclude(nx);objectWith("distrust:"+fam,{exclude:nx});};
+              const row=(lab,val)=><div style={{display:"flex",gap:8,marginBottom:6}}>
+                <div style={{color:"#9db8a6",fontSize:12,fontWeight:800,letterSpacing:.5,textTransform:"uppercase",width:52,flexShrink:0}}>{lab}</div>
+                <div style={{fontFamily:SERIF,fontSize:16,color:PAPER,lineHeight:1.35}}>{val}</div></div>;
               return <div style={arrive}>
-                {(()=>{const stype=live.strokes===0?"tee shot":live.rem<=34?"pitch":reach?"approach":"positioning shot";return (
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
-                  <div style={{color:MUTE,fontSize:14}}><span style={{color:INK,fontWeight:700}}>{stype}</span> · {live.rem}y{effRem!==live.rem?` (plays ${effRem})`:""} · {lieLabel.toLowerCase()}{wind!=="NONE"?" · "+wind.toLowerCase()+" wind":""}</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                  <div style={{color:MUTE,fontSize:13}}><b style={{color:INK}}>Hole {H.n||live.hole+1}</b> · par {H.par} · {live.rem}y{effRem!==live.rem?` (plays ${effRem})`:""} · {lieLabel.toLowerCase()}{wind!=="NONE"?` · ${wind.toLowerCase()} wind`:""}</div>
                   <button onClick={()=>{setAsked(false);setShowAlt(false);}} style={{border:"none",background:"transparent",color:MUTE,fontSize:13,cursor:"pointer"}}>↩ back</button>
-                </div>);})()}
-                <div style={{background:PINE,borderRadius:28,padding:"30px 24px",boxShadow:"0 10px 30px rgba(18,43,33,.18)"}}>
-                  <div style={{fontFamily:SERIF,fontSize:44,color:GOLD,letterSpacing:.3,marginBottom:16,textWrap:"balance"}}>{W.club}</div>
-                  {W.lines.map((l,i)=>(<div key={i} style={{fontFamily:SERIF,fontSize:20,color:PAPER,lineHeight:1.5,marginBottom:10,opacity:.96}}>{l}</div>))}
                 </div>
-                {decision&&(()=>{ // The picture (aim · trajectory · landing) + one cue, and the DISTINCT confidences.
-                  const D=decision,c=D.confidence||{};
-                  const col=v=>v>=70?"#1a7f37":v>=45?"#8a6d2f":"#a3402f";
-                  const pill=(lab,v)=>v==null?null:<div key={lab} style={{fontSize:11,fontWeight:700,color:col(v),background:v>=70?"#eaf3ec":v>=45?"#f6efe1":"#f6ece9",borderRadius:9,padding:"4px 8px"}}>{lab} {v}</div>;
-                  const cap0=t=>String(t||"").charAt(0).toUpperCase()+String(t||"").slice(1);
-                  return <div style={{marginTop:14,background:"#fff",borderRadius:16,padding:14,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
-                    <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:6}}>The picture</div>
-                    <div style={{fontFamily:SERIF,fontSize:15,color:INK,lineHeight:1.5}}>{cap0(D.startLine)} · {D.trajectory} · {D.landing}.</div>
-                    <div style={{fontFamily:SERIF,fontSize:14,color:PINE,marginTop:4,fontWeight:700}}>{D.cue}</div>
-                    {/* On-course, the live card stays a single clean read: one confidence dot + a
-                        tap to expand the six components. Everything is preserved in the record. */}
-                    {c.overall!=null&&<button onClick={()=>setShowConf(!showConf)} style={{marginTop:10,border:"none",background:"transparent",padding:0,cursor:"pointer",display:"flex",alignItems:"center",gap:7,color:MUTE,fontSize:12}}>
-                      <span style={{width:9,height:9,borderRadius:9,background:col(c.overall)}}></span>
-                      <span>Confidence <b style={{color:col(c.overall)}}>{c.overall}/100</b></span>
-                      <span style={{fontSize:11,opacity:.7}}>{showConf?"hide ▾":"details ›"}</span>
-                    </button>}
-                    {showConf&&<>
-                      <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:10}}>
-                        {[["you",c.player],["today",c.form],["course",c.course],["read",c.observation],["play",c.play],["swing",c.execution]].map(([l,v])=>pill(l,v))}
-                      </div>
-                      <div style={{color:MUTE,fontSize:11,marginTop:8}}>Overall is the weakest link — a plan is only as strong as its shakiest part.</div>
-                    </>}
-                  </div>;})()}
-                {tgt&&<div style={{marginTop:14,background:"#fff",borderRadius:16,padding:"12px 12px 6px",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
-                  <div style={{textAlign:"center",color:INK,fontSize:14,fontWeight:700,marginBottom:2}}>Can't get home — aim here</div>
-                  <div style={{textAlign:"center",color:MUTE,fontSize:12,marginBottom:6}}>Advance ~{tgt.carry}y to the short grass, leaves ~{tgt.leaves} in</div>
-                  <HoleView h={H} P={P} tee={live.tee} target={tgt} ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} shots={(live.shots||[]).filter(s=>s.h===live.hole+1)}/>
+                {/* One map — the SAME map with the decision overlay (aim + your dispersion). */}
+                {Array.isArray(H.path)&&<div style={{background:"#fff",borderRadius:16,padding:8,boxShadow:"0 1px 4px rgba(0,0,0,.06)",marginBottom:12}}>
+                  <HoleView h={H} P={P} tee={live.tee} compact ball={live.ballX!=null?{d:live.ballD,x:live.ballX}:null} target={D.aim} dispersion={D.dispersion} shots={shotsHere}/>
                 </div>}
-                {(()=>{ // P5: one plain-language reason this club came up, from the player's own data.
-                  const d=disp(fam),cs=cstat(fam);
-                  const reason = cc.state==="cold" ? `Heads up — ${fam} has been cold (${cc.reasons.slice(-2).join(", ")}); it's only here because nothing else covers the number.`
-                    : cc.state==="hot" ? `${fam} is hot right now — you've been flushing it.`
-                    : lie==="TREES" ? "Blocked — this is a get-it-back-in-play shot, not a hero swing."
-                    : lieExtra>=3 ? `Your ${lieName[lie]||"lie"} plays about ${lieExtra} yards longer, so it's clubbed up.`
-                    : flags.adj[fam] ? "You've been carrying it short lately, so it's adjusted down."
-                    : shaky ? "It's the most reliable club in your bag that still covers the number."
-                    : (d&&d.sd<=7) ? "Your dispersion with it is tight — a high-percentage number."
-                    : (sideC&&sideC.pct>=60) ? "Aimed to leave room for your usual miss."
-                    : cs ? "Backed by your own carry history with it."
-                    : "Your best match for the number.";
-                  return <div style={{color:MUTE,fontSize:13,fontStyle:"italic",fontFamily:SERIF,margin:"10px 4px 0"}}>Why — {reason}</div>;})()}
-                {(()=>{ // Pinched/water green: attack only with a high-confidence number, else lay up.
-                  const pinch=H.green&&(H.green.pinch||/pond|creek|water/i.test(H.green.guard||""));
-                  if(!pinch||!reach||live.rem<=34||live.strokes===0) return null;   // approach shots only
-                  const gp=greenProb(fam),d=disp(fam),rel=reliability(fam),haveData=gp!=null||d!=null;
-                  const confident=(gp!=null&&gp>=55)||(d&&d.sd<=8&&rel>=62);
-                  const lay=E.layup(live.rem)[0];
-                  if(confident||!haveData) return <div style={{marginTop:12,background:"#eef1ea",borderRadius:14,padding:"10px 12px",border:"1px solid #d6ddd0"}}>
-                    <div style={{fontSize:13,fontWeight:800,color:INK}}>Green's pinched — but this is a high-percentage number.</div>
-                    <div style={{fontSize:12,color:MUTE,marginTop:2}}>{gp!=null?`~${gp}% on-target with your ${fam}${d?`, ±${d.sd}y`:""} — commit and go at it, center is plenty.`:`Nothing in your data says lay up — go at it, but aim center.`}</div></div>;
-                  return <div style={{marginTop:12,background:"#fbf3ea",borderRadius:14,padding:"11px 12px",border:"1px solid #ecd9c0"}}>
-                    <div style={{fontSize:13,fontWeight:800,color:"#8a5a1a"}}>⚠ Pinched green — not a high-percentage number.</div>
-                    <div style={{fontSize:12,color:MUTE,marginTop:2,marginBottom:lay?8:0}}>{gp!=null?`Only ~${gp}% on-target with your ${fam}${d?` (±${d.sd}y)`:""} into a green squeezed by water. `:``}The percentage play is to lay back to your number.</div>
-                    {lay&&<button className="tapbtn" onClick={()=>{buzz();setSel(lay.k);}} style={{border:"none",borderRadius:12,padding:"10px 12px",background:PINE,color:PAPER,fontSize:13,fontWeight:800,cursor:"pointer"}}>Lay up — {lay.k} to leave {lay.rem}</button>}
+                {/* The call. */}
+                <div style={{background:PINE,borderRadius:24,padding:"20px 20px",boxShadow:"0 10px 30px rgba(18,43,33,.18)"}}>
+                  <div style={{fontFamily:SERIF,fontSize:38,color:GOLD,letterSpacing:.3,marginBottom:14,textWrap:"balance"}}>{club}</div>
+                  {row("Aim",cap0(D.startLine))}
+                  {showFlight&&row("Flight",cap0(D.trajectory))}
+                  {row("Finish",cap0(D.landing))}
+                  {D.cue&&<div style={{fontFamily:SERIF,fontSize:15,color:"#d9c48c",fontStyle:"italic",marginTop:8}}>{D.cue}</div>}
+                </div>
+                {overridden&&<div style={{color:MUTE,fontSize:12,margin:"8px 2px 0",fontStyle:"italic"}}>Re-picked after your note — your original call is kept in the record.</div>}
+                {/* Confidence: one plain word; the detail + full alternative comparison sit behind Why? */}
+                {c.band&&<button onClick={()=>setShowConf(!showConf)} style={{marginTop:12,width:"100%",border:"1px solid #e7e2d8",background:"#fff",borderRadius:12,padding:"10px 12px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <span style={{display:"flex",alignItems:"center",gap:8,color:INK,fontSize:14,fontWeight:700}}><span style={{width:10,height:10,borderRadius:10,background:bandCol(c.band)}}></span>Confidence: <span style={{color:bandCol(c.band)}}>{c.band}</span></span>
+                  <span style={{color:MUTE,fontSize:13}}>{showConf?"hide Why ▾":"Why? ›"}</span>
+                </button>}
+                {showConf&&(()=>{
+                  const comp=[["Player evidence",c.player],["Today's form",c.form],["Course information",c.course],["Observation certainty",c.observation],["Strategic play",c.play],["Execution method",c.execution]];
+                  const cands=(D.record&&D.record.candidates)||[];
+                  return <div style={{marginTop:8,background:"#fff",borderRadius:14,padding:13,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+                    <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8}}>Confidence — {c.overall}/100 overall</div>
+                    {comp.map(([lab,v])=>v==null?null:<div key={lab} style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}><span style={{color:INK}}>{lab}</span><b style={{color:bandCol(v>=72?"High":v>=52?"Solid":"Limited")}}>{v}</b></div>)}
+                    <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",margin:"12px 0 6px"}}>Plays I compared (before I called it)</div>
+                    {cands.slice(0,6).map((o,i)=>{const chosen=o.club===D.club&&o.kind===D.kind;
+                      return <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,fontSize:12,padding:"3px 0",borderTop:i?"1px solid #f2efe8":"none"}}>
+                        <span style={{color:chosen?INK:MUTE,fontWeight:chosen?800:600}}>{chosen?"✓ ":""}{o.club} · {o.kind}{o.leaves!=null?` · leaves ${o.leaves}`:""}{o.water>0.05?` · ${Math.round(o.water*100)}% water`:""}</span>
+                        <span style={{color:o.executable?MUTE:"#a3402f",whiteSpace:"nowrap"}}>{o.executable?`exp ${o.ev}`:"cut"}</span>
+                      </div>;})}
                   </div>;})()}
-                <button onClick={()=>{buzz();setAwaitResult(true);}} style={{width:"100%",border:"none",borderRadius:18,padding:"20px",fontSize:19,fontWeight:800,cursor:"pointer",background:GOLD,color:PINE,letterSpacing:1,marginTop:18}}>HIT IT</button>
-                <button onClick={()=>setShowAlt(!showAlt)} style={{width:"100%",border:"none",background:"transparent",color:MUTE,fontSize:14,cursor:"pointer",marginTop:12,fontFamily:SERIF,fontStyle:"italic"}}>{showAlt?"never mind":"something else?"}</button>
+                <button onClick={()=>{buzz();setAwaitResult(true);}} style={{width:"100%",border:"none",borderRadius:18,padding:"18px",fontSize:19,fontWeight:800,cursor:"pointer",background:GOLD,color:PINE,letterSpacing:1,marginTop:14}}>PLAY IT</button>
+                <button onClick={()=>setShowAlt(!showAlt)} style={{width:"100%",border:"none",background:"transparent",color:MUTE,fontSize:14,cursor:"pointer",marginTop:10,fontFamily:SERIF}}>{showAlt?"Keep original call":"Not comfortable?"}</button>
                 {showAlt&&(()=>{
-                  // Don't go blank — offer the best OTHER plays: the next-best club to
-                  // reach, and the smartest lay-up (leaves your best scoring number),
-                  // both computed from the player's carries + reliability.
-                  const cur=famOf(sel||"");
-                  const alts=[];
-                  const rp=E.pick(effRem,reliability);
-                  if(rp&&rp.reach&&rp.fam!==cur&&rp.fam!=="chip"&&rp.fam!=="52")
-                    alts.push({chip:rp.chip,kind:"reach",head:"Best club to reach",sub:`${rp.carry}y carry${rp.leaves>0?` · leaves ${rp.leaves}`:" · pin-high"}`});
-                  E.layup(live.rem).forEach(o=>{const f=famOf(o.k);if(f===cur)return;
-                    alts.push({chip:o.k,kind:"layup",head:`Lay up — leaves ${o.rem}`,sub:`${o.k} ${o.carry}y → then ${o.r.chip||o.r.club}`});});
-                  const seen={};const list=alts.filter(a=>seen[a.chip]?false:(seen[a.chip]=1)).slice(0,3);
-                  return <div style={{marginTop:12,background:"#fff",borderRadius:16,padding:14,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
-                    {list.length>0&&<>
-                      <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",marginBottom:8}}>Better plays from here</div>
-                      {list.map((a,i)=>{const on=sel===a.chip;return <button key={i} className="tapbtn" onClick={()=>{buzz();setSel(a.chip);}} style={{display:"block",width:"100%",textAlign:"left",border:on?"2px solid #1a3a2e":"2px solid #ece7dd",background:on?"#eef1ea":"#fbfaf7",borderRadius:12,padding:"10px 12px",marginBottom:8,cursor:"pointer"}}>
-                        <div style={{fontSize:14,fontWeight:800,color:INK}}>{on?"✓ ":""}{a.head} · {a.chip}</div>
-                        <div style={{fontSize:12,color:MUTE,marginTop:2}}>{a.sub}</div>
-                      </button>;})}
-                    </>}
-                    <div style={{color:MUTE,fontSize:11,letterSpacing:1.4,textTransform:"uppercase",margin:list.length?"6px 0 8px":"0 0 8px"}}>Or pick any club</div>
-                    <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:6,marginBottom:8}}>
-                      {chips.map(c=>{const on=sel===c;return <button key={c} onClick={()=>setSel(c)} style={{flexShrink:0,border:"none",borderRadius:12,padding:"9px 12px",fontSize:14,fontWeight:700,cursor:"pointer",background:on?PINE:"#f1efe9",color:on?PAPER:INK}}>{c}<span style={{opacity:.6,fontSize:10}}> {E.chipCarry(c)}</span></button>;})}
+                  // Structured objections only — the golfer reports what's off; the caddie re-picks.
+                  return <div style={{marginTop:8,background:"#fff",borderRadius:16,padding:14,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+                    <div style={{color:MUTE,fontSize:13,marginBottom:10}}>Tell me what's off — I'll re-pick. You never have to choose the club.</div>
+                    <button className="tapbtn" onClick={distrust} style={objBtn}>I don't trust that club</button>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",margin:"0 0 8px"}}>
+                      <div style={{fontSize:12,color:MUTE,width:"100%",marginBottom:2}}>The lie is worse —</div>
+                      {[["ROUGH","Rough"],["DEEP","Deep"],["FBUNK","Bunker"],["TREES","Recovery"]].map(([v,lab])=>
+                        <button key={v} className="tapbtn" onClick={()=>{setLie(v);setLieLabel(lab);objectWith("lie:"+v,{lie:v});}} style={{border:"1px solid #e7e2d8",borderRadius:10,padding:"8px 12px",background:"#fbfaf7",fontSize:13,fontWeight:700,color:INK,cursor:"pointer"}}>{lab}</button>)}
                     </div>
-                    {(()=>{const d=disp(fam),gp=greenProb(fam),cf=conf(fam);const bits=[];
-                      if(d)bits.push(`${d.n} tracked · ${d.avg>=0?"+":""}${d.avg}y avg · ±${d.sd}y`);
-                      if(gp!=null)bits.push(`on-target ~${gp}%`);
-                      if(cf!=null)bits.push(`confidence ${cf}/100`);
-                      if(sideC&&sideC.pct>=58)bits.push(`miss ${sideC.dir} ${sideC.pct}%`);
-                      return bits.length?<div style={{color:MUTE,fontSize:12,lineHeight:1.6}}>{bits.join(" · ")}</div>:<div style={{color:MUTE,fontSize:12}}>No tracked data yet for this club — the number's your best guide.</div>;})()}
-                    <button onClick={()=>{buzz();addPenalty();}} style={{marginTop:10,border:"none",borderRadius:10,padding:"8px 12px",background:"#f6efe6",color:"#8a6d2f",fontSize:12,fontWeight:700,cursor:"pointer"}}>Add a penalty (stroke & distance)</button>
+                    <button className="tapbtn" onClick={()=>{if(!firstDecision)setFirstDecision(decision);setObjections(o=>[...o,"distance"]);setShowAlt(false);setAsked(false);}} style={objBtn}>The distance is wrong</button>
+                    <button className="tapbtn" onClick={()=>{if(!firstDecision)setFirstDecision(decision);setObjections(o=>[...o,"window"]);setShowAlt(false);setObsv(null);setAskObs(true);}} style={objBtn}>The window is different</button>
+                    <button className="tapbtn" onClick={()=>{setShowConf(true);setShowAlt(false);}} style={objBtn}>Show me why</button>
+                    <button onClick={()=>{buzz();addPenalty();}} style={{marginTop:6,border:"none",borderRadius:10,padding:"8px 12px",background:"#f6efe6",color:"#8a6d2f",fontSize:12,fontWeight:700,cursor:"pointer"}}>Add a penalty (stroke & distance)</button>
                   </div>;})()}
               </div>;})()}
 
@@ -1554,11 +1577,39 @@ export default function CaddieOS(){
               </div>
             </div>))}
         </div>
-        <button onClick={()=>{const p={...P,updated:new Date().toISOString()};setP(p);store.set("caddie:profile",p);setMeMsg("Saved — the engine now runs on your numbers.");}} style={{...S.btn,width:"100%",background:"#1a3a2e",color:"#86efac",marginBottom:8}}>SAVE PROFILE</button>
+        <button onClick={()=>{const p={...P,schemaV:SCHEMA,updated:new Date().toISOString()};setP(p);store.set("caddie:profile",p);setMeMsg("Saved — the engine now runs on your numbers.");}} style={{...S.btn,width:"100%",background:"#1a3a2e",color:"#86efac",marginBottom:8}}>SAVE PROFILE</button>
         {meMsg&&<div style={{textAlign:"center",fontSize:12,fontWeight:700,color:"#1a7f37",marginBottom:8}}>{meMsg}</div>}
+        {/* ===== PLAYER DATA — safe clearing controls (Part 11). ===== */}
         <div style={S.card}>
-          <div style={S.h}>Feels — your best cues, in your words</div>
-          <div style={{...S.sub,fontSize:12,marginBottom:8}}>These show on every suggested shot. Write the cue that actually works for you.</div>
+          <div style={S.h}>Player Data</div>
+          <div style={{...S.sub,fontSize:12,marginBottom:10}}>Clear the parts you want. Long-term club data and completed rounds are only touched by the actions that say so.</div>
+          <button className="tapbtn" onClick={resetTodayForm} style={{...S.btn,width:"100%",background:"#f1efe9",color:INK,marginBottom:8,textAlign:"left"}}>Reset today's form <span style={{color:MUTE,fontWeight:600,fontSize:12}}>· warm-up + temporary adjustments</span></button>
+          {live&&<button className="tapbtn" onClick={()=>{if(dataArm==="round"){clearCurrentRound();}else setDataArm("round");}} style={{...S.btn,width:"100%",background:dataArm==="round"?"#f6ece9":"#f1efe9",color:dataArm==="round"?"#a3402f":INK,marginBottom:8,textAlign:"left"}}>{dataArm==="round"?"Tap again to clear the active round":"Clear current round"} <span style={{color:MUTE,fontWeight:600,fontSize:12}}>· keeps completed rounds</span></button>}
+          <div style={{fontSize:12,color:MUTE,margin:"4px 0 6px"}}>Reset one club's data:</div>
+          <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:8}}>
+            {Object.keys(P.carries||{}).map(k=>(<button key={k} className="tapbtn" onClick={()=>setDataArm("club:"+k)} style={{border:"1px solid #e7e2d8",borderRadius:10,padding:"7px 11px",fontSize:13,fontWeight:700,cursor:"pointer",background:dataArm==="club:"+k?"#f6ece9":"#fbfaf7",color:dataArm==="club:"+k?"#a3402f":INK}}>{k}</button>))}
+          </div>
+          {dataArm&&dataArm.startsWith("club:")&&<div style={{background:"#faf3ee",borderRadius:12,padding:"10px 12px",marginBottom:8}}>
+            <div style={{fontSize:13,color:INK,marginBottom:8}}>Clear all capability data for <b>{dataArm.slice(5)}</b>? Other clubs are untouched.</div>
+            <div style={{display:"flex",gap:8}}>
+              <button className="tapbtn" onClick={()=>resetClubData(dataArm.slice(5))} style={{flex:1,border:"none",borderRadius:10,padding:"10px",background:"#a3402f",color:"#fff",fontWeight:800,cursor:"pointer"}}>Clear {dataArm.slice(5)}</button>
+              <button className="tapbtn" onClick={()=>setDataArm(null)} style={{flex:1,border:"none",borderRadius:10,padding:"10px",background:"#f1efe9",color:INK,fontWeight:700,cursor:"pointer"}}>Cancel</button>
+            </div></div>}
+          <div style={{height:1,background:"#f0eee8",margin:"10px 0"}}></div>
+          <button className="tapbtn" onClick={()=>{if(dataArm==="fresh"){clearAllPlayerData(true);}else setDataArm("fresh");}} style={{...S.btn,width:"100%",background:dataArm==="fresh"?"#f6ece9":"#f1efe9",color:dataArm==="fresh"?"#a3402f":INK,marginBottom:8,textAlign:"left"}}>{dataArm==="fresh"?"Tap again — clear player data, keep courses":"Start fresh, keep courses"} <span style={{color:MUTE,fontWeight:600,fontSize:12}}>· preserves imported course files</span></button>
+          {dataArm!=="all2"?
+            <button className="tapbtn" onClick={()=>setDataArm("all2")} style={{...S.btn,width:"100%",background:"#fff",color:"#a3402f",border:"2px solid #e7c3ba",textAlign:"left"}}>Clear ALL player data…</button>
+            :<div style={{background:"#faf0ec",border:"2px solid #e7c3ba",borderRadius:12,padding:"12px 13px"}}>
+              <div style={{fontSize:13,fontWeight:800,color:"#a3402f",marginBottom:4}}>This removes everything about you:</div>
+              <div style={{fontSize:12,color:INK,lineHeight:1.5,marginBottom:10}}>profile, clubs, carries, benched state, shot history, all rounds, decision records, warm-up, cues and imported data. Mapped courses stay. This can't be undone.</div>
+              <div style={{display:"flex",gap:8}}>
+                <button className="tapbtn" onClick={()=>clearAllPlayerData(false)} style={{flex:1,border:"none",borderRadius:10,padding:"12px",background:"#a3402f",color:"#fff",fontWeight:800,cursor:"pointer"}}>Yes, clear everything</button>
+                <button className="tapbtn" onClick={()=>setDataArm(null)} style={{flex:1,border:"none",borderRadius:10,padding:"12px",background:"#f1efe9",color:INK,fontWeight:700,cursor:"pointer"}}>Cancel</button>
+              </div></div>}
+        </div>
+        <div style={S.card}>
+          <div style={S.h}>Notes — optional swing cues, in your words</div>
+          <div style={{...S.sub,fontSize:12,marginBottom:8}}>Kept for your reference. The caddie's live cue now comes from the current shot, not a saved club message — these no longer auto-appear on recommendations.</div>
           {Object.keys(P.feels||{}).map(k=>(
             <div key={k} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 0",borderBottom:"1px solid #f2f2f7"}}>
               <span style={{fontSize:13,fontWeight:900,minWidth:42}}>{k}</span>
@@ -1576,6 +1627,7 @@ export default function CaddieOS(){
           </div>
         </div>
         <div style={{...S.sub,fontSize:11,color:"#8a8a8e",textAlign:"center"}}>Profile + rounds persist on this device across sessions.</div>
+        <div style={{...S.sub,fontSize:10,color:"#b0b0b4",textAlign:"center",marginTop:4}}>CaddieOS · {BUILD}</div>
       </div>}
 
       {!tourn&&<div style={{position:"fixed",bottom:0,left:0,right:0,maxWidth:430,margin:"0 auto",background:"rgba(250,248,244,0.97)",backdropFilter:"blur(12px)",borderTop:"1px solid #e7e2d8",display:"flex",paddingBottom:8,zIndex:60,boxSizing:"border-box"}}>
