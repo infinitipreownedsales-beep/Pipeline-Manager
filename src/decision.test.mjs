@@ -215,5 +215,98 @@ const p4bag = (over={}) => Object.entries(P4CARRIES).map(([k,carry]) =>
   ok("clean hole: a longer club can win when nothing punishes it", evOf(d.club) != null);
 }
 
+// ===========================================================================
+// PART 5 — SHOT-CONTEXT CLASSIFICATION (par-3 hotfix). A tee shot is not automatically
+// a fairway-position play: a par-3 tee is a green-targeting approach.
+import { shotContextOf } from "./decision.js";
+const P3CARR = { Dr: 250, "3W": 190, "4h": 205, "5i": 175, "6i": 165, "7i": 150, "8i": 138, "9i": 125, PW: 115 };
+const p3bag = (over={}) => Object.entries(P3CARR).map(([k,carry]) =>
+  ({ k, carry, rel: over[k]?.rel ?? 72, sd: over[k]?.sd ?? 8, benched: false }));
+const fairwayLang = d => /fairway/i.test(d.startLine+" "+d.landing) || /fairway finder/i.test(d.cue||"");
+
+// Short par 3 (~118) — the reported bug. Realistic scoring club, never the 3-wood.
+{
+  const H = { n: 3, par: 3, y: 118, path: [[0,.5],[1,.5]], hazards: [] };
+  const d = decideShot(base({ hole: H, from: null, rem: 118, effRem: 118, lie: "FW", strokes: 0, bag: p3bag() }));
+  ok("short par-3 tee is classified par3_tee", d.context === "par3_tee");
+  ok("short par-3 → a green-targeting ATTACK", d.kind === "attack" && d.play.destination.label === "the green");
+  ok("short par-3 selects a realistic scoring club (PW/9i-ish), NOT the 3-wood", ["PW","9i","8i"].includes(d.club) && d.club !== "3W");
+  ok("short par-3 uses NO fairway-position language", !fairwayLang(d));
+  ok("short par-3 does not even offer the 3-wood as a play", !d.record.candidates.some(c => c.club === "3W"));
+}
+// Medium par 3 (~165) — best green-targeting middle iron, not the longest club.
+{
+  const H = { n: 6, par: 3, y: 165, path: [[0,.5],[1,.5]], hazards: [] };
+  const d = decideShot(base({ hole: H, from: null, rem: 165, effRem: 165, lie: "FW", strokes: 0, bag: p3bag() }));
+  ok("medium par-3 → attack with a fitting iron (6i/5i), not Dr/3W", d.kind === "attack" && ["6i","5i"].includes(d.club));
+  ok("medium par-3 has no fairway language", !fairwayLang(d));
+}
+// Long par 3 (~200) — a club is chosen because its result FITS the green, not because
+// it's the longest: the driver overshoots the window and must not win.
+{
+  const H = { n: 8, par: 3, y: 200, path: [[0,.5],[1,.5]], hazards: [] };
+  const d = decideShot(base({ hole: H, from: null, rem: 200, effRem: 200, lie: "FW", strokes: 0, bag: p3bag() }));
+  ok("long par-3 → green-targeting attack", d.kind === "attack" && d.reach === true);
+  ok("long par-3 fits the green (4h ~205), not simply the longest (Dr 250)", d.club !== "Dr");
+  ok("long par-3 never offers a materially-over club (Dr) as an attack", !d.record.candidates.some(c => c.kind === "attack" && c.club === "Dr"));
+}
+// Par-3 forced carry — water short of the green. A green-targeting play with carry margin.
+{
+  const H = { n: 6, par: 3, y: 150, path: [[0,.5],[1,.5]], hazards: [{ type: "water", pool: [0.0, 0.80, 0.2, 0.8] }] };
+  const d = decideShot(base({ hole: H, from: null, rem: 150, effRem: 150, lie: "FW", strokes: 0, bag: p3bag() }));
+  ok("forced-carry par-3 stays green-targeting (attack), not a lay-into-the-water", d.context === "par3_tee" && d.kind === "attack");
+  ok("forced-carry par-3 uses no fairway language", !fairwayLang(d));
+}
+// No trustworthy green-reaching club — one deliberate lowest-score call. If it plays
+// short, it's honestly a lay-up, never a 'fairway finder'.
+{
+  const H = { n: 8, par: 3, y: 235, path: [[0,.5],[1,.5]], hazards: [] };   // only Dr can get near
+  const d = decideShot(base({ hole: H, from: null, rem: 235, effRem: 235, lie: "FW",
+    strokes: 0, bag: p3bag({ Dr: { rel: 30, sd: 22 }, "4h": { rel: 30, sd: 20 }, "3W": { rel: 30, sd: 20 } }) }));
+  ok("unreachable par-3 still returns exactly one deliberate call", !!d.club && !!d.kind);
+  ok("playing short is labeled honestly (layup), never a fairway-position play", d.kind !== "position");
+  ok("unreachable par-3 avoids fairway-finder language", !/fairway finder/i.test(d.cue||""));
+}
+// Par-4 tee — position behavior PRESERVED (the fix must not turn it into approach logic).
+{
+  const H = { n: 1, par: 4, y: 400, path: [[0,.5],[1,.5]], hazards: [] };
+  const d = decideShot(base({ hole: H, from: null, rem: 400, effRem: 400, lie: "FW", strokes: 0, bag: p3bag() }));
+  ok("par-4 tee is classified tee_position", d.context === "tee_position");
+  ok("par-4 tee stays a POSITION play (not attack)", d.kind === "position");
+  ok("par-4 tee correctly uses fairway/position language", /fairway/i.test(d.startLine+" "+d.landing));
+}
+// Par-5 tee — strategic position candidates preserved.
+{
+  const H = { n: 4, par: 5, y: 540, path: [[0,.5],[1,.5]], hazards: [] };
+  const d = decideShot(base({ hole: H, from: null, rem: 540, effRem: 540, lie: "FW", strokes: 0, bag: p3bag() }));
+  ok("par-5 tee is tee_position with a position play", d.context === "tee_position" && d.kind === "position");
+}
+// Later approach — normal attack/layup preserved.
+{
+  const H = { n: 1, par: 4, y: 400, path: [[0,.5],[1,.5]], hazards: [] };
+  const d = decideShot(base({ hole: H, from: { d: 0.62, x: .5 }, rem: 150, effRem: 150, lie: "FW", strokes: 1, bag: p3bag() }));
+  ok("later approach is classified approach", d.context === "approach");
+  ok("later approach still attacks the green when reachable", d.kind === "attack");
+}
+// shotContextOf is the single classifier both layers read.
+{
+  ok("shotContextOf: par-3 tee", shotContextOf({ lie:"FW", strokes:0, rem:120, hole:{par:3} }) === "par3_tee");
+  ok("shotContextOf: par-4 tee", shotContextOf({ lie:"FW", strokes:0, rem:400, hole:{par:4} }) === "tee_position");
+  ok("shotContextOf: approach", shotContextOf({ lie:"FW", strokes:2, rem:150, hole:{par:4} }) === "approach");
+  ok("shotContextOf: scoring", shotContextOf({ lie:"FW", strokes:2, rem:30, hole:{par:4}, scoreCeiling:100 }) === "scoring");
+  ok("shotContextOf: recovery", shotContextOf({ lie:"TREES", strokes:1, rem:150, hole:{par:4} }) === "recovery");
+}
+// Communication consistency — every visible field describes the SAME par-3 play.
+{
+  const H = { n: 3, par: 3, y: 118, path: [[0,.5],[1,.5]], hazards: [] };
+  const d = decideShot(base({ hole: H, from: null, rem: 118, effRem: 118, lie: "FW", strokes: 0, bag: p3bag() }));
+  ok("consistency: context, kind, destination all agree on green-targeting",
+    d.context === "par3_tee" && d.kind === "attack" && d.play.destination.label === "the green" && d.record.situation.context === "par3_tee");
+  ok("consistency: aim + landing speak green, not fairway",
+    /flag|green/i.test(d.startLine) && /green/i.test(d.landing) && !fairwayLang(d));
+  ok("consistency: a map aim target exists for the call", d.aim && d.aim.d != null);
+  ok("consistency: record's selected club matches the surfaced club", d.record.selected.club === d.club);
+}
+
 console.log("\n" + (fail ? fail + " FAILED ❌" : "ALL " + n + " PASS ✅"));
 process.exit(fail ? 1 : 0);

@@ -131,33 +131,56 @@ function buildPlay(ctx, o) {
   };
 }
 
+// ---------------------- explicit shot-context classification -----------------
+// ONE classifier, consumed by both candidate generation AND communication so the two
+// never disagree. A tee shot is NOT automatically a fairway-position play: a par-3 tee
+// is a green-targeting approach; only a par-4/5 tee is a positioning shot.
+//   par3_tee | tee_position | approach | scoring | recovery
+// (The chosen play's KIND — attack / layup / position / punch / hero / scoring — carries
+//  the rest; a lay-up is an outcome of green-targeting, not a separate input context.)
+export function shotContextOf(ctx) {
+  const lie = ctx.lie, strokes = ctx.strokes, rem = ctx.rem, hole = ctx.hole;
+  const scoreCeiling = ctx.scoreCeiling != null ? ctx.scoreCeiling : 34;
+  if (isRecoveryLie(lie) || ctx.observation === "nowindow") return "recovery";
+  if (rem <= scoreCeiling) return "scoring";
+  const par = hole && hole.par;
+  if (strokes === 0) return par === 3 ? "par3_tee" : "tee_position";
+  return "approach";
+}
+
 // ------------------------- candidate generation ------------------------------
 function standardCandidates(ctx) {
-  const { hole, from, rem, effRem, bag, wedgeDist, strokes } = ctx;
+  const { hole, from, rem, effRem, bag, wedgeDist } = ctx;
   const dNow = from ? from.d : 0;
   const playFactor = rem > 0 ? effRem / rem : 1;      // plays-like inflation (wind + lie)
   const cx = centerX(hole && hole.path, 1);
   const usable = bag.filter(c => c.carry > 0 && !c.benched);
   const cands = [];
-  const isTee = strokes === 0;
+  // Strategic type decides which plays exist — never strokes===0 alone.
+  const kindOf = ctx.context || shotContextOf(ctx);
+  const par3Tee = kindOf === "par3_tee";
+  const teePosition = kindOf === "tee_position";
+  const greenTargeting = kindOf === "approach" || par3Tee;   // destination IS the green
 
   const reachers = usable.filter(c => c.carry >= effRem - 6);
-  // ── ATTACK THE GREEN — only when something honestly gets home and it's not a tee. ──
-  if (reachers.length && !isTee) {
-    // prefer the club that lands in the window, most reliable first, least club to break ties
+  // ── ATTACK THE GREEN — for every green-targeting shot (approach OR par-3 tee) that
+  //    can honestly get home. Generate a play for each club whose carry FITS the green
+  //    window; clubs that materially fly past are not offered (a 190y 3W is not an
+  //    attack for a 118y par 3). If nothing fits, the least-overshoot club stands in. ──
+  if (reachers.length && greenTargeting) {
     const window = reachers.filter(c => c.carry <= effRem + 18);
-    const pick = (window.length ? window : reachers).slice()
-      .sort((a, b) => (b.rel - a.rel) || (a.carry - b.carry))[0];
-    cands.push(buildPlay(ctx, {
+    const pool = window.length ? window : [reachers.slice().sort((a, b) => a.carry - b.carry)[0]];
+    pool.forEach(pick => cands.push(buildPlay(ctx, {
       kind: "attack", club: pick.k, sd: pick.sd, rel: pick.rel,
       destD: 0.985, destX: cx, destLabel: "the green",
       distance: rem, leaves: 0, reach: true,
       intent: "at the flag — center of the green is the miss",
-    }));
+    })));
   }
 
-  // ── LAY UP TO YOUR NUMBER — leave the distance this golfer scores best from. ──
-  if (!isTee) {
+  // ── LAY UP TO YOUR NUMBER — a green-targeting shot that chooses to stop short at a
+  //    number you score from (real on a long par-3 you can't/shouldn't reach). ──
+  if (greenTargeting) {
     const needed = rem - wedgeDist;
     if (needed >= 30) {
       const layClub = usable.filter(c => c.carry >= needed - 10 && c.carry <= needed + 20)
@@ -176,21 +199,21 @@ function standardCandidates(ctx) {
     }
   }
 
-  // ── POSITION — every club that can't reach becomes a landing-zone play; on a tee
-  //    EVERY club is a position option (driver vs 3W vs iron compete on the safe score). ──
+  // ── POSITION (par-4/5 tee) or SHORT (green-targeting that falls short). On a par-4/5
+  //    tee every club is a position option; on a green-targeting shot a club that can't
+  //    reach becomes a play-short lay-up — never a "fairway finder". ──
   usable.forEach(c => {
-    if (!isTee && c.carry >= effRem - 6) return;       // that's an ATTACK, handled above
+    if (greenTargeting && c.carry >= effRem - 6) return;   // reachers are ATTACKs above
     const trueCarry = c.carry / playFactor;
     const destD = dAfterCarry(hole, dNow, trueCarry);
-    if (destD <= dNow + 0.01) return;                  // no forward progress
+    if (destD <= dNow + 0.01) return;                      // no forward progress
     const leaves = Math.max(0, rem - c.carry);
     cands.push(buildPlay(ctx, {
-      // On an approach, a club that stops short IS a lay-up; off the tee it's a position play.
-      kind: isTee ? "position" : "layup", club: c.k, sd: c.sd, rel: c.rel,
+      kind: teePosition ? "position" : "layup", club: c.k, sd: c.sd, rel: c.rel,
       destD, destX: centerX(hole && hole.path, destD),
       destLabel: leaves > 0 ? `${leaves} out` : "pin-high",
       distance: c.carry, leaves, reach: leaves <= 6,
-      intent: isTee ? "find the fairway and set up the next one" : `lay back to ${leaves} — a number you trust`,
+      intent: teePosition ? "find the fairway and set up the next one" : `play short to ${leaves} — a number you trust`,
     }));
   });
 
@@ -281,12 +304,13 @@ export function decideShot(ctx) {
   const obstructed = forwardObstruction(hole, dNow, xNow, 0.985);
   ctx.askObservation = obstructed && ctx.observation == null;
 
+  // Classify the shot ONCE — candidate generation and communication both read this.
+  ctx.context = shotContextOf(ctx);
+
   // ── SCORING SHOT — inside the wedge/chip windows, the play is "get it close and
   //    take your two putts." Defer the exact wedge chip to the app's calibrated
-  //    windows (single authority still decides it IS a scoring shot). scoreCeiling is
-  //    the top of the scoring-wedge range (defaults to 34 = chip only). ──
-  const scoreCeiling = ctx.scoreCeiling != null ? ctx.scoreCeiling : 34;
-  if (!isRecoveryLie(lie) && ctx.observation !== "nowindow" && rem <= scoreCeiling && ctx.scoring) {
+  //    windows (single authority still decides it IS a scoring shot). ──
+  if (ctx.context === "scoring" && ctx.scoring) {
     const s = ctx.scoring(rem);
     const sel = {
       kind: "scoring", club: s.chip, destination: { d: 0.985, x: centerX(hole && hole.path, 1), label: "the green" },
@@ -298,7 +322,7 @@ export function decideShot(ctx) {
   }
 
   // ── Assemble candidate plays — recovery lies change WHICH plays exist. ──
-  const recovery = isRecoveryLie(lie) || ctx.observation === "nowindow";
+  const recovery = ctx.context === "recovery";
   let candidates, recoData = null;
   if (recovery) {
     const r = recoveryCandidates(ctx);
@@ -366,7 +390,8 @@ function pictureOf(ctx, sel) {
   else if (sel.route === "around") startLine = "start it at the edge and let it turn back";
   else if (isRec) startLine = "out to the open side";
   else if (sel.kind === "attack") startLine = "at the flag — center is plenty";
-  else startLine = "at the middle of the fairway";
+  else if (sel.kind === "layup") startLine = "short of the trouble, to your number";
+  else startLine = "at the middle of the fairway";   // position / par-4-5 tee only
   const trajectory = sel.flight === "high" ? "high and soft"
     : sel.flight === "low" ? "low and running"
     : sel.flight === "shaped" ? "a working ball"
@@ -387,6 +412,7 @@ function finalize(ctx, mode, sel, ranked, confidence, recoData, cue) {
       hole: ctx.hole && (ctx.hole.n || null), par: ctx.hole && ctx.hole.par,
       rem: ctx.rem, effRem: ctx.effRem, lie: ctx.lie, wind: ctx.wind,
       from: ctx.from ? { d: ctx.from.d, x: ctx.from.x } : null, strokes: ctx.strokes,
+      context: ctx.context || null,
     },
     // Every play weighed BEFORE the caddie spoke: club+flight, today's trust, the
     // expected score, the severe-miss exposure, and the expected next position. This
@@ -414,7 +440,7 @@ function finalize(ctx, mode, sel, ranked, confidence, recoData, cue) {
   const dispersion = (dest.d != null && dest.x != null && sel.scatter)
     ? { d: dest.d, x: dest.x, rx: sel.scatter.sdX * 1.6, ry: sel.scatter.sdD * 1.6 } : null;
   return {
-    mode, club: sel.club, kind: sel.kind, flight: sel.flight, route: sel.route,
+    mode, context: ctx.context || null, club: sel.club, kind: sel.kind, flight: sel.flight, route: sel.route,
     play: { kind: sel.kind, destination: sel.destination, distance: sel.distance, leaves: sel.leaves, intent: sel.intent, ev: sel.ev },
     startLine: pic.startLine, trajectory: pic.trajectory, landing: pic.landing, cue,
     reach: !!sel.reach, leaves: sel.leaves, intent: sel.intent,

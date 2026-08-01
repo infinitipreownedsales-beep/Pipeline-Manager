@@ -7,7 +7,7 @@ import { centerX, holeContext, lieAt } from "./geometry.js";
 import { decideShot } from "./decision.js";
 
 // Visible build/version stamp — shown in the header so the running tool is identifiable.
-const BUILD = "v12 · clean caddie";
+const BUILD = "v12.1 · par-3 fix";
 // CADDIE OS v10 — DYNAMIC ROUND ENGINE
 // Every shot logs the club actually used (tap to change, layups tappable).
 // Hot/cold detection per club · one-tap bench from the alert ·
