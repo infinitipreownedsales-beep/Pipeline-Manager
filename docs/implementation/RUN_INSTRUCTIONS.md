@@ -32,7 +32,7 @@ db.migrate()          # applies pending migrations; tracked in migration_record
 print("schema version:", db.version())
 ```
 
-### Run the platform tests (Phase 1 + Phase 2)
+### Run the platform tests (Phase 1 + Phase 2 + Phase 3)
 ```
 PYTHONPATH=. python3 elite/tests/run_all.py
 ```
@@ -51,6 +51,25 @@ Inspect Phase 2 records:
 ```
 sqlite3 "$ELITE_DB_PATH" "SELECT id,validated_snapshot_type,accepted_count,rejected_count FROM import_batch;"
 sqlite3 "$ELITE_DB_PATH" "SELECT fact_type,status FROM business_fact;"
+```
+
+### Phase 3 — policy / calculation versioning (example)
+```python
+from elite.policy.fixtures import Phase3
+from elite.policy import lifecycle
+from elite.policy.resolution import resolve
+p = Phase3("/path/to/elite.db")          # migrates v1 + v2 + v3; registers example principals
+f = p.family(category="FINANCIAL_ASSUMPTION", dims=["store", "model"])
+v = p.version(f.id, {"kind": "percentage", "value": 10, "denominator": "msrp"},
+              scope={"store": "HG"}, lifecycle="ACTIVE", effective_start="2020-01-01T00:00:00+00:00")
+r = resolve(p.store, f, subject_scope={"store": "HG"}, at_time="2026-06-01T00:00:00+00:00")
+print(r.status, r.value)                 # RESOLVED {...}
+```
+Inspect Phase 3 records:
+```
+sqlite3 "$ELITE_DB_PATH" "SELECT category FROM policy_family;"
+sqlite3 "$ELITE_DB_PATH" "SELECT lifecycle_status,is_scenario FROM policy_version;"
+sqlite3 "$ELITE_DB_PATH" "SELECT target_type,action FROM version_activation_history;"
 ```
 
 ### Inspect the authoritative store

@@ -152,6 +152,75 @@ MIGRATIONS = [
             recorded_at TEXT NOT NULL
         );
     """),
+    (3, "policy_and_versioning", """
+        CREATE TABLE policy_family (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, owning_domain TEXT,
+            value_schema TEXT, allowed_scope_dimensions TEXT, default_resolution TEXT,
+            approval_required INTEGER NOT NULL DEFAULT 1, correction_rules TEXT,
+            status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL
+        );
+        CREATE TABLE policy_version (
+            id TEXT PRIMARY KEY, family_id TEXT NOT NULL REFERENCES policy_family(id),
+            version_number INTEGER NOT NULL, value TEXT NOT NULL, source TEXT, evidence_refs TEXT,
+            scope TEXT, effective_start TEXT, effective_end TEXT,
+            start_inclusive INTEGER NOT NULL DEFAULT 1, end_inclusive INTEGER NOT NULL DEFAULT 0,
+            recorded_time TEXT NOT NULL, approval_state TEXT NOT NULL DEFAULT 'unapproved',
+            approving_principal TEXT, approved_time TEXT, scheduled_activation TEXT,
+            lifecycle_status TEXT NOT NULL, supersedes TEXT, superseded_by TEXT, correction_of TEXT,
+            revocation TEXT, reason TEXT, provenance TEXT, store_scope TEXT,
+            is_scenario INTEGER NOT NULL DEFAULT 0, scenario_id TEXT, version INTEGER NOT NULL DEFAULT 1
+        );
+        -- immutable value payload; append-preserving history
+        CREATE TRIGGER policy_version_value_immutable BEFORE UPDATE OF value ON policy_version
+            WHEN NEW.value <> OLD.value
+            BEGIN SELECT RAISE(ABORT, 'policy_version.value is immutable'); END;
+        CREATE TRIGGER policy_version_no_delete BEFORE DELETE ON policy_version
+            BEGIN SELECT RAISE(ABORT, 'policy_version history is preserved'); END;
+        CREATE TABLE calculation_family (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, owning_domain TEXT, purpose TEXT,
+            input_contract_version TEXT, output_contract_version TEXT, determinism TEXT,
+            required_policy_families TEXT, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL
+        );
+        CREATE TABLE calculation_version (
+            id TEXT PRIMARY KEY, family_id TEXT NOT NULL REFERENCES calculation_family(id),
+            semver TEXT NOT NULL, impl_revision TEXT, input_contract_version TEXT, output_contract_version TEXT,
+            required_policy_families TEXT, effective_start TEXT, effective_end TEXT,
+            lifecycle_status TEXT NOT NULL, approval_metadata TEXT, supersedes TEXT, superseded_by TEXT,
+            rollback_of TEXT, change_summary TEXT, reproducibility_metadata TEXT, created_at TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TRIGGER calc_version_no_delete BEFORE DELETE ON calculation_version
+            BEGIN SELECT RAISE(ABORT, 'calculation_version history is preserved'); END;
+        CREATE TABLE model_version (
+            id TEXT PRIMARY KEY, model_family TEXT NOT NULL, version TEXT NOT NULL, scope TEXT,
+            purpose TEXT, status TEXT NOT NULL DEFAULT 'registered', activation TEXT, supersedes TEXT,
+            evidence_refs TEXT, calibration_proposal TEXT, validation_status TEXT, rollback_ref TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE identity_rule_version (
+            id TEXT PRIMARY KEY, rule_family TEXT NOT NULL, version TEXT NOT NULL, entity_types TEXT,
+            rule_summary TEXT, impl_revision TEXT, status TEXT NOT NULL DEFAULT 'registered',
+            effective_start TEXT, effective_end TEXT, approval_metadata TEXT, supersedes TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE comparison_specification_version (
+            id TEXT PRIMARY KEY, version TEXT NOT NULL, prediction_type TEXT, observation_type TEXT,
+            subject_entity_type TEXT, timing_rules TEXT, matching_rules TEXT, unit_contract TEXT,
+            status TEXT NOT NULL DEFAULT 'registered', effective_start TEXT, effective_end TEXT,
+            approval_metadata TEXT, supersedes TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE reproducibility_package (
+            id TEXT PRIMARY KEY, refs TEXT NOT NULL, dealership_tz TEXT, calculation_timestamp TEXT,
+            implementation_revision TEXT, output_reference TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE version_activation_history (
+            id TEXT PRIMARY KEY, target_type TEXT NOT NULL, target_id TEXT NOT NULL, action TEXT NOT NULL,
+            actor TEXT, at TEXT NOT NULL, detail TEXT
+        );
+        CREATE TABLE version_rollback_history (
+            id TEXT PRIMARY KEY, target_type TEXT NOT NULL, from_id TEXT, to_id TEXT, actor TEXT,
+            at TEXT NOT NULL, reason TEXT
+        );
+    """),
 ]
 
 

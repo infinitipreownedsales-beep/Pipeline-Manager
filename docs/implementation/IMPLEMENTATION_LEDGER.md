@@ -89,3 +89,41 @@ Docs: PHASE2_COMPLETION, PHASE2_TRACEABILITY, PHASE2_DATA_MODEL, adr/ADR-0003;
 updated IMPLEMENTATION_CONTROL, RUN_INSTRUCTIONS, REQUIREMENT_INDEX (note).
 
 Result: **Phase 2 complete → HOLD FOR REVIEW.** Next: Phase 3 only after review.
+
+## Phase 3 — Policy, Configuration, Effective Dating, and Calculation Versioning  (branch `elite-pipeline/phase-0`)
+
+Control records: Phase 2 recorded approved; Phase 3 set active then complete. BUG-CPO-002
+kept open only as a later New-Inventory implementation/regression risk.
+
+Implemented a NEW `elite/policy/` package + migration v3 (appended; v1/v2 unchanged),
+touching no legacy file:
+- Policy Family + immutable, effective-dated Policy Version (DB triggers enforce
+  value-immutability + no-delete; optimistic concurrency on lifecycle);
+- taxonomy (8 categories, technical config kept distinct from business policy);
+- scope model with declared allowed dimensions (unsupported dimensions rejected);
+- lifecycle state machine (DRAFT→PROPOSED→UNDER_REVIEW→APPROVED→SCHEDULED→ACTIVE plus
+  EXPIRED/SUPERSEDED/REVOKED/REJECTED/WITHDRAWN/CORRECTED) with legal-transition enforcement;
+  approval never auto-activates a future version; activation refused before effective time;
+- supersession/revocation/rejection/withdrawal + correction lineage (append-preserving);
+- deterministic resolution (scenario-vs-official → active lifecycle → effective time → scope
+  → specificity → approved precedence → conflict); newest-recorded never auto-wins; explicit
+  CONFLICTING; declared-only fallback (never invents a value);
+- typed financial assumptions (unit/denominator; zero valid; blank ≠ zero);
+- Calculation Family/Version + Model/Identity-Rule/Comparison-Spec version foundations
+  (registered-until-activated; behavior change requires a distinct version);
+- reproducibility package pinning all refs + replay (identical output); current recompute
+  does not rewrite a prior issued result;
+- governed Scenario-override isolation (`scenario.override`; resolves only in scenario; never
+  changes official; never activates by existing/sharing; audited);
+- version activation/rollback history (append-preserving; rollback marks prior `rolled_back`);
+- deterministic fixtures + 59 acceptance tests.
+
+Evidence executed: platform harness **120/120** (26 P1 + 35 P2 + 59 P3); legacy suite
+**39/39**; migration v3 rerun-safe; legacy application paths byte-unchanged vs
+`legacy/inventory-tool` @ `3bf9162`. All 59 mandatory acceptance items pass
+(PHASE3_COMPLETION.md).
+
+Docs: PHASE3_COMPLETION, PHASE3_TRACEABILITY, PHASE3_POLICY_MODEL, adr/ADR-0004;
+updated IMPLEMENTATION_CONTROL, RUN_INSTRUCTIONS, REQUIREMENT_INDEX (note).
+
+Result: **Phase 3 complete → HOLD FOR REVIEW.** Next: Phase 4 only after review.

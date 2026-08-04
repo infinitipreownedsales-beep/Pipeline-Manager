@@ -23,7 +23,8 @@ specification is authoritative, what is preserved, and what work is permitted.
 - **Branch:** `elite-pipeline/phase-0` (created from `3bf9162`; does not modify the legacy line)
 
 ## Current phase / work unit
-- **Phase:** Phase 2 — Data, Identity, and Accepted Facts (**complete; HOLD FOR REVIEW**).
+- **Phase:** Phase 3 — Policy, Configuration, Effective Dating, and Calculation Versioning (**complete → HOLD FOR REVIEW**).
+- **Phase 2:** **approved and complete.**
 - **Phase 0:** approved and complete.
 - **Phase 1:** **approved and complete.** New `elite/` platform package (Python
   stdlib + SQLite); environment/config, ids/clock, typed errors, repositories +
@@ -43,7 +44,21 @@ specification is authoritative, what is preserved, and what work is permitted.
   current-state projection. Platform tests `61/61`; legacy `39/39`; no legacy file
   changed. See `PHASE2_COMPLETION.md`, `PHASE2_TRACEABILITY.md`, `PHASE2_DATA_MODEL.md`,
   `adr/ADR-0003`.
-- **Approved next phase:** Phase 3 — **only after review**.
+- **Phase 3 scope:** Policy Family + immutable/effective-dated Policy Version, taxonomy,
+  scope, lifecycle (activation/scheduling/expiration/supersession/revocation/rejection/
+  withdrawal/correction), deterministic resolution + precedence + conflict detection,
+  declared-only fallback, typed financial assumptions, technical-config separation,
+  Calculation Family/Version, Model/Identity-Rule/Comparison-Spec version foundations,
+  reproducibility + replay, governed Scenario-override isolation, version activation/rollback
+  history, migration v3, fixtures + tests. **No** domain calculation; **no** Demand/Need/
+  forecasting/CPO/PPO/Dealer Trade/CTP/Service Loaner/Executive Demo/Prediction/Learning;
+  no broad UI. Synthetic values only.
+- **Phase 3 result:** new `elite/policy/` package + migration v3 (appended; v1/v2 unchanged),
+  touching no legacy file. Platform tests `120/120` (26 P1 + 35 P2 + 59 P3); legacy `39/39`;
+  migration v3 rerun-safe; legacy application paths byte-unchanged. All 59 mandatory acceptance
+  items pass. See `PHASE3_COMPLETION.md`, `PHASE3_TRACEABILITY.md`, `PHASE3_POLICY_MODEL.md`,
+  `adr/ADR-0004`.
+- **Approved next phase:** Phase 4 — **only after review**.
 
 ## Required commands (legacy launch / inspect)
 ```
@@ -82,4 +97,6 @@ PYTHONPATH=. python3 pipeline_manager/tests/test_loaner_intel.py
 - Product owner / General Sales Manager (dealership). Implementation review pending.
 
 ## Status
-**HOLD FOR REVIEW.** Phase 0 evidence complete. Do not proceed to Phase 1 until reviewed and approved.
+**HOLD FOR REVIEW.** Phase 3 complete (policy/versioning foundation; `elite/policy/` + migration
+v3; platform `120/120`, legacy `39/39`; legacy line unchanged). Do not proceed to Phase 4 until
+reviewed and approved.
