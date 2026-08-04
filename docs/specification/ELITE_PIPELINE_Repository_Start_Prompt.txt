@@ -1,0 +1,163 @@
+ELITE PIPELINE — REPOSITORY RESTART AND PHASE 0 KICKOFF
+
+You are beginning implementation of Elite Pipeline from the adopted canonical specification.
+
+AUTHORITATIVE INPUT
+Use this file as the sole product specification:
+ELITE_PIPELINE_Canonical_Master_Implementation_Specification_FINAL.docx
+
+Specification status:
+- Version: 1.0.0
+- Architecture: RC1
+- Disposition: Accepted for Implementation Control
+- Segments: 00–16 complete
+
+OPERATING RULE
+Read the complete specification before making material implementation changes. Resolve each requirement through its owning segment. Do not rely on prior chats, remembered product direction, or legacy behavior when it conflicts with the specification.
+
+CURRENT WORK UNIT
+Execute Phase 0 only: Preservation and Audit.
+
+Do not begin Phase 1, redesign the application, select a new framework, rewrite business logic, or build new UI in this session.
+
+PHASE 0 REQUIRED OUTCOMES
+1. Preserve the latest working legacy application in a protected branch, tag, release, or immutable archive.
+2. Prove the preserved legacy application can still be launched.
+3. Inventory the repository and identify:
+   - runtime entry points;
+   - current storage and browser-local state;
+   - source files and source contracts;
+   - current calculations and business-rule locations;
+   - confirmed fixes;
+   - known defects;
+   - active, abandoned, and redesign branches;
+   - reusable, noncompliant, obsolete, unknown, and generated assets.
+4. Create a clean restart branch without destroying or altering the protected legacy line.
+5. Add the canonical specification to the repository under a durable documentation path.
+6. Create these durable implementation-control artifacts:
+   - docs/implementation/IMPLEMENTATION_CONTROL.md
+   - docs/implementation/REPOSITORY_AUDIT.md
+   - docs/implementation/LEGACY_PRESERVATION.md
+   - docs/implementation/IMPLEMENTATION_LEDGER.md
+   - docs/implementation/KNOWN_BUG_REGISTRY.md
+   - docs/implementation/REQUIREMENT_INDEX.md or an equivalent machine-readable source plus generated human-readable view
+7. Preserve known-correct behavior and confirmed regression fixes, including:
+   - the CPO moving-goalposts correction;
+   - the Need monotonicity rule that added qualifying Supply cannot increase Need under unchanged inputs;
+   - the C1 unit-pairing rule preventing class-level overmatching;
+   - Service Loaner Last Checkout Mileage semantics;
+   - the rule that snapshot absence does not invent final retirement facts.
+8. Identify all secrets and environment-specific configuration without copying secret values into documentation or source control.
+9. Record the exact commands required to launch the legacy application and inspect its data.
+10. Stop at Hold for Review after Phase 0 evidence is complete.
+
+LEGACY PRESERVATION PACKAGE
+Create a durable package containing or referencing:
+- latest working artifact;
+- source revision or archive;
+- launch instructions;
+- data location and backup method;
+- representative screenshots or workflow evidence;
+- known correct outputs;
+- known defects;
+- confirmed fixes;
+- sample imports and test data;
+- rollback instructions;
+- checksum or integrity reference where practical.
+
+Do not expose credentials or secrets.
+
+REPOSITORY AUDIT CLASSIFICATION
+Classify every material asset as one of:
+- WORKING
+- REUSABLE AFTER CONTRACT REVIEW
+- NONCOMPLIANT
+- OBSOLETE
+- UNKNOWN
+- GENERATED
+- LEGACY-ONLY
+
+For every material business rule, identify:
+- current file or module;
+- business meaning;
+- owning specification segment;
+- applicable requirement IDs where practical;
+- whether the behavior is known-correct, defective, incomplete, or unverified.
+
+KNOWN-BUG REGISTRY
+Each confirmed defect entry must include:
+- stable bug ID;
+- symptoms;
+- affected requirements;
+- current status;
+- known root cause if verified;
+- existing fix location if any;
+- required regression fixture/test;
+- release where fixed or target phase.
+
+IMPLEMENTATION CONTROL DOCUMENT
+IMPLEMENTATION_CONTROL.md must state:
+- canonical specification path and version;
+- protected legacy reference;
+- clean restart branch;
+- current phase: Phase 0;
+- current work unit;
+- approved next phase: Phase 1 only after review;
+- open blockers;
+- known defects;
+- required commands;
+- environment setup;
+- review owner;
+- Hold for Review status.
+
+PROHIBITED ACTIONS
+Do not:
+- redesign adjacent architecture;
+- continue the prior planning-engine redesign;
+- delete, overwrite, or destabilize the working legacy tool;
+- move official truth into browser-local storage;
+- fabricate missing history;
+- reinterpret CPO, PPO, CTP, Service Loaner, or Executive Demo semantics;
+- create new business formulas;
+- choose broad abstractions before repeated real contracts justify them;
+- claim tests were run unless they were actually executed;
+- claim Phase 0 is complete without launch proof and durable artifacts;
+- continue into Phase 1 before review.
+
+MATERIAL STOP CONDITIONS
+Stop only if proceeding would be unsafe because of a true contradiction or missing authoritative definition. If one exists, report:
+- exact affected requirement;
+- why implementation is unsafe;
+- evidence;
+- smallest decision required;
+- unaffected work that can continue.
+
+Ordinary implementation difficulty, file organization, naming, formatting, or equivalent technical choices are not stop conditions. Choose the strongest compliant option internally.
+
+VALIDATION REQUIRED IN THIS SESSION
+At minimum, actually execute and report:
+- repository status and branch inspection;
+- legacy launch or build command;
+- evidence that the legacy tool remains usable;
+- inventory of tracked and untracked material files;
+- detection of current persistence and browser-local state;
+- detection of current tests and test commands;
+- checksum or immutable reference for the preserved legacy artifact;
+- verification that the clean restart branch does not alter the protected legacy line.
+
+FINAL RESPONSE CONTRACT
+Report only:
+1. What was preserved.
+2. Repository audit findings.
+3. Exact files created or changed.
+4. Exact commands executed.
+5. Tests or launch checks executed.
+6. Results.
+7. Known defects captured.
+8. Unresolved material blockers.
+9. Protected legacy reference.
+10. Clean restart branch/revision.
+11. Exact next approved work unit.
+12. HOLD FOR REVIEW.
+
+Do not propose unrelated next work. Do not continue past Hold for Review.
