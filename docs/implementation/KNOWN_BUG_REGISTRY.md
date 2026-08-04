@@ -37,15 +37,27 @@ contract fields. New defects append here with a stable ID.
   number / production cycle), so committed supply cannot be banked against the Need it
   fulfilled. Configs that sell faster than the production lead regenerate Need
   indefinitely.
-- **Existing fix location:** none. Requires the two-stage model (Stage 1: discrete
-  production reconciliation crediting committed units 1:1; Stage 2: forward retail
-  projection on the residual). This is a **specification-owned business-model decision**,
-  not a legacy patch.
-- **Status:** **OPEN — MATERIAL (Phase 1 blocker).** Do not patch in Phase 0.
-- **Regression fixture (required in Phase 1):** committing the recommended cycle set
-  must drive that cycle's Need to ~0 for those configs; committed units credited 1:1;
-  no re-recommendation of the same window.
-- **Release / phase:** Target Phase 1 under Segments 06/07.
+- **Canonical resolution (specification — NOT an open product decision):**
+  - Demand remains independent of supply method.
+  - CPO is a distinct supply workflow.
+  - An approved CPO action creates a discrete unit-level Commitment.
+  - That Commitment affects Future/Committed Supply exactly once.
+  - Continuous replenishment logic must not substitute for discrete commitment state.
+  - Added qualifying Supply must not increase Need when Demand inputs and the
+    evaluated window are unchanged.
+- **Existing fix location:** none in the legacy engine. The legacy demand path
+  conflates continuous replenishment with discrete commitment; the authoritative
+  implementation must honor the canonical contracts above.
+- **Classification:** **implementation defect / regression risk** (NOT a
+  specification-owned model-decision blocker — the spec already resolves it).
+- **Status:** **OPEN** until the future authoritative implementation proves the
+  canonical contracts. Do **not** reopen the product decision. Do **not** redesign
+  the Demand engine in Phase 1.
+- **Regression fixture (future domain phase):** committing the recommended cycle set
+  credits committed units exactly once and does not increase Need for the same
+  unchanged window; continuous replenishment does not impersonate a commitment.
+- **Release / phase:** future domain implementation (Segments 06/07); tracked as a
+  regression risk until proven.
 
 ---
 

@@ -23,12 +23,15 @@ specification is authoritative, what is preserved, and what work is permitted.
 - **Branch:** `elite-pipeline/phase-0` (created from `3bf9162`; does not modify the legacy line)
 
 ## Current phase / work unit
-- **Phase:** Phase 0 — Preservation and Audit
-- **Work unit:** establish preservation, prove legacy launch, inventory the repo,
-  add the canonical spec, create durable implementation-control artifacts.
-- **Approved next phase:** Phase 1 — **only after review**. Phase 1 must not begin
-  in this session. No redesign, framework selection, business-logic rewrite, or
-  new UI in Phase 0.
+- **Phase:** Phase 1 — Platform Foundation (**complete; HOLD FOR REVIEW**).
+- **Phase 0:** approved and complete.
+- **Phase 1 result:** new `elite/` platform package (Python stdlib + SQLite);
+  environment/config, ids/clock, typed errors, repositories + durable persistence,
+  migrations, authn, authz, append-only audit, governed actions, structured logging,
+  deterministic test harness. Platform tests `26/26`; legacy `39/39`; no legacy file
+  changed. See `PHASE1_COMPLETION.md`, `PHASE1_TRACEABILITY.md`, `adr/`.
+- **Approved next phase:** Phase 2 — **only after review**. No domain rebuild
+  (Demand/Supply/CPO/PPO/CTP/Loaner/Demo/Learning) has occurred; not started.
 
 ## Required commands (legacy launch / inspect)
 ```
@@ -50,10 +53,14 @@ PYTHONPATH=. python3 pipeline_manager/tests/test_loaner_intel.py
 - Env-specific config is read from `config.json` (git-ignored; **not** committed).
 
 ## Open blockers
-- None that block Phase 0. One **material design blocker for Phase 1** is recorded
-  in the bug registry (BUG-CPO-002: continuous-replenishment vs. discrete-CPO-commitment
-  model conflation). It requires a specification-owned resolution (Segments 06/07)
-  before Phase 1 rebuilds the demand engine.
+- **None.** BUG-CPO-002 is **not** a specification blocker: the canonical spec
+  already resolves it (Demand independent of supply method; CPO is a distinct
+  supply workflow creating a discrete unit-level Commitment counted once in
+  Future/Committed Supply; continuous replenishment must not impersonate a
+  commitment; added qualifying Supply must not raise Need under unchanged Demand
+  inputs and window). It is tracked as an **implementation defect / regression
+  risk** until the future authoritative implementation proves those contracts. The
+  Demand engine is **not** redesigned in Phase 1.
 
 ## Known defects
 - See `KNOWN_BUG_REGISTRY.md`. Confirmed-fixed: CPO moving-goalposts / Need

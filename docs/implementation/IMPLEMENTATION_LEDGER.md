@@ -27,3 +27,36 @@ of official truth out of browser-local storage.
 
 Result: **Phase 0 evidence complete → HOLD FOR REVIEW.**
 Approved next work unit: **Phase 1 (Preservation-safe implementation start), only after review.**
+
+## Phase 1 — Platform Foundation  (branch `elite-pipeline/phase-0`)
+
+Control-record corrections first: reclassified BUG-CPO-002 from "specification
+blocker" to "implementation defect / regression risk" and recorded the canonical
+resolution (Demand independent of supply method; CPO a distinct supply workflow;
+approved CPO creates a discrete unit-level Commitment counted once; continuous
+replenishment must not impersonate a commitment; added qualifying Supply must not
+raise Need under unchanged Demand inputs and window). Demand engine NOT redesigned.
+
+Implemented the smallest authoritative platform seed as a NEW `elite/` package
+(Python stdlib + SQLite; ADR-0001/0002), touching no legacy file:
+- environment identity (explicit; no default), validated config with safe startup
+  failure, secret hygiene (env-only, redacted);
+- stable IDs, controlled UTC clock + dealership presentation;
+- typed errors with correlation IDs;
+- repository contracts + durable SQLite persistence; tracked migrations;
+  idempotency; optimistic concurrency;
+- authentication (identity only) separate from authorization
+  (Principal/Capability/Authority/Scope/effective grant), enforced below the UI;
+- append-only Audit Events (DB-trigger enforced), distinct from Business/Actual
+  facts; governed actions binding business write + audit atomically (no success
+  without audit);
+- structured logging distinct from audit; deterministic test harness + fixtures.
+
+Evidence executed: platform harness **26/26**; legacy suite **39/39**; legacy
+application paths byte-unchanged vs `legacy/inventory-tool` @ `3bf9162`. All 22
+mandatory acceptance items pass (see PHASE1_COMPLETION.md).
+
+Docs: PHASE1_COMPLETION.md, PHASE1_TRACEABILITY.md, RUN_INSTRUCTIONS.md,
+adr/ADR-0001, adr/ADR-0002; updated IMPLEMENTATION_CONTROL.md and KNOWN_BUG_REGISTRY.md.
+
+Result: **Phase 1 complete → HOLD FOR REVIEW.** Next: Phase 2 only after review.
