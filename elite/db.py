@@ -77,6 +77,81 @@ MIGRATIONS = [
             created_at TEXT NOT NULL
         );
     """),
+    (2, "data_identity_facts", """
+        -- Source registry + contracts
+        CREATE TABLE source_registry (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, owner TEXT, source_type TEXT,
+            supported_profiles TEXT, authoritative_fact_types TEXT, scope TEXT,
+            status TEXT NOT NULL, effective_from TEXT, effective_to TEXT,
+            registered_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE schema_profile (
+            id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES source_registry(id),
+            version INTEGER NOT NULL, fields TEXT NOT NULL, snapshot_capable INTEGER NOT NULL DEFAULT 0,
+            full_snapshot_requirements TEXT, scope_rules TEXT, effective_time_rule TEXT,
+            compatibility_status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL,
+            UNIQUE(source_id, version)
+        );
+        -- Raw payload preservation + replay identity
+        CREATE TABLE import_payload (
+            checksum TEXT PRIMARY KEY, raw_text TEXT NOT NULL,
+            first_batch_id TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        CREATE TABLE import_batch (
+            id TEXT PRIMARY KEY, source_id TEXT NOT NULL, schema_profile_version INTEGER,
+            payload_checksum TEXT NOT NULL, received_at TEXT NOT NULL, effective_time TEXT,
+            store_scope TEXT, claimed_snapshot_type TEXT, validated_snapshot_type TEXT,
+            lifecycle_status TEXT NOT NULL, row_count INTEGER NOT NULL DEFAULT 0,
+            accepted_count INTEGER DEFAULT 0, rejected_count INTEGER DEFAULT 0,
+            quarantined_count INTEGER DEFAULT 0, duplicate_count INTEGER DEFAULT 0,
+            conflicting_count INTEGER DEFAULT 0, unresolved_count INTEGER DEFAULT 0,
+            detail TEXT, correlation_id TEXT, replay_of TEXT
+        );
+        CREATE TABLE source_observation (
+            id TEXT PRIMARY KEY, import_batch_id TEXT NOT NULL REFERENCES import_batch(id),
+            source_record_identity TEXT, raw_values TEXT NOT NULL, normalized_values TEXT NOT NULL,
+            observed_time TEXT, recorded_time TEXT NOT NULL, source_scope TEXT,
+            validation_status TEXT NOT NULL, identity_status TEXT, acceptance_status TEXT NOT NULL,
+            provenance TEXT, supersedes_ref TEXT, correction_ref TEXT
+        );
+        -- Canonical identity
+        CREATE TABLE vehicle_unit (
+            id TEXT PRIMARY KEY, vin TEXT, identity_status TEXT NOT NULL, store_scope TEXT NOT NULL,
+            created_at TEXT NOT NULL, corrected_at TEXT, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE production_order (
+            id TEXT PRIMARY KEY, manufacturer_order_id TEXT, vin TEXT,
+            linked_vehicle_unit_id TEXT, identity_status TEXT NOT NULL, store_scope TEXT NOT NULL,
+            created_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE entity_alias (
+            id TEXT PRIMARY KEY, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
+            alias_type TEXT NOT NULL, alias_value TEXT NOT NULL, store_scope TEXT,
+            source_ref TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE identity_evidence (
+            id TEXT PRIMARY KEY, source_ref TEXT, record_ref TEXT, entity_type TEXT,
+            identifier_type TEXT, identifier_value TEXT, candidate_entities TEXT,
+            resolution_status TEXT NOT NULL, resolution_rule_version TEXT, confidence REAL,
+            resolver TEXT, reason TEXT, recorded_at TEXT NOT NULL, correction_ref TEXT, store_scope TEXT
+        );
+        -- Business facts (append-preserving) + relationships
+        CREATE TABLE business_fact (
+            id TEXT PRIMARY KEY, fact_type TEXT NOT NULL, subject_entity_type TEXT,
+            subject_entity_id TEXT, payload TEXT, effective_time TEXT, recorded_time TEXT NOT NULL,
+            observation_refs TEXT, source_authority TEXT, quality_status TEXT,
+            status TEXT NOT NULL, correction_of TEXT, superseded_by TEXT, reversal_of TEXT,
+            store_scope TEXT, provenance TEXT, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TRIGGER business_fact_no_delete BEFORE DELETE ON business_fact
+            BEGIN SELECT RAISE(ABORT, 'business_fact history is preserved'); END;
+        CREATE TABLE reconciliation_result (
+            id TEXT PRIMARY KEY, import_batch_id TEXT NOT NULL REFERENCES import_batch(id),
+            source_observation_id TEXT, candidate_entities TEXT, outcome TEXT NOT NULL,
+            reason TEXT, resulting_fact_refs TEXT, conflict_refs TEXT, reviewer TEXT,
+            recorded_at TEXT NOT NULL
+        );
+    """),
 ]
 
 

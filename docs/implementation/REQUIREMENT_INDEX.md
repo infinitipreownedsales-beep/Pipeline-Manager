@@ -49,6 +49,13 @@ Human-readable view. Machine-readable source of truth: `docs/implementation/requ
 | FLEET | 4 | | REMOVE | 4 | | NOACT | 4 |
 | FIX | 4 | | BUG | 3 | | AUTH | 1 |
 
+## Implemented-requirement coverage by phase
+- Phase 1 (platform): `PHASE1_TRACEABILITY.md`.
+- Phase 2 (data/identity/facts): `PHASE2_TRACEABILITY.md`.
+The canonical DOCX is unchanged, so `requirement_index.json` is unchanged; phase
+traceability maps implemented capabilities to owning segments/families (exact IDs
+bound at review).
+
 ## Usage
 - Phase 1 binds each material business rule to its owning segment and applicable requirement IDs (see REPOSITORY_AUDIT business-rule map).
 - Do not renumber or remove IDs; the DOCX is canonical. Regenerate this file and `requirement_index.json` from the DOCX if the spec is reissued.

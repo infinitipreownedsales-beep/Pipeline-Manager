@@ -32,9 +32,25 @@ db.migrate()          # applies pending migrations; tracked in migration_record
 print("schema version:", db.version())
 ```
 
-### Run the Phase 1 platform tests
+### Run the platform tests (Phase 1 + Phase 2)
 ```
 PYTHONPATH=. python3 elite/tests/run_all.py
+```
+
+### Phase 2 — data/identity/facts (example)
+```python
+from elite.data.fixtures import Phase2
+p = Phase2("/path/to/elite.db")          # migrates v1 + v2; registers example sources
+batch = p.ingest_dms([{"stock_number":"N1","vin":"1GNSKBKC5FR000001","model":"qx80"}])
+print(batch.validated_snapshot_type, batch.accepted_count)
+# raw preserved + normalized separately inspectable:
+obs = p.store.list_observations(batch.id)[0]
+print(obs.raw_values, obs.normalized_values)
+```
+Inspect Phase 2 records:
+```
+sqlite3 "$ELITE_DB_PATH" "SELECT id,validated_snapshot_type,accepted_count,rejected_count FROM import_batch;"
+sqlite3 "$ELITE_DB_PATH" "SELECT fact_type,status FROM business_fact;"
 ```
 
 ### Inspect the authoritative store

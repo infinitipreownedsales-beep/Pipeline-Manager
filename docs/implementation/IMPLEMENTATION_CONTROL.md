@@ -23,15 +23,27 @@ specification is authoritative, what is preserved, and what work is permitted.
 - **Branch:** `elite-pipeline/phase-0` (created from `3bf9162`; does not modify the legacy line)
 
 ## Current phase / work unit
-- **Phase:** Phase 1 — Platform Foundation (**complete; HOLD FOR REVIEW**).
+- **Phase:** Phase 2 — Data, Identity, and Accepted Facts (**complete; HOLD FOR REVIEW**).
 - **Phase 0:** approved and complete.
-- **Phase 1 result:** new `elite/` platform package (Python stdlib + SQLite);
-  environment/config, ids/clock, typed errors, repositories + durable persistence,
-  migrations, authn, authz, append-only audit, governed actions, structured logging,
-  deterministic test harness. Platform tests `26/26`; legacy `39/39`; no legacy file
-  changed. See `PHASE1_COMPLETION.md`, `PHASE1_TRACEABILITY.md`, `adr/`.
-- **Approved next phase:** Phase 2 — **only after review**. No domain rebuild
-  (Demand/Supply/CPO/PPO/CTP/Loaner/Demo/Learning) has occurred; not started.
+- **Phase 1:** **approved and complete.** New `elite/` platform package (Python
+  stdlib + SQLite); environment/config, ids/clock, typed errors, repositories +
+  durable persistence, migrations, authn, authz, append-only audit, governed
+  actions, structured logging, deterministic test harness. Platform tests `26/26`.
+  See `PHASE1_COMPLETION.md`, `PHASE1_TRACEABILITY.md`, `adr/`.
+- **Phase 2 scope:** source registry, source contracts/schema profiles, import
+  batches, source observations (raw + normalized), snapshot classification,
+  vehicle-unit and production-order identity, identity evidence/resolution, business
+  facts with correction/supersession/reversal, reconciliation, provenance, current-
+  state projection, fixtures + tests. **No** Demand/Need/Supply/CPO/PPO/CTP/Loaner/
+  Demo/Prediction/Learning; no broad UI; no `pm_*` migration.
+- **Phase 2 result:** new `elite/data/` package + migration v2; source registry &
+  contracts, import batches, source observations (raw + normalized), snapshot rules,
+  vehicle-unit/production-order identity, evidence/resolution, append-preserving
+  business facts with correction/supersession/reversal, reconciliation, provenance,
+  current-state projection. Platform tests `61/61`; legacy `39/39`; no legacy file
+  changed. See `PHASE2_COMPLETION.md`, `PHASE2_TRACEABILITY.md`, `PHASE2_DATA_MODEL.md`,
+  `adr/ADR-0003`.
+- **Approved next phase:** Phase 3 — **only after review**.
 
 ## Required commands (legacy launch / inspect)
 ```

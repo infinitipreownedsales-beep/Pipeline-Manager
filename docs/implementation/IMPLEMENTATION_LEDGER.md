@@ -60,3 +60,32 @@ Docs: PHASE1_COMPLETION.md, PHASE1_TRACEABILITY.md, RUN_INSTRUCTIONS.md,
 adr/ADR-0001, adr/ADR-0002; updated IMPLEMENTATION_CONTROL.md and KNOWN_BUG_REGISTRY.md.
 
 Result: **Phase 1 complete → HOLD FOR REVIEW.** Next: Phase 2 only after review.
+
+## Phase 2 — Data, Identity, and Accepted Facts  (branch `elite-pipeline/phase-0`)
+
+Control records: Phase 1 recorded approved; Phase 2 set active then complete.
+BUG-CPO-002 kept open only as a later-domain implementation/regression risk.
+
+Implemented a NEW `elite/data/` package + migration v2 (appended; v1 unchanged),
+touching no legacy file:
+- Source Registry, Source Contract/Schema Profile (shape+meaning only), Import Batch;
+- Source Observation with raw preservation + separate normalization; distinct value
+  sentinels (missing/blank/zero/false/na/unknown/invalid/unresolved/conflicting);
+- Full/Partial snapshot classification (contract-driven; absence = scoped signal only);
+- Vehicle Unit + Production Order identity (VIN-only unit identity; order-id-only order
+  identity; pre-VIN→single-unit link; scope isolation; corrections preserve prior);
+- Identity Evidence + resolution outcomes;
+- Business Facts under source authority (fact-type + scope), append-preserving with
+  correction/supersession/reversal; deterministic current-state projection + conflict;
+- Reconciliation (one outcome per row; counts balance; absence signals);
+- deterministic fixtures (21 source cases, 14 identity cases) + tests.
+
+Evidence executed: platform harness **61/61** (26 Phase 1 + 35 Phase 2); legacy suite
+**39/39**; migration v2 rerun-safe; legacy application paths byte-unchanged vs
+`legacy/inventory-tool` @ `3bf9162`. All 38 mandatory acceptance items pass
+(PHASE2_COMPLETION.md).
+
+Docs: PHASE2_COMPLETION, PHASE2_TRACEABILITY, PHASE2_DATA_MODEL, adr/ADR-0003;
+updated IMPLEMENTATION_CONTROL, RUN_INSTRUCTIONS, REQUIREMENT_INDEX (note).
+
+Result: **Phase 2 complete → HOLD FOR REVIEW.** Next: Phase 3 only after review.
