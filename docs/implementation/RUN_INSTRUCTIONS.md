@@ -32,13 +32,15 @@ db.migrate()          # applies pending migrations; tracked in migration_record
 print("schema version:", db.version())
 ```
 
-### Run the platform tests (Phase 1 through Phase 6)
+### Run the platform tests (Phase 1 through Phase 7)
 ```
 PYTHONPATH=. python3 elite/tests/run_all.py
 # focused BUG-CPO-002 regressions (Phase 4 synthetic + Phase 5 end-to-end CPO workflow):
 PYTHONPATH=. python3 -m unittest elite.tests.test_phase4_bug_cpo_002 elite.tests.test_phase5_bug_cpo_002_e2e -v
 # focused Service Loaner zero-mile-rented monitoring regression:
 PYTHONPATH=. python3 -m unittest elite.tests.test_phase6_monitoring.TestZeroMileRegression -v
+# focused Executive Demo Best Overall regression:
+PYTHONPATH=. python3 -m unittest elite.tests.test_phase7_preference_bestoverall.TestBestOverallRegression -v
 ```
 
 ### Phase 2 — data/identity/facts (example)
@@ -130,6 +132,35 @@ Inspect Phase 6 records:
 sqlite3 "$ELITE_DB_PATH" "SELECT membership_state,current_rental_state FROM service_loaner_unit;"
 sqlite3 "$ELITE_DB_PATH" "SELECT rule,status,prompt FROM service_loaner_monitoring_alert;"
 sqlite3 "$ELITE_DB_PATH" "SELECT confirming_principal,confirmed_at FROM used_cars_receipt;"
+```
+
+### Phase 7 — Executive Demo domain (example)
+```python
+from elite.execdemo.fixtures import Phase7
+from elite.execdemo.output import build_unit_slice, portfolio_slice
+from elite.workflow.fixtures import SCOPE
+p = Phase7("/path/to/elite.db")               # migrates v1..v7; wires Executive Demo services + principals
+c, plan = p.nr_plan(position="need")          # a New Retail combination in Need (Phase 4 plan)
+u = p.candidate_unit("1HGCM82633A100001", c.id)
+p.p4.seed_current(c, [{"vehicle_unit_id": u.vehicle_unit_id, "state": "available_unsold",
+                      "identity_status": "resolved"}])
+p.units.propose_designation(p.full, SCOPE, u)
+p.units.approve_designation(p.full, SCOPE, p.store.get_unit(u.id))
+p.units.execute_designation(p.full, SCOPE, p.store.get_unit(u.id))   # membership + removes NR supply once
+# Best Overall over the full objective (not cheapest / not highest-benefit):
+bp = p.portfolio.best_overall(SCOPE, required_size=p.portfolio.current_active(SCOPE) + 1, candidates=[
+    {"vehicle_unit_id": "cheap", "eligibility": "ELIGIBLE", "opportunity_cost": {"value": 1},
+     "executive_demo_benefit": {"value": 2}, "portfolio_fit": {"value": 2}},
+    {"vehicle_unit_id": "fit", "eligibility": "ELIGIBLE", "opportunity_cost": {"value": 4},
+     "executive_demo_benefit": {"value": 6}, "portfolio_fit": {"value": 12}}])
+print(portfolio_slice(bp)["best_overall"]["pick"]["vehicle_unit_id"])   # -> "fit"
+```
+Inspect Phase 7 records:
+```
+sqlite3 "$ELITE_DB_PATH" "SELECT membership_state,active_fleet_supply_ref FROM executive_demo_unit;"
+sqlite3 "$ELITE_DB_PATH" "SELECT outcome,supply_ref FROM executive_demo_reconciliation_result;"
+sqlite3 "$ELITE_DB_PATH" "SELECT need,selected,best_overall FROM executive_demo_portfolio_plan;"
+sqlite3 "$ELITE_DB_PATH" "SELECT confirming_principal,confirmed_at FROM executive_demo_used_cars_receipt;"
 ```
 
 ### Inspect the authoritative store

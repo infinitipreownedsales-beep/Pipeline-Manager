@@ -31,10 +31,12 @@ class TestPhase6MigrationCross(unittest.TestCase):
 
     def test_80_migration_v6_survives_restart(self):
         u = self.p.make_active("1GNSKBKC5FR000701")
+        applied = [r["version"] for r in self.p.stack.db.conn.execute("SELECT version FROM migration_record").fetchall()]
+        self.assertIn(6, applied)
         self.p.close()
         p2 = Phase6(self.dbp)
         self.addCleanup(p2.close)
-        self.assertEqual(p2.stack.db.version(), 6)
+        self.assertGreaterEqual(p2.stack.db.version(), 6)           # v6 durable (later phases may add more)
         self.assertIsNotNone(p2.store.get_unit(u.id))
 
     def test_81_migration_v6_rerun_safe(self):
@@ -43,7 +45,10 @@ class TestPhase6MigrationCross(unittest.TestCase):
         p2 = Phase6(self.dbp)
         self.addCleanup(p2.close)
         after = p2.store.conn.execute("SELECT COUNT(*) n FROM migration_record").fetchone()["n"]
-        self.assertEqual((before, after), (6, 6))
+        self.assertEqual(before, after)                            # no duplicate migration rows on rerun
+        applied = [r["version"] for r in p2.stack.db.conn.execute("SELECT version FROM migration_record").fetchall()]
+        self.assertGreaterEqual(len(applied), 6)
+        self.assertEqual(len(applied), len(set(applied)))
 
     def test_82_phase1_tests_remain_green(self):
         _r, f = _run_modules(["elite.tests.test_authz", "elite.tests.test_persistence",

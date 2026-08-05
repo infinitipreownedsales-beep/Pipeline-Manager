@@ -23,7 +23,8 @@ specification is authoritative, what is preserved, and what work is permitted.
 - **Branch:** `elite-pipeline/phase-0` (created from `3bf9162`; does not modify the legacy line)
 
 ## Current phase / work unit
-- **Phase:** Phase 6 — Service Loaner Domain (**complete → HOLD FOR REVIEW**).
+- **Phase:** Phase 7 — Executive Demo Domain (**complete; HOLD FOR REVIEW**).
+- **Phase 6:** **approved and complete.**
 - **Phase 5:** **approved and complete.**
 - **Phase 4:** **approved and complete.**
 - **Phase 3:** **approved and complete.**
@@ -128,7 +129,41 @@ specification is authoritative, what is preserved, and what work is permitted.
   legacy application paths byte-unchanged. All 89 acceptance items pass + the 14-point zero-mile-rented
   regression. See `PHASE6_COMPLETION.md`, `PHASE6_TRACEABILITY.md`, `PHASE6_DOMAIN_MODEL.md`,
   `PHASE6_REGISTRIES.md`, `adr/ADR-0014..0017`.
-- **Approved next phase:** Phase 7 — **Executive Demo** — **only after review**.
+- **Phase 7 scope:** the complete **Executive Demo** domain as an independent governed portfolio
+  domain — current portfolio + need determination; candidate eligibility + construction; **Best
+  Overall** portfolio-selection (not cheapest/most-eligible); model preference (approved policy);
+  versioned New Retail opportunity cost (consumes Phase 4 planning, never recalculates Demand);
+  expected Executive Demo lifecycle; designation propose/approve/execute; active membership; versioned
+  Economic Call (separate from Execution Status; incremental exit economics, no sunk-cost reapplied);
+  retirement eligibility/propose/approve/execute; actual retirement; return-to-New-Retail
+  reconciliation (restore Current Supply once); Used Cars handoff (idempotent, immutable; own record —
+  NOT merged with Service Loaner); committed portfolio updates; scenario exploration; resale/outcome
+  foundations; operational output slices. Migration v7 (appended). Strict domain separation: Executive
+  Demo is distinct from Service Loaner, New Retail inventory, generic acquisition ranking, CPO/PPO,
+  production pipeline, Service Loaner fleet need, and Used Cars before confirmed handoff — the two
+  fleet domains are NOT merged into one shared engine. Reuses Phase 1-6 identity/facts/policy/planning/
+  commitment/governance/audit/lifecycle-history/reconciliation foundations. **No** Prediction/
+  Observation Pairing, Learning, completed Phase-9 Governance, full UX, operational hardening, or
+  migration/cutover.
+- **Phase 7 result:** new `elite/execdemo/` package + migration v7 (appended; v1-v6 unchanged), touching
+  no legacy file. Executive Demo Unit + governed lifecycle (Vehicle Unit identity never replaced);
+  portfolio need resolved before ranking (Service Loaner need excluded, New Retail Demand never
+  recomputed); reasoned eligibility gate; candidate construction from accepted facts + New Retail
+  planning refs; versioned New Retail opportunity cost consuming the Phase 4 plan (Need > Excess, never
+  a separate Demand); **Best Overall** portfolio selection over the full objective with recorded
+  tradeoffs + labeled sacrifices (not cheapest/most-eligible, no opaque score); model preference via
+  Phase 3 only; expected lifecycle projection; versioned Economic Call separate from Execution Status
+  (entry vs retirement, incremental, no sunk cost, `BLOCKED_NEW_RETAIL_RISK`); designation
+  propose/approve/execute (execution establishes membership once and removes New Retail Current Supply);
+  retirement propose/approve/execute; return-to-New-Retail restoring Current Supply exactly once; Used
+  Cars idempotent immutable receipt as its **own** record (NOT merged with Service Loaner); corrections
+  preserving history; scenario exploration; resale foundations; output slices; 60 fixtures. Platform
+  tests `424/424` (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 + 79 P6 + 79 P7); legacy `39/39`; migration v7
+  rerun-safe; legacy application paths byte-unchanged. All 90 acceptance items pass + the 14-point Best
+  Overall regression. Executive Demo and Service Loaner remain **separate** bounded domains (no shared
+  fleet engine). See `PHASE7_COMPLETION.md`, `PHASE7_TRACEABILITY.md`, `PHASE7_DOMAIN_MODEL.md`,
+  `PHASE7_REGISTRIES.md`, `adr/ADR-0018..0021`.
+- **Approved next phase:** Phase 8 — **only after review**.
 
 ## Required commands (legacy launch / inspect)
 ```
@@ -167,7 +202,10 @@ PYTHONPATH=. python3 pipeline_manager/tests/test_loaner_intel.py
 - Product owner / General Sales Manager (dealership). Implementation review pending.
 
 ## Status
-**HOLD FOR REVIEW.** Phase 6 complete (Service Loaner domain; `elite/loaner/` + migration v6; platform
-`345/345`, legacy `39/39`; legacy line unchanged at `3bf9162`). Executive Demo was deliberately NOT
-built (deferred to Phase 7). **BUG-CPO-002 = FIXED_END_TO_END**, retained permanently in regression
-coverage. Do not proceed to Phase 7 until reviewed and approved.
+**Phase 7 complete — HOLD FOR REVIEW.** Executive Demo Domain on `elite-pipeline/phase-0` (Phase 6
+approved). New `elite/execdemo/` package + migration v7; platform tests `424/424`; legacy `39/39`; all
+90 acceptance items + the 14-point Best Overall regression pass; legacy application paths byte-
+unchanged. Phase 6 (Service Loaner) remains complete, approved, and a **separate** bounded domain —
+Executive Demo is a distinct package and is NOT merged with Service Loaner (no shared fleet engine).
+Legacy line preserved at `3bf9162`. **BUG-CPO-002 = FIXED_END_TO_END**, retained permanently in
+regression coverage. Phase 8 not started.

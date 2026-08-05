@@ -62,7 +62,11 @@ contract fields. New defects append here with a stable ID.
   commitment while approval + cancellation history remain inspectable; a fresh workflow for the same
   order commits at most one active unit for that identity (monotone ladder confirms Need never
   rises). Both regressions are permanent; the product decision remains closed. Any future workflow
-  (e.g. real allocation feeds) must keep both regressions green.
+  (e.g. real allocation feeds) must keep both regressions green. Verified still green under migration
+  v7 / Phase 7 (Executive Demo): designating a unit as a demo removes it from New Retail Current Supply
+  and never recomputes Demand, and its versioned New Retail opportunity cost consumes the Phase 4 plan
+  rather than recalculating Demand (`elite/tests/test_phase7_migration_cross.py` items 84-86; regression
+  item 13 asserts Demand unchanged).
 - **Regression fixture (Phase 4):** `elite/tests/test_phase4_bug_cpo_002.py` — baseline
   Demand + qualifying Supply + Need; add an approved synthetic CPO-like commitment only as
   Committed Supply; Demand unchanged; qualifying Supply increases by exactly the committed

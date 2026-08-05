@@ -269,3 +269,40 @@ Docs: PHASE6_COMPLETION, PHASE6_TRACEABILITY, PHASE6_DOMAIN_MODEL, PHASE6_REGIST
 adr/ADR-0014..0017; updated IMPLEMENTATION_CONTROL, RUN_INSTRUCTIONS, REQUIREMENT_INDEX (note).
 
 Result: **Phase 6 complete → HOLD FOR REVIEW.** Next: Phase 7 (Executive Demo) only after review.
+
+## Phase 6 review disposition — APPROVED
+
+Phase 6 (Service Loaner domain; `elite/loaner/` + migration v6) reviewed and **approved**. Recorded
+here and in IMPLEMENTATION_CONTROL.md. Legacy line preserved at `3bf9162`. Service Loaner is a
+completed, separate bounded domain and is not modified by later phases. BUG-CPO-002 remains
+FIXED_END_TO_END (permanent regression coverage).
+
+## Phase 7 — Executive Demo Domain  (branch `elite-pipeline/phase-0`)  [COMPLETE — HOLD FOR REVIEW]
+
+Control records: Phase 6 recorded approved; Phase 7 set active. Building the complete Executive Demo
+bounded domain (current portfolio + need; eligibility + candidate construction; Best Overall
+portfolio-selection; model preference via Phase 3; versioned New Retail opportunity cost consuming
+Phase 4 planning; expected lifecycle; designation propose/approve/execute; versioned Economic Call
+separate from Execution Status; retirement/return-to-retail/Used-Cars handoff; committed portfolio
+updates; scenario exploration; resale foundations; output slices) on the Phase 1-6 foundations,
+appending migration v7 (v1-v6 unchanged), touching no legacy file. **Executive Demo is a SEPARATE
+package (`elite/execdemo/`) — the two fleet domains are NOT generalized into one shared engine;
+Service Loaner records are untouched.** Carries a dedicated 14-point Best Overall regression. No
+Prediction/Observation Pairing / Learning / completed Phase-9 Governance / full UX / operational
+hardening / migration-cutover.
+
+Evidence executed: platform harness **424/424** (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 + 79 P6 +
+79 P7); legacy **39/39**; migration v7 rerun-safe; legacy application paths byte-unchanged vs
+`legacy/inventory-tool` @ `3bf9162`. All 90 mandatory acceptance items pass, plus the dedicated
+14-point Best Overall regression (PHASE7_COMPLETION.md). Best Overall proven to select the strongest
+full-objective candidate — not the cheapest and not the highest-benefit; designation execution removes
+New Retail Current Supply once and return-to-New-Retail restores it once; Used Cars receipt is a
+separate, idempotent, immutable record; a unit cannot be active in both fleet domains.
+
+Docs: PHASE7_COMPLETION, PHASE7_TRACEABILITY, PHASE7_DOMAIN_MODEL, PHASE7_REGISTRIES,
+adr/ADR-0018..0021; updated IMPLEMENTATION_CONTROL, RUN_INSTRUCTIONS, REQUIREMENT_INDEX (note),
+KNOWN_BUG_REGISTRY (note). Phase 6 migration-durability tests made version-agnostic (assert v6 present
+and total ≥ 6) so appending v7 keeps them green — no Service Loaner behavior changed.
+
+Result: **Phase 7 complete → HOLD FOR REVIEW.** Executive Demo and Service Loaner remain separate
+bounded domains (no shared fleet engine). Next: Phase 8 only after review.

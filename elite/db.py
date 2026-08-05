@@ -578,6 +578,136 @@ MIGRATIONS = [
         CREATE TRIGGER service_loaner_issued_output_no_delete BEFORE DELETE ON service_loaner_issued_output
             BEGIN SELECT RAISE(ABORT, 'service_loaner_issued_output is preserved'); END;
     """),
+    (7, "executive_demo", """
+        -- Executive Demo Unit — a Vehicle Unit's Executive Demo participation (does NOT replace
+        -- Vehicle Unit identity). A SEPARATE domain from Service Loaner (own records).
+        CREATE TABLE executive_demo_unit (
+            id TEXT PRIMARY KEY, vehicle_unit_id TEXT, vin TEXT, store_scope TEXT NOT NULL, combination_id TEXT,
+            membership_state TEXT NOT NULL DEFAULT 'CANDIDATE', designation_decision TEXT, designation_execution_event TEXT,
+            active_date TEXT, in_service_or_activation_date TEXT, current_mileage TEXT, assigned_role TEXT,
+            model_preference_evidence TEXT, portfolio_role TEXT, retirement_decision TEXT, retirement_event TEXT,
+            return_to_retail_event TEXT, used_cars_receipt TEXT, current_economic_result TEXT,
+            active_fleet_supply_ref TEXT, correction_of TEXT, superseded_by TEXT, quality_status TEXT, confidence TEXT,
+            created_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TRIGGER executive_demo_unit_no_delete BEFORE DELETE ON executive_demo_unit
+            BEGIN SELECT RAISE(ABORT, 'executive_demo_unit history is preserved'); END;
+        CREATE TABLE executive_demo_membership_history (
+            id TEXT PRIMARY KEY, executive_demo_unit_id TEXT NOT NULL, from_state TEXT, to_state TEXT NOT NULL,
+            actor TEXT, action TEXT, reconciliation_ref TEXT, audit_ref TEXT, detail TEXT, at TEXT NOT NULL
+        );
+        CREATE TRIGGER executive_demo_membership_history_no_delete BEFORE DELETE ON executive_demo_membership_history
+            BEGIN SELECT RAISE(ABORT, 'executive_demo_membership_history is preserved'); END;
+        CREATE TABLE executive_demo_portfolio_requirement (
+            id TEXT PRIMARY KEY, store_scope TEXT NOT NULL, required_size INTEGER, model_representation TEXT,
+            model_preference_ref TEXT, policy_versions TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE executive_demo_portfolio_plan (
+            id TEXT PRIMARY KEY, store_scope TEXT NOT NULL, required_size INTEGER, current_active INTEGER,
+            committed INTEGER, need INTEGER, selected TEXT, tradeoffs TEXT, sacrifices TEXT, best_overall TEXT,
+            need_basis TEXT, policy_versions TEXT, calculation_version TEXT, scenario_id TEXT, issued_time TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'issued'
+        );
+        CREATE TRIGGER executive_demo_portfolio_plan_no_delete BEFORE DELETE ON executive_demo_portfolio_plan
+            BEGIN SELECT RAISE(ABORT, 'executive_demo_portfolio_plan is preserved'); END;
+        CREATE TABLE executive_demo_candidate (
+            id TEXT PRIMARY KEY, vehicle_unit_id TEXT, combination_id TEXT, store_scope TEXT, model TEXT, model_year TEXT,
+            age_days INTEGER, mileage TEXT, eligibility TEXT, new_retail_refs TEXT, opportunity_cost_ref TEXT,
+            expected_value TEXT, expected_lifecycle_ref TEXT, policy_versions TEXT, calculation_version TEXT,
+            source_refs TEXT, quality_status TEXT, confidence TEXT, scenario_id TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE executive_demo_eligibility_result (
+            id TEXT PRIMARY KEY, vehicle_unit_id TEXT, combination_id TEXT, store_scope TEXT, outcome TEXT NOT NULL,
+            reasons TEXT, policy_versions TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE executive_demo_model_preference_resolution (
+            id TEXT PRIMARY KEY, store_scope TEXT, resolution_status TEXT NOT NULL, preferred TEXT, hierarchy TEXT,
+            substitutions TEXT, policy_version TEXT, scope TEXT, note TEXT, scenario_id TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE executive_demo_opportunity_cost_result (
+            id TEXT PRIMARY KEY, vehicle_unit_id TEXT, combination_id TEXT, store_scope TEXT, affected_months TEXT,
+            plan_position TEXT, cost_value TEXT, expected_return_path TEXT, confidence TEXT, policy_versions TEXT,
+            calculation_version TEXT, plan_refs TEXT, reproducibility_package TEXT, scenario_id TEXT, issued_time TEXT NOT NULL
+        );
+        CREATE TRIGGER executive_demo_opportunity_cost_no_delete BEFORE DELETE ON executive_demo_opportunity_cost_result
+            BEGIN SELECT RAISE(ABORT, 'executive_demo_opportunity_cost_result is preserved'); END;
+        CREATE TABLE executive_demo_lifecycle_projection (
+            id TEXT PRIMARY KEY, executive_demo_unit_id TEXT, candidate_id TEXT, store_scope TEXT, activation_timing TEXT,
+            expected_duration TEXT, expected_mileage TEXT, expected_depreciation TEXT, expected_retirement_timing TEXT,
+            expected_return_path TEXT, assumptions TEXT, uncertainty TEXT, resolution_status TEXT NOT NULL,
+            policy_versions TEXT, calculation_version TEXT, issued_time TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'issued'
+        );
+        CREATE TRIGGER executive_demo_lifecycle_projection_no_delete BEFORE DELETE ON executive_demo_lifecycle_projection
+            BEGIN SELECT RAISE(ABORT, 'executive_demo_lifecycle_projection is preserved'); END;
+        CREATE TABLE executive_demo_economic_result (
+            id TEXT PRIMARY KEY, executive_demo_unit_id TEXT, candidate_id TEXT, store_scope TEXT, decision_point TEXT,
+            alternatives TEXT, economic_call TEXT, opportunity_cost_ref TEXT, expected_benefit TEXT, retirement_impact TEXT,
+            assumptions TEXT, uncertainty TEXT, resolution_status TEXT NOT NULL, policy_versions TEXT,
+            calculation_version TEXT, fact_refs TEXT, reproducibility_package TEXT, scenario_id TEXT, issued_time TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'issued'
+        );
+        CREATE TRIGGER executive_demo_economic_result_no_delete BEFORE DELETE ON executive_demo_economic_result
+            BEGIN SELECT RAISE(ABORT, 'executive_demo_economic_result issued history is preserved'); END;
+        CREATE TABLE executive_demo_execution_status (
+            id TEXT PRIMARY KEY, executive_demo_unit_id TEXT, economic_result_id TEXT, status TEXT NOT NULL, reason TEXT,
+            blocking_factors TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE executive_demo_designation_action (
+            id TEXT PRIMARY KEY, executive_demo_unit_id TEXT, store_scope TEXT, lifecycle_status TEXT NOT NULL,
+            candidate_id TEXT, economic_result_id TEXT, decision_ref TEXT, approval_time TEXT, cancellation_status TEXT,
+            correction_of TEXT, created_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE executive_demo_retirement_eligibility (
+            id TEXT PRIMARY KEY, executive_demo_unit_id TEXT, eligible INTEGER, reasons TEXT, policy_versions TEXT,
+            tenure_days INTEGER, recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE executive_demo_retirement_action (
+            id TEXT PRIMARY KEY, executive_demo_unit_id TEXT, store_scope TEXT, lifecycle_status TEXT NOT NULL,
+            economic_result_id TEXT, decision_ref TEXT, approval_time TEXT, cancellation_status TEXT, correction_of TEXT,
+            created_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE executive_demo_retirement_event (
+            id TEXT PRIMARY KEY, executive_demo_unit_id TEXT, retirement_action_id TEXT, store_scope TEXT,
+            membership_reconciled INTEGER, event_time TEXT NOT NULL
+        );
+        CREATE TRIGGER executive_demo_retirement_event_no_delete BEFORE DELETE ON executive_demo_retirement_event
+            BEGIN SELECT RAISE(ABORT, 'executive_demo_retirement_event is preserved'); END;
+        CREATE TABLE executive_demo_return_to_retail_event (
+            id TEXT PRIMARY KEY, executive_demo_unit_id TEXT, retirement_event_ref TEXT, store_scope TEXT,
+            restored_supply_ref TEXT, confirmed_by TEXT, confirmed_at TEXT NOT NULL
+        );
+        -- Used Cars receipt — separate record from Service Loaner; single idempotent, immutable.
+        CREATE TABLE executive_demo_used_cars_receipt (
+            id TEXT PRIMARY KEY, executive_demo_unit_id TEXT, vehicle_unit_id TEXT, retirement_event_ref TEXT,
+            store_scope TEXT, confirming_principal TEXT, correlation_id TEXT, audit_ref TEXT, confirmed_at TEXT NOT NULL,
+            UNIQUE(executive_demo_unit_id)
+        );
+        CREATE TRIGGER executive_demo_used_cars_receipt_no_update BEFORE UPDATE ON executive_demo_used_cars_receipt
+            BEGIN SELECT RAISE(ABORT, 'executive_demo_used_cars_receipt is immutable'); END;
+        CREATE TRIGGER executive_demo_used_cars_receipt_no_delete BEFORE DELETE ON executive_demo_used_cars_receipt
+            BEGIN SELECT RAISE(ABORT, 'executive_demo_used_cars_receipt is preserved'); END;
+        CREATE TABLE executive_demo_reconciliation_result (
+            id TEXT PRIMARY KEY, executive_demo_unit_id TEXT, vehicle_unit_id TEXT, store_scope TEXT, outcome TEXT NOT NULL,
+            supply_ref TEXT, detail TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER executive_demo_reconciliation_result_no_delete BEFORE DELETE ON executive_demo_reconciliation_result
+            BEGIN SELECT RAISE(ABORT, 'executive_demo_reconciliation_result is preserved'); END;
+        CREATE TABLE executive_demo_scenario_result (
+            id TEXT PRIMARY KEY, scenario_id TEXT NOT NULL, store_scope TEXT, kind TEXT, overrides TEXT, output TEXT,
+            baseline_ref TEXT, issued_time TEXT NOT NULL
+        );
+        CREATE TABLE executive_demo_resale_reference (
+            id TEXT PRIMARY KEY, executive_demo_unit_id TEXT, designation_ref TEXT, retirement_event_ref TEXT,
+            return_path TEXT, used_cars_receipt_ref TEXT, resale_event_ref TEXT, resale_value TEXT, predicted_ref TEXT,
+            observed_ref TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE executive_demo_issued_output (
+            id TEXT PRIMARY KEY, output_type TEXT NOT NULL, output_id TEXT NOT NULL, executive_demo_unit_id TEXT,
+            store_scope TEXT, calculation_version TEXT, scenario_id TEXT, issued_time TEXT NOT NULL
+        );
+        CREATE TRIGGER executive_demo_issued_output_no_delete BEFORE DELETE ON executive_demo_issued_output
+            BEGIN SELECT RAISE(ABORT, 'executive_demo_issued_output is preserved'); END;
+    """),
 ]
 
 
