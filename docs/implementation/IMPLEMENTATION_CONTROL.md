@@ -23,7 +23,8 @@ specification is authoritative, what is preserved, and what work is permitted.
 - **Branch:** `elite-pipeline/phase-0` (created from `3bf9162`; does not modify the legacy line)
 
 ## Current phase / work unit
-- **Phase:** Phase 4 — New Inventory Foundation (**complete → HOLD FOR REVIEW**).
+- **Phase:** Phase 5 — Production and Supply Workflows (**complete → HOLD FOR REVIEW**).
+- **Phase 4:** **approved and complete.**
 - **Phase 3:** **approved and complete.**
 - **Phase 2:** **approved and complete.**
 - **Phase 0:** approved and complete.
@@ -82,7 +83,27 @@ specification is authoritative, what is preserved, and what work is permitted.
   migration v4 rerun-safe; legacy application paths byte-unchanged. All 63 acceptance items pass +
   the dedicated 10-point BUG-CPO-002 regression. See `PHASE4_COMPLETION.md`,
   `PHASE4_TRACEABILITY.md`, `PHASE4_DOMAIN_MODEL.md`, `PHASE4_REGISTRIES.md`, `adr/ADR-0005..0008`.
-- **Approved next phase:** Phase 5 — **only after review**.
+- **Phase 5 scope:** governed production + acquisition workflows that convert supply opportunities
+  into proposed/approved/committed/executed/cancelled/superseded/failed supply actions —
+  production-pipeline state; ETA + arrival-window interpretation; editability; model-year
+  transition; Incoming Risk; CPO; PPO; Dealer Trade; CTP; sequential recomputation; commitment
+  reconciliation; integrated forecast updates; execution/outcome capture foundations; focused
+  operational workflow slices. Migration v5 (appended). All workflows **consume the authoritative
+  Phase 4 Need contract** and define **no** separate Demand. Reuses Phase 1 authz/audit, Phase 3
+  policy, and Phase 4 Demand/Supply/Need/Excess/forecast/commitment/reproducibility contracts
+  without redefining them. **No** Service Loaner, Executive Demo, Prediction/Observation Pairing,
+  Learning, completed Phase-9 Governance, full UX, operational hardening, or migration/cutover.
+- **Phase 5 result:** new `elite/workflow/` package + migration v5 (appended; v1-v4 unchanged),
+  touching no legacy file. Production-pipeline projection + ETA/editability/model-year transition +
+  component-explained Incoming Risk; the common governed workflow lifecycle; CPO/PPO/Dealer Trade/CTP
+  workflows (all consume Phase 4 Need, none compute Demand; discrete count-once commitments; CTP
+  moves one future unit without a duplicate order); commitment reconciliation (10 outcomes);
+  sequential recomputation; integrated forecast updates; operational workflow slices; 50 fixtures.
+  Platform tests `266/266` (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5); legacy `39/39`; migration v5
+  rerun-safe; legacy application paths byte-unchanged. All 78 acceptance items pass + the 15-point
+  end-to-end BUG-CPO-002 regression → **BUG-CPO-002 FIXED_END_TO_END**. See `PHASE5_COMPLETION.md`,
+  `PHASE5_TRACEABILITY.md`, `PHASE5_DOMAIN_MODEL.md`, `PHASE5_REGISTRIES.md`, `adr/ADR-0009..0013`.
+- **Approved next phase:** Phase 6 — **only after review**.
 
 ## Required commands (legacy launch / inspect)
 ```
@@ -121,8 +142,9 @@ PYTHONPATH=. python3 pipeline_manager/tests/test_loaner_intel.py
 - Product owner / General Sales Manager (dealership). Implementation review pending.
 
 ## Status
-**HOLD FOR REVIEW.** Phase 4 complete (New Inventory foundation; `elite/newinv/` + migration v4;
-platform `185/185`, legacy `39/39`; legacy line unchanged at `3bf9162`). Demand-independence and
-monotonic qualifying Supply proven; BUG-CPO-002 regression (10-point) green — kept open as a risk
-until reviewed and until the real Phase-5 CPO workflow preserves the contracts. Do not proceed to
-Phase 5 until reviewed and approved.
+**HOLD FOR REVIEW.** Phase 5 complete (Production and Supply Workflows; `elite/workflow/` + migration
+v5; platform `266/266`, legacy `39/39`; legacy line unchanged at `3bf9162`). Real governed CPO/PPO/
+Dealer Trade/CTP workflows consume the Phase 4 Need contract, compute no separate Demand, and are
+count-once + monotone; the 15-point end-to-end BUG-CPO-002 regression is green →
+**BUG-CPO-002 FIXED_END_TO_END** (retained permanently in the regression registry). Do not proceed to
+Phase 6 until reviewed and approved.

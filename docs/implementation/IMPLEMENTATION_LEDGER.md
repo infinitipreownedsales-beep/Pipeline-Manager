@@ -173,3 +173,50 @@ adr/ADR-0005..0008; updated IMPLEMENTATION_CONTROL, KNOWN_BUG_REGISTRY, RUN_INST
 REQUIREMENT_INDEX (note).
 
 Result: **Phase 4 complete → HOLD FOR REVIEW.** Next: Phase 5 only after review.
+
+## Phase 4 review disposition — APPROVED
+
+Phase 4 (New Inventory foundation; `elite/newinv/` + migration v4) reviewed and **approved**.
+Recorded here and in IMPLEMENTATION_CONTROL.md. Legacy line preserved at `3bf9162`. BUG-CPO-002
+carried forward **open** until the real CPO workflow (Phase 5) proves the Phase 4 Demand and
+monotonic-Supply contracts end-to-end.
+
+## Phase 5 — Production and Supply Workflows  (branch `elite-pipeline/phase-0`)  [ACTIVE]
+
+Control records: Phase 4 recorded approved; Phase 5 set active. Building the governed production +
+acquisition workflows (production pipeline, ETA/arrival windows, editability, model-year transition,
+Incoming Risk, CPO, PPO, Dealer Trade, CTP, sequential recomputation, commitment reconciliation,
+integrated forecast updates, execution/outcome foundations, operational workflow slices) on the
+Phase 1 authz/audit, Phase 3 policy, and Phase 4 Demand/Supply/Need/Excess/forecast/commitment/
+reproducibility contracts, appending migration v5 (v1-v4 unchanged), touching no legacy file. Every
+workflow consumes the authoritative Phase 4 Need contract and defines no separate Demand; carries a
+dedicated end-to-end BUG-CPO-002 regression. No Service Loaner / Executive Demo / Pairing / Learning
+/ completed Phase-9 Governance / full UX / operational hardening / migration-cutover.
+
+Implemented a NEW `elite/workflow/` package + migration v5 (appended; v1-v4 unchanged), touching
+no legacy file: production-pipeline projection (order identity stable; pre-VIN→VIN one unit;
+conflicts explicit; cancelled emits no qualifying future supply); ETA/arrival-window interpretation
+(precision ≤ evidence; conservative cross-month; unknown/stale not confident supply; revisions
+preserved); editability (unknown ≠ editable); model-year transition (preserves identity); Incoming
+Risk (component-explained, never one opaque score); the common governed workflow lifecycle (Phase 1
+Governor: authz + atomic audit + optimistic concurrency + idempotency); CPO, PPO, Dealer Trade, CTP
+workflows (all consume Phase 4 Need, none compute Demand; discrete count-once commitments; CTP moves
+one future unit between combinations without a duplicate order); commitment reconciliation (10
+outcomes); sequential recomputation (recompute-after-each; suppress unnecessary; no double-select);
+integrated forecast updates (new plan preserving prior, causing action identified); operational
+workflow slices; 50 dealership-representative fixtures.
+
+Supply effects flow through Phase 4 Supply/commitment records via raw inserts on the governed
+connection, so count-once and monotonicity hold end-to-end. The dedicated 15-point end-to-end
+BUG-CPO-002 regression (`test_phase5_bug_cpo_002_e2e.py`) passes together with the Phase 4 regression
+→ BUG-CPO-002 recorded **FIXED_END_TO_END** (retained permanently in the regression registry).
+
+Evidence executed: platform harness **266/266** (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5); legacy
+**39/39**; migration v5 rerun-safe; legacy application paths byte-unchanged vs
+`legacy/inventory-tool` @ `3bf9162`. All 78 mandatory acceptance items pass (PHASE5_COMPLETION.md).
+
+Docs: PHASE5_COMPLETION, PHASE5_TRACEABILITY, PHASE5_DOMAIN_MODEL, PHASE5_REGISTRIES,
+adr/ADR-0009..0013; updated IMPLEMENTATION_CONTROL, KNOWN_BUG_REGISTRY, RUN_INSTRUCTIONS,
+REQUIREMENT_INDEX (note).
+
+Result: **Phase 5 complete → HOLD FOR REVIEW.** Next: Phase 6 only after review.

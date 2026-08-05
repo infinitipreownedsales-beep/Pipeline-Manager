@@ -64,7 +64,10 @@ class TestPhase4OutputMigration(unittest.TestCase):
         self.p.close()
         p2 = Phase4(self.dbp)
         self.addCleanup(p2.close)
-        self.assertEqual(p2.stack.db.version(), 4)
+        applied = {r["version"] for r in
+                   p2.store.conn.execute("SELECT version FROM migration_record").fetchall()}
+        self.assertIn(4, applied)                               # v4 applied (later migrations may exist)
+        self.assertGreaterEqual(p2.stack.db.version(), 4)
         self.assertIsNotNone(p2.store.get_combination(c.id))
 
     def test_57_migration_v4_rerun_is_safe(self):
@@ -73,7 +76,8 @@ class TestPhase4OutputMigration(unittest.TestCase):
         p2 = Phase4(self.dbp)
         self.addCleanup(p2.close)
         after = p2.store.conn.execute("SELECT COUNT(*) n FROM migration_record").fetchone()["n"]
-        self.assertEqual((before, after), (4, 4))
+        self.assertEqual(before, after)                        # rerun applies nothing new
+        self.assertGreaterEqual(after, 4)
 
     def test_58_phase1_tests_remain_green(self):
         run, failed = _run_modules(["elite.tests.test_authz", "elite.tests.test_persistence",

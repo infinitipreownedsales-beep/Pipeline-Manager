@@ -50,14 +50,19 @@ contract fields. New defects append here with a stable ID.
   implementation must honor the canonical contracts above.
 - **Classification:** **implementation defect / regression risk** (NOT a
   specification-owned model-decision blocker — the spec already resolves it).
-- **Status:** **OPEN — Phase 4 regression GREEN, kept open pending review.** The New
-  Inventory foundation (Phase 4) proves the canonical contracts under a synthetic CPO-like
-  commitment (Committed Supply only; the real CPO workflow is NOT implemented). The dedicated
-  regression `elite/tests/test_phase4_bug_cpo_002.py` passes: Demand is independent of
-  acquisition path; an approved commitment is credited to Committed Supply exactly once; added
-  qualifying Supply never increases Need under unchanged Demand inputs and window (monotone
-  non-increasing ladder). Kept OPEN as a risk until reviewed AND until the real Phase-5 CPO
-  workflow is shown to preserve these contracts. Do **not** reopen the product decision.
+- **Status:** **FIXED_END_TO_END (Phase 5) — retained permanently in the regression registry.**
+  Phase 4 proves the canonical contracts under a synthetic CPO-like commitment
+  (`elite/tests/test_phase4_bug_cpo_002.py`, green). Phase 5 implements the REAL governed CPO
+  workflow and the dedicated 15-point end-to-end regression
+  `elite/tests/test_phase5_bug_cpo_002_e2e.py` passes together with it: Phase 4 Demand issued;
+  baseline Current/Future/Committed Supply + Need; one eligible Production Order proposed through CPO
+  (no supply effect); authorized approval creates exactly one Commitment; Demand identical;
+  qualifying Supply +exactly one; Need decreases/unchanged and never increases; replayed approval
+  adds no unit; renamed acquisition path does not alter Demand; cancellation removes the prospective
+  commitment while approval + cancellation history remain inspectable; a fresh workflow for the same
+  order commits at most one active unit for that identity (monotone ladder confirms Need never
+  rises). Both regressions are permanent; the product decision remains closed. Any future workflow
+  (e.g. real allocation feeds) must keep both regressions green.
 - **Regression fixture (Phase 4):** `elite/tests/test_phase4_bug_cpo_002.py` — baseline
   Demand + qualifying Supply + Need; add an approved synthetic CPO-like commitment only as
   Committed Supply; Demand unchanged; qualifying Supply increases by exactly the committed

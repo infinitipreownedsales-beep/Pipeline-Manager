@@ -103,17 +103,23 @@ class NewInvStore:
                 for r in rows]
 
     # ---- Current Supply ----------------------------------------------------
-    def add_current_supply(self, s: CurrentSupply) -> CurrentSupply:
+    def insert_current_supply(self, conn, s: CurrentSupply) -> CurrentSupply:
+        """Raw insert on the caller's connection (no own transaction) — use inside a governed
+        transaction so a workflow's supply effect commits atomically with its Audit Event."""
         s.calculation_timestamp = s.calculation_timestamp or self._now()
+        conn.execute(
+            "INSERT INTO current_supply_projection(id,vehicle_unit_id,combination_id,store_scope,availability_state,"
+            "arrival_date,available_for_retail_date,age_days,source_state_refs,fact_refs,retail_eligible,"
+            "exclusion_reason,quality_status,confidence,calculation_timestamp,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (s.id, s.vehicle_unit_id, s.combination_id, s.store_scope, s.availability_state, s.arrival_date,
+             s.available_for_retail_date, s.age_days, _j(s.source_state_refs), _j(s.fact_refs),
+             int(s.retail_eligible), s.exclusion_reason, s.quality_status, s.confidence,
+             s.calculation_timestamp, s.status))
+        return s
+
+    def add_current_supply(self, s: CurrentSupply) -> CurrentSupply:
         with self.conn:
-            self.conn.execute(
-                "INSERT INTO current_supply_projection(id,vehicle_unit_id,combination_id,store_scope,availability_state,"
-                "arrival_date,available_for_retail_date,age_days,source_state_refs,fact_refs,retail_eligible,"
-                "exclusion_reason,quality_status,confidence,calculation_timestamp,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (s.id, s.vehicle_unit_id, s.combination_id, s.store_scope, s.availability_state, s.arrival_date,
-                 s.available_for_retail_date, s.age_days, _j(s.source_state_refs), _j(s.fact_refs),
-                 int(s.retail_eligible), s.exclusion_reason, s.quality_status, s.confidence,
-                 s.calculation_timestamp, s.status))
+            self.insert_current_supply(self.conn, s)
         return s
 
     def current_supply_for(self, combination_id, scope, *, eligible_only=False):
@@ -133,17 +139,23 @@ class NewInvStore:
             calculation_timestamp=r["calculation_timestamp"], status=r["status"])
 
     # ---- Future Supply -----------------------------------------------------
-    def add_future_supply(self, s: FutureSupply) -> FutureSupply:
+    def insert_future_supply(self, conn, s: FutureSupply) -> FutureSupply:
+        """Raw insert on the caller's connection (no own transaction) — use inside a governed
+        transaction (e.g. a CTP that moves a future unit between combinations)."""
         s.calculation_timestamp = s.calculation_timestamp or self._now()
+        conn.execute(
+            "INSERT INTO future_supply_projection(id,production_order_id,combination_id,store_scope,production_state,"
+            "eta_start,eta_end,arrival_month,timing_confidence,editability,cancellation_status,source_refs,fact_refs,"
+            "identity_linkage,quality_status,calculation_timestamp,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (s.id, s.production_order_id, s.combination_id, s.store_scope, s.production_state, s.eta_start,
+             s.eta_end, s.arrival_month, s.timing_confidence, s.editability, s.cancellation_status,
+             _j(s.source_refs), _j(s.fact_refs), _j(s.identity_linkage), s.quality_status,
+             s.calculation_timestamp, s.status))
+        return s
+
+    def add_future_supply(self, s: FutureSupply) -> FutureSupply:
         with self.conn:
-            self.conn.execute(
-                "INSERT INTO future_supply_projection(id,production_order_id,combination_id,store_scope,production_state,"
-                "eta_start,eta_end,arrival_month,timing_confidence,editability,cancellation_status,source_refs,fact_refs,"
-                "identity_linkage,quality_status,calculation_timestamp,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (s.id, s.production_order_id, s.combination_id, s.store_scope, s.production_state, s.eta_start,
-                 s.eta_end, s.arrival_month, s.timing_confidence, s.editability, s.cancellation_status,
-                 _j(s.source_refs), _j(s.fact_refs), _j(s.identity_linkage), s.quality_status,
-                 s.calculation_timestamp, s.status))
+            self.insert_future_supply(self.conn, s)
         return s
 
     def future_supply_for(self, combination_id, scope, *, active_only=True):
@@ -163,18 +175,24 @@ class NewInvStore:
             calculation_timestamp=r["calculation_timestamp"], status=r["status"])
 
     # ---- Committed Supply --------------------------------------------------
-    def add_commitment(self, c: SupplyCommitment) -> SupplyCommitment:
+    def insert_commitment(self, conn, c: SupplyCommitment) -> SupplyCommitment:
+        """Raw insert on the caller's connection (no own transaction). Use inside a governed
+        transaction so a workflow's committed-supply effect commits atomically with its audit."""
         c.created_at = c.created_at or self._now()
+        conn.execute(
+            "INSERT INTO supply_commitment(id,unit_or_order_id,unit_identity_kind,combination_id,store_scope,"
+            "commitment_type,decision_ref,approval_time,expected_supply_timing,arrival_month,lifecycle_status,"
+            "commitment_source,supersedes,superseded_by,cancellation_status,fact_refs,audit_refs,created_at,version)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (c.id, c.unit_or_order_id, c.unit_identity_kind, c.combination_id, c.store_scope, c.commitment_type,
+             c.decision_ref, c.approval_time, c.expected_supply_timing, c.arrival_month, c.lifecycle_status,
+             c.commitment_source, c.supersedes, c.superseded_by, c.cancellation_status, _j(c.fact_refs),
+             _j(c.audit_refs), c.created_at, c.version))
+        return c
+
+    def add_commitment(self, c: SupplyCommitment) -> SupplyCommitment:
         with self.conn:
-            self.conn.execute(
-                "INSERT INTO supply_commitment(id,unit_or_order_id,unit_identity_kind,combination_id,store_scope,"
-                "commitment_type,decision_ref,approval_time,expected_supply_timing,arrival_month,lifecycle_status,"
-                "commitment_source,supersedes,superseded_by,cancellation_status,fact_refs,audit_refs,created_at,version)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (c.id, c.unit_or_order_id, c.unit_identity_kind, c.combination_id, c.store_scope, c.commitment_type,
-                 c.decision_ref, c.approval_time, c.expected_supply_timing, c.arrival_month, c.lifecycle_status,
-                 c.commitment_source, c.supersedes, c.superseded_by, c.cancellation_status, _j(c.fact_refs),
-                 _j(c.audit_refs), c.created_at, c.version))
+            self.insert_commitment(self.conn, c)
         return c
 
     def get_commitment(self, cid):

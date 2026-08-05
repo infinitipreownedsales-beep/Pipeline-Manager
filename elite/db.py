@@ -338,6 +338,126 @@ MIGRATIONS = [
         CREATE TRIGGER issued_planning_output_no_delete BEFORE DELETE ON issued_planning_output
             BEGIN SELECT RAISE(ABORT, 'issued_planning_output history is preserved'); END;
     """),
+    (5, "production_supply_workflows", """
+        -- Production pipeline projection (from accepted Production Orders + Business Facts).
+        CREATE TABLE production_pipeline_projection (
+            id TEXT PRIMARY KEY, production_order_id TEXT, combination_id TEXT, store_scope TEXT NOT NULL,
+            order_status TEXT, production_status TEXT, allocation_status TEXT, vin_status TEXT,
+            build_timing TEXT, shipment_timing TEXT, eta_start TEXT, eta_end TEXT, arrival_month TEXT,
+            source_refs TEXT, fact_refs TEXT, identity_refs TEXT, quality_status TEXT, confidence TEXT,
+            status TEXT NOT NULL DEFAULT 'current', conflict TEXT, recorded_time TEXT NOT NULL, effective_time TEXT
+        );
+        CREATE TRIGGER production_pipeline_no_delete BEFORE DELETE ON production_pipeline_projection
+            BEGIN SELECT RAISE(ABORT, 'production_pipeline history is preserved'); END;
+        CREATE TABLE eta_history (
+            id TEXT PRIMARY KEY, production_order_id TEXT, pipeline_id TEXT, precision TEXT NOT NULL,
+            eta_start TEXT, eta_end TEXT, arrival_month TEXT, confidence TEXT, stale INTEGER NOT NULL DEFAULT 0,
+            conflicting INTEGER NOT NULL DEFAULT 0, supersedes TEXT, source_refs TEXT, recorded_time TEXT NOT NULL
+        );
+        CREATE TRIGGER eta_history_no_delete BEFORE DELETE ON eta_history
+            BEGIN SELECT RAISE(ABORT, 'eta_history is preserved'); END;
+        CREATE TABLE editability_result (
+            id TEXT PRIMARY KEY, production_order_id TEXT, store_scope TEXT, editability_state TEXT NOT NULL,
+            editable_dimensions TEXT, cutoff TEXT, source_refs TEXT, policy_refs TEXT, confidence TEXT,
+            unresolved_conditions TEXT, recorded_time TEXT NOT NULL
+        );
+        CREATE TABLE model_year_transition_result (
+            id TEXT PRIMARY KEY, store_scope TEXT, model TEXT, outgoing_model_year TEXT, incoming_model_year TEXT,
+            overlap TEXT, lineage_status TEXT, transition_window TEXT, arrival_risk TEXT, constrained_incoming INTEGER,
+            evidence TEXT, policy_refs TEXT, confidence TEXT, recorded_time TEXT NOT NULL
+        );
+        CREATE TABLE incoming_risk_result (
+            id TEXT PRIMARY KEY, subject_kind TEXT, subject_ref TEXT, combination_id TEXT, store_scope TEXT,
+            classification TEXT NOT NULL, reasons TEXT, timing TEXT, affected_need_window TEXT, source_facts TEXT,
+            policy_versions TEXT, calculation_version TEXT, confidence TEXT, reproducibility_package TEXT,
+            issued_time TEXT NOT NULL
+        );
+        CREATE TRIGGER incoming_risk_no_delete BEFORE DELETE ON incoming_risk_result
+            BEGIN SELECT RAISE(ABORT, 'incoming_risk_result is preserved'); END;
+        -- Governed supply workflows (common lifecycle) + transitions + evidence.
+        CREATE TABLE supply_workflow (
+            id TEXT PRIMARY KEY, workflow_type TEXT NOT NULL, subject_identity TEXT, subject_kind TEXT,
+            combination_id TEXT, store_scope TEXT NOT NULL, target_month TEXT, quantity INTEGER NOT NULL DEFAULT 1,
+            originating_need_ref TEXT, qualifying_supply_at_propose INTEGER, expected_resulting_supply TEXT,
+            proposal_reason TEXT, evidence TEXT, policy_versions TEXT, calculation_version TEXT, approval_decision TEXT,
+            execution_refs TEXT, lifecycle_status TEXT NOT NULL DEFAULT 'DRAFT', idempotency_identity TEXT,
+            audit_refs TEXT, reproducibility_package TEXT, scenario_id TEXT, created_at TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TRIGGER supply_workflow_no_delete BEFORE DELETE ON supply_workflow
+            BEGIN SELECT RAISE(ABORT, 'supply_workflow history is preserved'); END;
+        CREATE TABLE supply_workflow_transition (
+            id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES supply_workflow(id), from_status TEXT,
+            to_status TEXT NOT NULL, actor TEXT, action TEXT, reconciliation_ref TEXT, audit_ref TEXT,
+            detail TEXT, at TEXT NOT NULL
+        );
+        CREATE TRIGGER supply_workflow_transition_no_delete BEFORE DELETE ON supply_workflow_transition
+            BEGIN SELECT RAISE(ABORT, 'supply_workflow_transition is preserved'); END;
+        CREATE TABLE supply_workflow_evidence (
+            id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, evidence_kind TEXT, ref TEXT, detail TEXT,
+            recorded_at TEXT NOT NULL
+        );
+        -- Domain action detail tables.
+        CREATE TABLE cpo_action (
+            id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, production_order_id TEXT, allocation_ref TEXT,
+            combination_id TEXT, discrete_quantity INTEGER, arrival_month TEXT, commitment_ref TEXT,
+            completion_ref TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE ppo_action (
+            id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, order_or_unit_id TEXT, allocation_evidence TEXT,
+            combination_id TEXT, discrete_quantity INTEGER, arrival_month TEXT, commitment_ref TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE dealer_trade_action (
+            id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, direction TEXT, counterparty TEXT, unit_identity TEXT,
+            combination_id TEXT, arrival_month TEXT, received_vehicle_unit_id TEXT, commitment_ref TEXT,
+            completion_ref TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE dealer_trade_status_history (
+            id TEXT PRIMARY KEY, dealer_trade_id TEXT NOT NULL, status TEXT NOT NULL, actor TEXT, reason TEXT,
+            at TEXT NOT NULL
+        );
+        CREATE TABLE ctp_action (
+            id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, production_order_id TEXT, original_combination_id TEXT,
+            proposed_combination_id TEXT, editability_ref TEXT, cutoff TEXT, originating_need_ref TEXT,
+            originating_excess_ref TEXT, expected_portfolio_effect TEXT, resulting_order_state TEXT,
+            superseded_future_supply TEXT, new_future_supply TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE ctp_change_detail (
+            id TEXT PRIMARY KEY, ctp_id TEXT NOT NULL, dimension TEXT, from_value TEXT, to_value TEXT,
+            accepted INTEGER, at TEXT NOT NULL
+        );
+        -- Deterministic commitment reconciliation results.
+        CREATE TABLE commitment_reconciliation_result (
+            id TEXT PRIMARY KEY, workflow_id TEXT, transition_ref TEXT, outcome TEXT NOT NULL, subject_identity TEXT,
+            combination_id TEXT, supply_ref TEXT, prior_qualifying INTEGER, new_qualifying INTEGER, detail TEXT,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER commitment_reconciliation_no_delete BEFORE DELETE ON commitment_reconciliation_result
+            BEGIN SELECT RAISE(ABORT, 'commitment_reconciliation_result is preserved'); END;
+        -- Sequential recomputation runs + steps (each intermediate state preserved).
+        CREATE TABLE sequential_planning_run (
+            id TEXT PRIMARY KEY, store_scope TEXT NOT NULL, base_portfolio_ref TEXT, status TEXT NOT NULL,
+            calculation_version TEXT, scenario_id TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE sequential_planning_step (
+            id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES sequential_planning_run(id), seq INTEGER,
+            action_ref TEXT, combination_id TEXT, causing_action TEXT, plan_ref TEXT, need_before REAL, need_after REAL,
+            excess_after REAL, suppressed INTEGER NOT NULL DEFAULT 0, outcome TEXT, at TEXT NOT NULL
+        );
+        CREATE TRIGGER sequential_planning_step_no_delete BEFORE DELETE ON sequential_planning_step
+            BEGIN SELECT RAISE(ABORT, 'sequential_planning_step is preserved'); END;
+        -- Workflow-triggered issued planning output references + execution confirmations.
+        CREATE TABLE workflow_issued_output_reference (
+            id TEXT PRIMARY KEY, workflow_id TEXT, causing_action TEXT, output_type TEXT, output_id TEXT,
+            combination_id TEXT, store_scope TEXT, calculation_version TEXT, scenario_id TEXT, issued_time TEXT NOT NULL
+        );
+        CREATE TRIGGER workflow_issued_output_no_delete BEFORE DELETE ON workflow_issued_output_reference
+            BEGIN SELECT RAISE(ABORT, 'workflow_issued_output_reference is preserved'); END;
+        CREATE TABLE execution_confirmation (
+            id TEXT PRIMARY KEY, workflow_id TEXT, confirmation_kind TEXT, subject_identity TEXT, resulting_supply_ref TEXT,
+            outcome TEXT, detail TEXT, confirmed_at TEXT NOT NULL
+        );
+    """),
 ]
 
 

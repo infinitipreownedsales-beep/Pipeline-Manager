@@ -32,11 +32,11 @@ db.migrate()          # applies pending migrations; tracked in migration_record
 print("schema version:", db.version())
 ```
 
-### Run the platform tests (Phase 1 + Phase 2 + Phase 3 + Phase 4)
+### Run the platform tests (Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5)
 ```
 PYTHONPATH=. python3 elite/tests/run_all.py
-# focused Phase 4 New Inventory suite + BUG-CPO-002 regression:
-PYTHONPATH=. python3 -m unittest elite.tests.test_phase4_bug_cpo_002 -v
+# focused BUG-CPO-002 regressions (Phase 4 synthetic + Phase 5 end-to-end CPO workflow):
+PYTHONPATH=. python3 -m unittest elite.tests.test_phase4_bug_cpo_002 elite.tests.test_phase5_bug_cpo_002_e2e -v
 ```
 
 ### Phase 2 — data/identity/facts (example)
@@ -92,6 +92,23 @@ Inspect Phase 4 records:
 sqlite3 "$ELITE_DB_PATH" "SELECT model,canonical_identity FROM sellable_combination;"
 sqlite3 "$ELITE_DB_PATH" "SELECT planning_state,need,excess,qualifying_supply FROM inventory_plan_result;"
 sqlite3 "$ELITE_DB_PATH" "SELECT output_type,calculation_version FROM issued_planning_output;"
+```
+
+### Phase 5 — production / supply workflows (example)
+```python
+from elite.workflow.fixtures import Phase5, SCOPE
+p = Phase5("/path/to/elite.db")               # migrates v1..v5; wires workflow services + principals
+c, d, plan = p.need_combo(exterior_color="BLACK")     # Phase 4 Demand + Need (need > 0)
+w = p.cpo.propose(p.full, SCOPE, production_order_id="po1", combination_id=c.id, arrival_month="2026-10")
+r = p.cpo.approve(p.full, SCOPE, p.wf.get_workflow(w.id))     # governed; one Committed Supply
+print(r["outcome"])                            # COMMITMENT_CREATED
+print(p.p4.issue_plan(c, d, coverage_target=2).need)          # Need decreased by exactly one
+```
+Inspect Phase 5 records:
+```
+sqlite3 "$ELITE_DB_PATH" "SELECT workflow_type,lifecycle_status FROM supply_workflow;"
+sqlite3 "$ELITE_DB_PATH" "SELECT outcome,prior_qualifying,new_qualifying FROM commitment_reconciliation_result;"
+sqlite3 "$ELITE_DB_PATH" "SELECT from_status,to_status,action FROM supply_workflow_transition;"
 ```
 
 ### Inspect the authoritative store
