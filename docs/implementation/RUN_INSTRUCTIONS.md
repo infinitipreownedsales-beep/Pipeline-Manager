@@ -32,9 +32,11 @@ db.migrate()          # applies pending migrations; tracked in migration_record
 print("schema version:", db.version())
 ```
 
-### Run the platform tests (Phase 1 + Phase 2 + Phase 3)
+### Run the platform tests (Phase 1 + Phase 2 + Phase 3 + Phase 4)
 ```
 PYTHONPATH=. python3 elite/tests/run_all.py
+# focused Phase 4 New Inventory suite + BUG-CPO-002 regression:
+PYTHONPATH=. python3 -m unittest elite.tests.test_phase4_bug_cpo_002 -v
 ```
 
 ### Phase 2 — data/identity/facts (example)
@@ -70,6 +72,26 @@ Inspect Phase 3 records:
 sqlite3 "$ELITE_DB_PATH" "SELECT category FROM policy_family;"
 sqlite3 "$ELITE_DB_PATH" "SELECT lifecycle_status,is_scenario FROM policy_version;"
 sqlite3 "$ELITE_DB_PATH" "SELECT target_type,action FROM version_activation_history;"
+```
+
+### Phase 4 — New Inventory planning (example)
+```python
+from elite.newinv.fixtures import Phase4, SCOPE, AT
+from elite.newinv.output import build_slice
+p = Phase4("/path/to/elite.db")                 # migrates v1..v4; wires the domain services
+c = p.combination(model="QX80", exterior_color="BLACK")
+p.seed_retail(c, {"2025-09": 2, "2025-10": 2, "2025-11": 2, "2025-12": 2, "2026-01": 2, "2026-02": 2})
+p.seed_availability(c, [{"month": m, "opening_depth": 3, "arrivals": 1, "retail": 2, "snapshot": "full"}
+                        for m in ["2025-09","2025-10","2025-11","2025-12","2026-01","2026-02"]])
+d = p.issue_demand(c)                            # Demand is supply-blind
+plan = p.issue_plan(c, d, coverage_target=2)    # Need/Excess (monotone in qualifying supply)
+print(build_slice(p.store, plan.id)["call"])    # first operational output slice
+```
+Inspect Phase 4 records:
+```
+sqlite3 "$ELITE_DB_PATH" "SELECT model,canonical_identity FROM sellable_combination;"
+sqlite3 "$ELITE_DB_PATH" "SELECT planning_state,need,excess,qualifying_supply FROM inventory_plan_result;"
+sqlite3 "$ELITE_DB_PATH" "SELECT output_type,calculation_version FROM issued_planning_output;"
 ```
 
 ### Inspect the authoritative store

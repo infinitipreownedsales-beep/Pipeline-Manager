@@ -50,14 +50,22 @@ contract fields. New defects append here with a stable ID.
   implementation must honor the canonical contracts above.
 - **Classification:** **implementation defect / regression risk** (NOT a
   specification-owned model-decision blocker — the spec already resolves it).
-- **Status:** **OPEN** until the future authoritative implementation proves the
-  canonical contracts. Do **not** reopen the product decision. Do **not** redesign
-  the Demand engine in Phase 1.
-- **Regression fixture (future domain phase):** committing the recommended cycle set
-  credits committed units exactly once and does not increase Need for the same
-  unchanged window; continuous replenishment does not impersonate a commitment.
-- **Release / phase:** future domain implementation (Segments 06/07); tracked as a
-  regression risk until proven.
+- **Status:** **OPEN — Phase 4 regression GREEN, kept open pending review.** The New
+  Inventory foundation (Phase 4) proves the canonical contracts under a synthetic CPO-like
+  commitment (Committed Supply only; the real CPO workflow is NOT implemented). The dedicated
+  regression `elite/tests/test_phase4_bug_cpo_002.py` passes: Demand is independent of
+  acquisition path; an approved commitment is credited to Committed Supply exactly once; added
+  qualifying Supply never increases Need under unchanged Demand inputs and window (monotone
+  non-increasing ladder). Kept OPEN as a risk until reviewed AND until the real Phase-5 CPO
+  workflow is shown to preserve these contracts. Do **not** reopen the product decision.
+- **Regression fixture (Phase 4):** `elite/tests/test_phase4_bug_cpo_002.py` — baseline
+  Demand + qualifying Supply + Need; add an approved synthetic CPO-like commitment only as
+  Committed Supply; Demand unchanged; qualifying Supply increases by exactly the committed
+  quantity; Need decreases or is unchanged and never increases; replaying the commitment does
+  not double-count; changing the commitment label / acquisition path yields the same Demand.
+- **Release / phase:** Phase 4 New Inventory foundation (Segments 05/06/07 planning
+  semantics); tracked as a regression risk until the Phase 4 regression suite proves it and
+  is reviewed.
 
 ---
 

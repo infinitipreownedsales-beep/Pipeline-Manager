@@ -23,7 +23,8 @@ specification is authoritative, what is preserved, and what work is permitted.
 - **Branch:** `elite-pipeline/phase-0` (created from `3bf9162`; does not modify the legacy line)
 
 ## Current phase / work unit
-- **Phase:** Phase 3 — Policy, Configuration, Effective Dating, and Calculation Versioning (**complete → HOLD FOR REVIEW**).
+- **Phase:** Phase 4 — New Inventory Foundation (**complete → HOLD FOR REVIEW**).
+- **Phase 3:** **approved and complete.**
 - **Phase 2:** **approved and complete.**
 - **Phase 0:** approved and complete.
 - **Phase 1:** **approved and complete.** New `elite/` platform package (Python
@@ -58,7 +59,30 @@ specification is authoritative, what is preserved, and what work is permitted.
   migration v3 rerun-safe; legacy application paths byte-unchanged. All 59 mandatory acceptance
   items pass. See `PHASE3_COMPLETION.md`, `PHASE3_TRACEABILITY.md`, `PHASE3_POLICY_MODEL.md`,
   `adr/ADR-0004`.
-- **Approved next phase:** Phase 4 — **only after review**.
+- **Phase 4 scope:** authoritative New Inventory planning foundation, in spec order —
+  Sellable Combination; Current / Future / Committed Supply; historical retail;
+  availability reconstruction; Demand baseline (independent of acquisition/supply method);
+  seasonality + trend; evidence hierarchy + lineage; month-by-month forecast; desired
+  ending coverage (policy-resolved); Need; Excess; portfolio reconciliation; confidence +
+  evidence explanation; first operational output slice. Migration v4 (appended). Proves
+  Demand is calculated independently of supply and that qualifying Supply behaves
+  monotonically (added qualifying Supply must not increase Need). Uses the Phase 1-3
+  platform/fact/identity/policy/calculation-version/reproducibility foundations.
+  **No** second Demand calculation inside any supply workflow; **no** Phase-5 production
+  workflows, CPO/PPO/Dealer Trade/CTP/Service Loaner/Executive Demo, Learning, full
+  Governance, or broad UX. Synthetic dealership-representative fixtures only.
+- **Phase 4 result:** new `elite/newinv/` package + migration v4 (appended; v1-v3 unchanged),
+  touching no legacy file. Sellable Combination + lineage; Current/Future/Committed Supply with
+  count-once qualifying-supply dedup; historical retail; availability reconstruction; supply-blind
+  Demand baseline (evidence hierarchy, bounded seasonality/trend, reproducibility+replay);
+  month-by-month forecast with combination→model→portfolio reconciliation; policy-resolved desired
+  ending coverage; deterministic month-aware Need/Excess (≥0, not both positive, monotone in
+  qualifying supply); portfolio aggregation that never recomputes Demand; first operational output
+  slice; 40 fixtures. Platform tests `185/185` (26 P1 + 35 P2 + 59 P3 + 65 P4); legacy `39/39`;
+  migration v4 rerun-safe; legacy application paths byte-unchanged. All 63 acceptance items pass +
+  the dedicated 10-point BUG-CPO-002 regression. See `PHASE4_COMPLETION.md`,
+  `PHASE4_TRACEABILITY.md`, `PHASE4_DOMAIN_MODEL.md`, `PHASE4_REGISTRIES.md`, `adr/ADR-0005..0008`.
+- **Approved next phase:** Phase 5 — **only after review**.
 
 ## Required commands (legacy launch / inspect)
 ```
@@ -97,6 +121,8 @@ PYTHONPATH=. python3 pipeline_manager/tests/test_loaner_intel.py
 - Product owner / General Sales Manager (dealership). Implementation review pending.
 
 ## Status
-**HOLD FOR REVIEW.** Phase 3 complete (policy/versioning foundation; `elite/policy/` + migration
-v3; platform `120/120`, legacy `39/39`; legacy line unchanged). Do not proceed to Phase 4 until
-reviewed and approved.
+**HOLD FOR REVIEW.** Phase 4 complete (New Inventory foundation; `elite/newinv/` + migration v4;
+platform `185/185`, legacy `39/39`; legacy line unchanged at `3bf9162`). Demand-independence and
+monotonic qualifying Supply proven; BUG-CPO-002 regression (10-point) green — kept open as a risk
+until reviewed and until the real Phase-5 CPO workflow preserves the contracts. Do not proceed to
+Phase 5 until reviewed and approved.

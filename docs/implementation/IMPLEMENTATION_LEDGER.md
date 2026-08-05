@@ -127,3 +127,49 @@ Docs: PHASE3_COMPLETION, PHASE3_TRACEABILITY, PHASE3_POLICY_MODEL, adr/ADR-0004;
 updated IMPLEMENTATION_CONTROL, RUN_INSTRUCTIONS, REQUIREMENT_INDEX (note).
 
 Result: **Phase 3 complete → HOLD FOR REVIEW.** Next: Phase 4 only after review.
+
+## Phase 3 review disposition — APPROVED
+
+Phase 3 (policy/configuration/effective-dating/calculation-versioning; `elite/policy/` +
+migration v3) reviewed and **approved**. Recorded here and in IMPLEMENTATION_CONTROL.md.
+Legacy line preserved at `3bf9162`. BUG-CPO-002 carried forward as a Phase 4 implementation /
+regression risk (New Inventory Need must not rise when qualifying Supply is added under
+unchanged Demand inputs and window).
+
+## Phase 4 — New Inventory Foundation  (branch `elite-pipeline/phase-0`)  [ACTIVE]
+
+Control records: Phase 3 recorded approved; Phase 4 set active. Building the authoritative
+New Inventory planning foundation in specification order on the Phase 1-3 platform/fact/
+identity/policy/calculation-version/reproducibility foundations, appending migration v4
+(v1-v3 unchanged), touching no legacy file. Objective: Sellable Combination → Current/Future/
+Committed Supply → historical retail → availability reconstruction → Demand baseline
+(independent of acquisition/supply method) → seasonality/trend → lineage → month-by-month
+forecast → desired ending coverage (policy-resolved) → Need → Excess → portfolio reconciliation
+→ confidence/evidence explanation → first operational output slice. Proves Demand-independence
+and monotonic qualifying Supply, and carries a dedicated BUG-CPO-002 regression. No second
+Demand calculation inside any supply workflow; no Phase-5 workflows / CPO / PPO / Dealer Trade /
+CTP / Service Loaner / Executive Demo / Learning / full Governance / broad UX.
+
+Implemented a NEW `elite/newinv/` package + migration v4 (appended; v1-v3 unchanged), touching
+no legacy file: Sellable Combination (canonical identity from demand-material dims; scope-isolated;
+correction-preserving) + alias + lineage/comparability; Current/Future/Committed Supply projections
+with count-once qualifying-supply dedup; historical retail (accepted facts only, dedup, correction/
+reversal preserving); availability reconstruction (available≠unavailable, partial invents no
+continuity, stockout fabricates no lost sales, gaps reduce confidence); one supply-blind Demand
+contract (evidence hierarchy exact>inherited, bounded seasonality/trend, reproducibility+replay);
+month-by-month forecast with combination→model→portfolio reconciliation; policy-resolved desired
+ending coverage (unresolved when missing); deterministic month-aware Need/Excess (≥0, not both
+positive, monotone in qualifying supply, later arrival can't satisfy earlier month); portfolio
+aggregation that never recomputes Demand; first operational output slice (Call/Why/Proof/…);
+40 dealership-representative fixtures.
+
+Evidence executed: platform harness **185/185** (26 P1 + 35 P2 + 59 P3 + 65 P4); legacy suite
+**39/39**; migration v4 rerun-safe; legacy application paths byte-unchanged vs
+`legacy/inventory-tool` @ `3bf9162`. All 63 mandatory acceptance items pass, plus the dedicated
+10-point BUG-CPO-002 regression + monotonicity ladder (PHASE4_COMPLETION.md).
+
+Docs: PHASE4_COMPLETION, PHASE4_TRACEABILITY, PHASE4_DOMAIN_MODEL, PHASE4_REGISTRIES,
+adr/ADR-0005..0008; updated IMPLEMENTATION_CONTROL, KNOWN_BUG_REGISTRY, RUN_INSTRUCTIONS,
+REQUIREMENT_INDEX (note).
+
+Result: **Phase 4 complete → HOLD FOR REVIEW.** Next: Phase 5 only after review.

@@ -53,6 +53,7 @@ Human-readable view. Machine-readable source of truth: `docs/implementation/requ
 - Phase 1 (platform): `PHASE1_TRACEABILITY.md`.
 - Phase 2 (data/identity/facts): `PHASE2_TRACEABILITY.md`.
 - Phase 3 (policy/versioning): `PHASE3_TRACEABILITY.md`.
+- Phase 4 (new inventory): `PHASE4_TRACEABILITY.md`.
 The canonical DOCX is unchanged, so `requirement_index.json` is unchanged; phase
 traceability maps implemented capabilities to owning segments/families (exact IDs
 bound at review).

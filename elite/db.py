@@ -221,6 +221,123 @@ MIGRATIONS = [
             at TEXT NOT NULL, reason TEXT
         );
     """),
+    (4, "new_inventory", """
+        -- Sellable Combination: a canonical orderable + sellable configuration.
+        CREATE TABLE sellable_combination (
+            id TEXT PRIMARY KEY, store_scope TEXT NOT NULL, franchise TEXT, model TEXT NOT NULL,
+            model_year TEXT, trim TEXT, drivetrain TEXT, exterior_color TEXT, interior_color TEXT,
+            canonical_identity TEXT NOT NULL, source_refs TEXT, quality_status TEXT NOT NULL DEFAULT 'ok',
+            status TEXT NOT NULL DEFAULT 'active', lineage_metadata TEXT, correction_of TEXT,
+            created_at TEXT NOT NULL, corrected_at TEXT, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TRIGGER sellable_combination_no_delete BEFORE DELETE ON sellable_combination
+            BEGIN SELECT RAISE(ABORT, 'sellable_combination history is preserved'); END;
+        CREATE TABLE sellable_combination_alias (
+            id TEXT PRIMARY KEY, combination_id TEXT NOT NULL REFERENCES sellable_combination(id),
+            alias_type TEXT NOT NULL, alias_value TEXT NOT NULL, store_scope TEXT, source_ref TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE combination_lineage (
+            id TEXT PRIMARY KEY, from_combination_id TEXT NOT NULL, to_combination_id TEXT NOT NULL,
+            relationship TEXT NOT NULL, comparability TEXT, approved_rule_ref TEXT, evidence_refs TEXT,
+            status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL
+        );
+        -- Supply projections derived from accepted current-state facts (append-preserving).
+        CREATE TABLE current_supply_projection (
+            id TEXT PRIMARY KEY, vehicle_unit_id TEXT, combination_id TEXT, store_scope TEXT NOT NULL,
+            availability_state TEXT NOT NULL, arrival_date TEXT, available_for_retail_date TEXT, age_days INTEGER,
+            source_state_refs TEXT, fact_refs TEXT, retail_eligible INTEGER NOT NULL DEFAULT 0, exclusion_reason TEXT,
+            quality_status TEXT, confidence TEXT, calculation_timestamp TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'current'
+        );
+        CREATE TABLE future_supply_projection (
+            id TEXT PRIMARY KEY, production_order_id TEXT, combination_id TEXT, store_scope TEXT NOT NULL,
+            production_state TEXT, eta_start TEXT, eta_end TEXT, arrival_month TEXT, timing_confidence TEXT,
+            editability TEXT, cancellation_status TEXT, source_refs TEXT, fact_refs TEXT, identity_linkage TEXT,
+            quality_status TEXT, calculation_timestamp TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'current'
+        );
+        CREATE TABLE supply_commitment (
+            id TEXT PRIMARY KEY, unit_or_order_id TEXT, unit_identity_kind TEXT, combination_id TEXT,
+            store_scope TEXT NOT NULL, commitment_type TEXT NOT NULL, decision_ref TEXT, approval_time TEXT,
+            expected_supply_timing TEXT, arrival_month TEXT, lifecycle_status TEXT NOT NULL DEFAULT 'proposed',
+            commitment_source TEXT, supersedes TEXT, superseded_by TEXT, cancellation_status TEXT,
+            fact_refs TEXT, audit_refs TEXT, created_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+        );
+        -- Historical retail projection (accepted Business Facts only; append-preserving).
+        CREATE TABLE retail_history_projection (
+            id TEXT PRIMARY KEY, retail_event_ref TEXT, vehicle_unit_id TEXT, combination_id TEXT,
+            store_scope TEXT NOT NULL, retail_date TEXT, retail_month TEXT, arrival_refs TEXT, availability_refs TEXT,
+            model_year TEXT, source_refs TEXT, fact_refs TEXT, quality_status TEXT, status TEXT NOT NULL DEFAULT 'current',
+            correction_of TEXT, created_at TEXT NOT NULL
+        );
+        -- Availability reconstruction (month/day-aware exposure + states).
+        CREATE TABLE availability_interval (
+            id TEXT PRIMARY KEY, combination_id TEXT, store_scope TEXT NOT NULL, bucket TEXT, period_start TEXT,
+            period_end TEXT, available_state TEXT NOT NULL, available_unit_days REAL, opening_depth INTEGER,
+            closing_depth INTEGER, arrivals INTEGER, retail_events INTEGER, stockout_periods TEXT, source_refs TEXT,
+            fact_refs TEXT, quality_status TEXT, confidence TEXT, unresolved_gaps TEXT, created_at TEXT NOT NULL
+        );
+        -- Issued Demand baseline (append-preserving; reproducibility-pinned).
+        CREATE TABLE demand_result (
+            id TEXT PRIMARY KEY, combination_id TEXT, store_scope TEXT NOT NULL, horizon_start TEXT, horizon_end TEXT,
+            monthly_expected TEXT, baseline_evidence TEXT, evidence_tier TEXT, direct_evidence INTEGER,
+            availability_adjustment TEXT, seasonality_ref TEXT, trend_ref TEXT, confidence TEXT, uncertainty TEXT,
+            policy_versions TEXT, calculation_version TEXT, source_refs TEXT, fact_refs TEXT, reproducibility_package TEXT,
+            scenario_id TEXT, issued_time TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'issued'
+        );
+        CREATE TRIGGER demand_result_no_delete BEFORE DELETE ON demand_result
+            BEGIN SELECT RAISE(ABORT, 'demand_result issued history is preserved'); END;
+        -- Month-by-month forecast (issued).
+        CREATE TABLE forecast_result (
+            id TEXT PRIMARY KEY, combination_id TEXT, store_scope TEXT NOT NULL, issue_date TEXT NOT NULL,
+            horizon_start TEXT, horizon_end TEXT, total_expected REAL, confidence TEXT, input_state_refs TEXT,
+            policy_versions TEXT, calculation_version TEXT, lineage_refs TEXT, scenario_id TEXT,
+            reproducibility_package TEXT, demand_result_id TEXT, status TEXT NOT NULL DEFAULT 'issued'
+        );
+        CREATE TRIGGER forecast_result_no_delete BEFORE DELETE ON forecast_result
+            BEGIN SELECT RAISE(ABORT, 'forecast_result issued history is preserved'); END;
+        CREATE TABLE forecast_month (
+            id TEXT PRIMARY KEY, forecast_id TEXT NOT NULL REFERENCES forecast_result(id), month TEXT NOT NULL,
+            expected_retail REAL, cumulative_expected REAL, confidence TEXT, seq INTEGER
+        );
+        -- Desired ending coverage resolution (resolved through Phase 3 policy).
+        CREATE TABLE desired_coverage_resolution (
+            id TEXT PRIMARY KEY, combination_id TEXT, store_scope TEXT NOT NULL, policy_version TEXT, scope TEXT,
+            effective_period TEXT, unit_contract TEXT, resolved_value TEXT, resolution_status TEXT NOT NULL,
+            fallback_used INTEGER NOT NULL DEFAULT 0, note TEXT, created_at TEXT NOT NULL
+        );
+        -- Inventory plan (Need/Excess; issued).
+        CREATE TABLE inventory_plan_result (
+            id TEXT PRIMARY KEY, combination_id TEXT, store_scope TEXT NOT NULL, evaluated_start TEXT, evaluated_end TEXT,
+            expected_demand REAL, current_supply INTEGER, future_supply INTEGER, committed_supply INTEGER,
+            qualifying_supply INTEGER, desired_ending_coverage TEXT, need REAL, excess REAL, planning_state TEXT NOT NULL,
+            confidence TEXT, evidence TEXT, policy_versions TEXT, calculation_version TEXT, reproducibility_package TEXT,
+            demand_result_id TEXT, scenario_id TEXT, issued_time TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'issued'
+        );
+        CREATE TRIGGER inventory_plan_result_no_delete BEFORE DELETE ON inventory_plan_result
+            BEGIN SELECT RAISE(ABORT, 'inventory_plan_result issued history is preserved'); END;
+        CREATE TABLE inventory_plan_month (
+            id TEXT PRIMARY KEY, plan_id TEXT NOT NULL REFERENCES inventory_plan_result(id), month TEXT NOT NULL,
+            expected_demand REAL, cumulative_demand REAL, cumulative_supply INTEGER, shortage REAL, excess REAL,
+            confidence TEXT, seq INTEGER
+        );
+        -- Portfolio aggregation (model / model-year / portfolio).
+        CREATE TABLE portfolio_plan_result (
+            id TEXT PRIMARY KEY, store_scope TEXT NOT NULL, evaluated_start TEXT, evaluated_end TEXT, level TEXT NOT NULL,
+            grouping_key TEXT, summary TEXT, plan_refs TEXT, monthly_demand TEXT, supply_by_state TEXT, need REAL,
+            excess REAL, unresolved_quantity REAL, confidence TEXT, timing_risk TEXT, calculation_version TEXT,
+            issued_time TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'issued'
+        );
+        CREATE TRIGGER portfolio_plan_result_no_delete BEFORE DELETE ON portfolio_plan_result
+            BEGIN SELECT RAISE(ABORT, 'portfolio_plan_result issued history is preserved'); END;
+        -- Issued planning output reference index (append-preserving).
+        CREATE TABLE issued_planning_output (
+            id TEXT PRIMARY KEY, output_type TEXT NOT NULL, output_id TEXT NOT NULL, combination_id TEXT,
+            store_scope TEXT, calculation_version TEXT, reproducibility_package TEXT, scenario_id TEXT,
+            issued_time TEXT NOT NULL
+        );
+        CREATE TRIGGER issued_planning_output_no_delete BEFORE DELETE ON issued_planning_output
+            BEGIN SELECT RAISE(ABORT, 'issued_planning_output history is preserved'); END;
+    """),
 ]
 
 
