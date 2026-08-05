@@ -910,6 +910,197 @@ MIGRATIONS = [
         CREATE TRIGGER learning_issued_output_no_delete BEFORE DELETE ON learning_issued_output
             BEGIN SELECT RAISE(ABORT, 'learning_issued_output is preserved'); END;
     """),
+    (9, "governance_operational_control", """
+        -- Decision Workspace item — an operational-control summary that REFERENCES authoritative domain
+        -- output (never copies domain calculations into a second source of truth). Mutable state via a
+        -- version guard; append-preserving; revisions snapshotted separately.
+        CREATE TABLE decision_workspace_item (
+            id TEXT PRIMARY KEY, owning_domain TEXT NOT NULL, subject_entity_type TEXT, subject_entity_id TEXT,
+            store_scope TEXT NOT NULL, org_scope TEXT, recommendation_ref TEXT, prediction_ref TEXT,
+            economic_call_ref TEXT, execution_status_ref TEXT, planning_refs TEXT, scenario_id TEXT,
+            priority TEXT, unresolved TEXT, assigned_reviewer TEXT, required_authority TEXT, workspace_state TEXT NOT NULL
+            DEFAULT 'OPEN', decision_ref TEXT, approval_state TEXT, execution_state TEXT, completion_state TEXT,
+            acknowledgment_state TEXT, expiration TEXT, stale INTEGER NOT NULL DEFAULT 0, evidence_refs TEXT,
+            raw_history_refs TEXT, applicable_facts TEXT, applicable_versions TEXT, correction_of TEXT,
+            superseded_by TEXT, created_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TRIGGER decision_workspace_item_no_delete BEFORE DELETE ON decision_workspace_item
+            BEGIN SELECT RAISE(ABORT, 'decision_workspace_item is preserved'); END;
+        CREATE TABLE decision_workspace_revision (
+            id TEXT PRIMARY KEY, workspace_item_id TEXT NOT NULL, revision_no INTEGER NOT NULL, recommendation_ref TEXT,
+            workspace_state TEXT, snapshot TEXT, reason TEXT, at TEXT NOT NULL
+        );
+        CREATE TRIGGER decision_workspace_revision_no_delete BEFORE DELETE ON decision_workspace_revision
+            BEGIN SELECT RAISE(ABORT, 'decision_workspace_revision is preserved'); END;
+        -- Governed Decision — immutable issued Decision (correction preserves original; supersession links).
+        CREATE TABLE governed_decision (
+            id TEXT PRIMARY KEY, workspace_item_id TEXT, owning_domain TEXT, subject_entity_type TEXT,
+            subject_entity_id TEXT, store_scope TEXT NOT NULL, decision_type TEXT, disposition TEXT NOT NULL,
+            selected_action TEXT, selected_alternative TEXT, decision_maker TEXT, decision_time TEXT,
+            rationale TEXT, confidence_ack TEXT, uncertainty_ack TEXT, operational_constraints TEXT,
+            source_recommendation_ref TEXT, recommendation_revision TEXT, facts TEXT, versions TEXT, scenario_id TEXT,
+            expiration TEXT, idempotency_key TEXT, correlation_id TEXT, override INTEGER NOT NULL DEFAULT 0,
+            override_reason TEXT, correction_of TEXT, supersedes TEXT, created_at TEXT NOT NULL, UNIQUE(idempotency_key)
+        );
+        CREATE TRIGGER governed_decision_no_update BEFORE UPDATE ON governed_decision
+            BEGIN SELECT RAISE(ABORT, 'governed_decision is immutable after issuance'); END;
+        CREATE TRIGGER governed_decision_no_delete BEFORE DELETE ON governed_decision
+            BEGIN SELECT RAISE(ABORT, 'governed_decision is preserved'); END;
+        CREATE TABLE decision_alternative (
+            id TEXT PRIMARY KEY, decision_id TEXT NOT NULL, alternative TEXT, presented INTEGER NOT NULL DEFAULT 1,
+            detail TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER decision_alternative_no_delete BEFORE DELETE ON decision_alternative
+            BEGIN SELECT RAISE(ABORT, 'decision_alternative is preserved'); END;
+        -- Approval — append-preserving; validates current domain state; scope/quantity bounded.
+        CREATE TABLE decision_approval (
+            id TEXT PRIMARY KEY, decision_id TEXT NOT NULL, approving_principal TEXT, approval_time TEXT,
+            scope TEXT, authority TEXT, approved_action TEXT, quantity INTEGER, subject_identity TEXT, conditions TEXT,
+            expiration TEXT, idempotency_key TEXT, status TEXT NOT NULL DEFAULT 'approved', correction_of TEXT,
+            revoked INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, UNIQUE(idempotency_key)
+        );
+        CREATE TRIGGER decision_approval_no_delete BEFORE DELETE ON decision_approval
+            BEGIN SELECT RAISE(ABORT, 'decision_approval is preserved'); END;
+        -- Execution authorization — references the Phase 5-7 domain execution service (never duplicates it).
+        CREATE TABLE execution_authorization (
+            id TEXT PRIMARY KEY, decision_id TEXT NOT NULL, approval_id TEXT, execution_capability TEXT,
+            authorized_executor TEXT, authorized_time TEXT, expiration TEXT, expected_action TEXT,
+            domain_execution_ref TEXT, completion_ref TEXT, reconciliation_outcome TEXT, state TEXT NOT NULL
+            DEFAULT 'authorized', idempotency_key TEXT, created_at TEXT NOT NULL, UNIQUE(idempotency_key)
+        );
+        CREATE TRIGGER execution_authorization_no_delete BEFORE DELETE ON execution_authorization
+            BEGIN SELECT RAISE(ABORT, 'execution_authorization is preserved'); END;
+        CREATE TABLE decision_execution_reconciliation (
+            id TEXT PRIMARY KEY, decision_id TEXT NOT NULL, approval_id TEXT, execution_authorization_id TEXT,
+            outcome TEXT NOT NULL, detail TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER decision_execution_reconciliation_no_delete BEFORE DELETE ON decision_execution_reconciliation
+            BEGIN SELECT RAISE(ABORT, 'decision_execution_reconciliation is preserved'); END;
+        -- Acknowledgment — idempotent, immutable; not approval, not execution.
+        CREATE TABLE decision_acknowledgment (
+            id TEXT PRIMARY KEY, decision_id TEXT, workspace_item_id TEXT, acknowledging_principal TEXT,
+            acknowledgment_type TEXT, acknowledged_at TEXT, comment TEXT, scope TEXT, correlation_id TEXT,
+            idempotency_key TEXT, created_at TEXT NOT NULL, UNIQUE(idempotency_key)
+        );
+        CREATE TRIGGER decision_acknowledgment_no_update BEFORE UPDATE ON decision_acknowledgment
+            BEGIN SELECT RAISE(ABORT, 'decision_acknowledgment is immutable'); END;
+        CREATE TRIGGER decision_acknowledgment_no_delete BEFORE DELETE ON decision_acknowledgment
+            BEGIN SELECT RAISE(ABORT, 'decision_acknowledgment is preserved'); END;
+        CREATE TABLE governance_expiration (
+            id TEXT PRIMARY KEY, target_type TEXT NOT NULL, target_ref TEXT NOT NULL, expires_at TEXT,
+            expired INTEGER NOT NULL DEFAULT 0, policy_versions TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER governance_expiration_no_delete BEFORE DELETE ON governance_expiration
+            BEGIN SELECT RAISE(ABORT, 'governance_expiration is preserved'); END;
+        CREATE TABLE governance_staleness_result (
+            id TEXT PRIMARY KEY, target_type TEXT NOT NULL, target_ref TEXT NOT NULL, stale INTEGER NOT NULL DEFAULT 0,
+            reason TEXT, triggering_fact TEXT, triggering_version TEXT, policy_versions TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER governance_staleness_result_no_delete BEFORE DELETE ON governance_staleness_result
+            BEGIN SELECT RAISE(ABORT, 'governance_staleness_result is preserved'); END;
+        -- Scenario administration — governed over Phase 3/domain scenarios; isolated from official state.
+        CREATE TABLE scenario_administration (
+            id TEXT PRIMARY KEY, scenario_id TEXT NOT NULL, owner TEXT, owning_domain TEXT, store_scope TEXT NOT NULL,
+            description TEXT, assumptions TEXT, overrides TEXT, official_baseline_ref TEXT, status TEXT NOT NULL
+            DEFAULT 'DRAFT', reviewer TEXT, expiration TEXT, comparison_output TEXT, correction_of TEXT,
+            superseded_by TEXT, created_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TRIGGER scenario_administration_no_delete BEFORE DELETE ON scenario_administration
+            BEGIN SELECT RAISE(ABORT, 'scenario_administration is preserved'); END;
+        CREATE TABLE scenario_share (
+            id TEXT PRIMARY KEY, scenario_admin_id TEXT NOT NULL, shared_by TEXT, shared_with TEXT, scope TEXT,
+            note TEXT, shared_at TEXT NOT NULL
+        );
+        CREATE TRIGGER scenario_share_no_delete BEFORE DELETE ON scenario_share
+            BEGIN SELECT RAISE(ABORT, 'scenario_share is preserved'); END;
+        CREATE TABLE scenario_review (
+            id TEXT PRIMARY KEY, scenario_admin_id TEXT NOT NULL, reviewer TEXT, outcome TEXT, comment TEXT,
+            reviewed_at TEXT NOT NULL
+        );
+        CREATE TRIGGER scenario_review_no_delete BEFORE DELETE ON scenario_review
+            BEGIN SELECT RAISE(ABORT, 'scenario_review is preserved'); END;
+        CREATE TABLE scenario_promotion_request (
+            id TEXT PRIMARY KEY, scenario_admin_id TEXT NOT NULL, target_type TEXT NOT NULL, requested_by TEXT,
+            routed_to TEXT, review_ref TEXT, status TEXT NOT NULL DEFAULT 'requested', evidence TEXT, limitations TEXT,
+            rejection_reason TEXT, created_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TRIGGER scenario_promotion_request_no_delete BEFORE DELETE ON scenario_promotion_request
+            BEGIN SELECT RAISE(ABORT, 'scenario_promotion_request is preserved'); END;
+        CREATE TABLE policy_review_request (
+            id TEXT PRIMARY KEY, source_type TEXT, source_ref TEXT, requested_by TEXT, target_policy_family TEXT,
+            rationale TEXT, status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL
+        );
+        CREATE TRIGGER policy_review_request_no_delete BEFORE DELETE ON policy_review_request
+            BEGIN SELECT RAISE(ABORT, 'policy_review_request is preserved'); END;
+        -- Authority administration — over the Phase 1 capability_grant store (no second permission store).
+        CREATE TABLE authority_delegation (
+            id TEXT PRIMARY KEY, delegator TEXT NOT NULL, delegate TEXT NOT NULL, capability TEXT NOT NULL, scope TEXT
+            NOT NULL, grant_ref TEXT, reason TEXT, granted_at TEXT NOT NULL, expiration TEXT, active INTEGER NOT NULL
+            DEFAULT 1, revoked_at TEXT, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TRIGGER authority_delegation_no_delete BEFORE DELETE ON authority_delegation
+            BEGIN SELECT RAISE(ABORT, 'authority_delegation is preserved'); END;
+        CREATE TABLE authority_temporary_grant (
+            id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, capability TEXT NOT NULL, scope TEXT NOT NULL,
+            grant_ref TEXT, grantor TEXT, reason TEXT, effective_start TEXT, expiration TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TRIGGER authority_temporary_grant_no_delete BEFORE DELETE ON authority_temporary_grant
+            BEGIN SELECT RAISE(ABORT, 'authority_temporary_grant is preserved'); END;
+        CREATE TABLE separation_of_duties_rule (
+            id TEXT PRIMARY KEY, rule_type TEXT NOT NULL, owning_domain TEXT, action_a TEXT, action_b TEXT,
+            materiality_threshold TEXT, scope TEXT, policy_versions TEXT, status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TRIGGER separation_of_duties_rule_no_delete BEFORE DELETE ON separation_of_duties_rule
+            BEGIN SELECT RAISE(ABORT, 'separation_of_duties_rule is preserved'); END;
+        CREATE TABLE separation_of_duties_exception (
+            id TEXT PRIMARY KEY, rule_id TEXT, decision_ref TEXT, actor_a TEXT, actor_b TEXT, detail TEXT,
+            override INTEGER NOT NULL DEFAULT 0, override_principal TEXT, override_reason TEXT, audit_ref TEXT,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER separation_of_duties_exception_no_delete BEFORE DELETE ON separation_of_duties_exception
+            BEGIN SELECT RAISE(ABORT, 'separation_of_duties_exception is preserved'); END;
+        CREATE TABLE audit_exception (
+            id TEXT PRIMARY KEY, expected_action TEXT, correlation_id TEXT, subject_ref TEXT, kind TEXT NOT NULL,
+            detail TEXT, status TEXT NOT NULL DEFAULT 'open', recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER audit_exception_no_delete BEFORE DELETE ON audit_exception
+            BEGIN SELECT RAISE(ABORT, 'audit_exception is preserved'); END;
+        -- Operational exception / unresolved queue item — references the authoritative source record.
+        CREATE TABLE operational_exception_item (
+            id TEXT PRIMARY KEY, queue TEXT NOT NULL, owning_domain TEXT, source_type TEXT NOT NULL, source_ref TEXT
+            NOT NULL, store_scope TEXT, subject_entity_id TEXT, priority TEXT, reason TEXT, status TEXT NOT NULL
+            DEFAULT 'open', dismissed_by TEXT, dismissal_reason TEXT, created_at TEXT NOT NULL, version INTEGER NOT NULL
+            DEFAULT 1
+        );
+        CREATE TRIGGER operational_exception_item_no_delete BEFORE DELETE ON operational_exception_item
+            BEGIN SELECT RAISE(ABORT, 'operational_exception_item is preserved'); END;
+        CREATE TABLE operational_control_summary (
+            id TEXT PRIMARY KEY, summary_type TEXT NOT NULL, grouping TEXT, store_scope TEXT, owning_domain TEXT,
+            counts TEXT, items TEXT, issued_at TEXT NOT NULL
+        );
+        CREATE TRIGGER operational_control_summary_no_delete BEFORE DELETE ON operational_control_summary
+            BEGIN SELECT RAISE(ABORT, 'operational_control_summary is preserved'); END;
+        -- Domain readiness — immutable after issuance; evidence-based; does not deploy/activate.
+        CREATE TABLE domain_readiness_assessment (
+            id TEXT PRIMARY KEY, owning_domain TEXT NOT NULL, store_scope TEXT, classification TEXT NOT NULL,
+            required_policy_present INTEGER, calc_versions_active INTEGER, source_contracts_available INTEGER,
+            unresolved_identities INTEGER, stale_imports INTEGER, test_evidence TEXT, authority_coverage INTEGER,
+            sod_coverage INTEGER, audit_health TEXT, unresolved_critical INTEGER, operational_owner TEXT,
+            blockers TEXT, warnings TEXT, evidence TEXT, revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
+        );
+        CREATE TRIGGER domain_readiness_assessment_no_update BEFORE UPDATE ON domain_readiness_assessment
+            BEGIN SELECT RAISE(ABORT, 'domain_readiness_assessment is immutable after issuance'); END;
+        CREATE TRIGGER domain_readiness_assessment_no_delete BEFORE DELETE ON domain_readiness_assessment
+            BEGIN SELECT RAISE(ABORT, 'domain_readiness_assessment is preserved'); END;
+        CREATE TABLE governance_issued_output (
+            id TEXT PRIMARY KEY, output_type TEXT NOT NULL, output_id TEXT NOT NULL, owning_domain TEXT,
+            store_scope TEXT, scenario_id TEXT, issued_time TEXT NOT NULL
+        );
+        CREATE TRIGGER governance_issued_output_no_delete BEFORE DELETE ON governance_issued_output
+            BEGIN SELECT RAISE(ABORT, 'governance_issued_output is preserved'); END;
+    """),
 ]
 
 

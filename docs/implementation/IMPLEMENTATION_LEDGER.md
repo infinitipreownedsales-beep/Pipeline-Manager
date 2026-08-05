@@ -350,3 +350,51 @@ a new version atomically (the wrapped `add_*` methods are unchanged; no Phase 1-
 Result: **Phase 8 complete → HOLD FOR REVIEW.** All Phase 1-7 domains remain separate, complete, and
 unmodified; their issued results are immutable historical learning inputs. Next: Phase 9 only after
 review.
+
+## Phase 8 review disposition — APPROVED
+
+Phase 8 (learning + calibration foundation; `elite/learning/` + migration v8) reviewed and **approved**.
+Recorded here and in IMPLEMENTATION_CONTROL.md. Legacy line preserved at `3bf9162`. Learning remains a
+propose-only layer (no operational change without an approved, activated Calibration); historical
+Predictions/Decisions immutable; learning domain-aware. BUG-CPO-002 remains FIXED_END_TO_END.
+
+## Phase 9 — Governance, Decision Workspace, Scenario Administration, Operational Control  (branch `elite-pipeline/phase-0`)  [COMPLETE — HOLD FOR REVIEW]
+
+Control records: Phase 8 recorded approved; Phase 9 set active. Building the completed governed
+operational-control surface over Phases 1-8 (`elite/govern/`): consolidated Decision Workspace (references,
+never duplicates, authoritative domain output); recommendation review; governed Decision issuance + 9
+dispositions; approval; execution authorization referencing Phase 5-7 domain execution (never duplicating
+it) + Decision-to-execution reconciliation (15 outcomes); acknowledgment; expiration + staleness; broad
+Scenario administration + sharing/review + promotion + policy-review requests; Calibration review
+workspace over Phase 8 records/services; consolidated authority administration over Phase 1 grants +
+delegation + temporary authority + revocation; separation-of-duties rules/exceptions/override;
+consolidated Audit review; exception + unresolved queues; operational-control summaries; domain
+launch-readiness views; and the smallest real governance output slices. Appends migration v9 (v1-v8
+unchanged), touching no legacy file. All Phase 1-8 issued records, Decisions, Predictions, Observations,
+economic/planning/workflow results, and Audit Events are preserved as immutable historical evidence. Uses
+the Phase 1 Governor/authorization/scope/audit and Phase 8 Calibration governance — **no competing
+governance framework, no second activation process; Phase 4-8 domain mathematics are not redefined.**
+Executive Demo / Service Loaner / New Inventory / production workflow / learning-calibration remain
+separate governed domains; no universal operational ranker replaces domain truth. Carries a dedicated
+20-point governed-decision regression and a 14-point authority-administration regression. No full Phase-10
+UX / broad visual design / operational hardening / live deployment / migration / cutover.
+
+Evidence executed: platform harness **619/619** (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 + 79 P6 + 79 P7 +
+91 P8 + 104 P9); legacy **39/39**; migration v9 rerun-safe; legacy application paths byte-unchanged vs
+`legacy/inventory-tool` @ `3bf9162`. All 113 mandatory acceptance items pass, plus the dedicated 20-point
+governed-decision regression and the 14-point authority-administration regression (PHASE9_COMPLETION.md).
+The governed loop is proven end to end: a domain recommendation → a workspace item that REFERENCES it →
+review → governed Decision (idempotent, atomically audited, stale-guarded) → distinct-authority approval
+under an enforced separation-of-duties rule → execution authorization referencing the actual Phase 5-7
+domain execution → completion referencing the actual event → reconciliation COMPLETED → with stale/expiry
+protection, Scenario isolation, authority delegation/temporary/revocation over the Phase 1 grants, and no
+governance action rewriting any issued recommendation, Prediction, Observation, result, or historical
+Decision.
+
+Docs: PHASE9_COMPLETION, PHASE9_TRACEABILITY, PHASE9_DOMAIN_MODEL, PHASE9_REGISTRIES,
+adr/ADR-0028..0034; updated IMPLEMENTATION_CONTROL, RUN_INSTRUCTIONS, REQUIREMENT_INDEX (note),
+requirement_index.json (note), KNOWN_BUG_REGISTRY (note). Phase 9 added `elite/govern/` as a package
+(the Phase 1 Governor remains `elite/governance.py`, unchanged and reused — no competing framework).
+
+Result: **Phase 9 complete → HOLD FOR REVIEW.** Phases 1-8 remain complete, approved, and unmodified;
+their issued records are immutable historical evidence. Next: Phase 10 only after review.

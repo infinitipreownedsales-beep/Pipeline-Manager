@@ -70,7 +70,12 @@ contract fields. New defects append here with a stable ID.
   New Inventory forecast Error/Signal cannot mutate any domain automatically, and no Calibration changes
   Demand behavior without an approved, activated version — Learning only proposes
   (`elite/tests/test_phase8_migration_cross.py` items 84-87; the 20-point learning-governance regression
-  proves no operational change without approved Calibration).
+  proves no operational change without approved Calibration). Verified still green under migration v9 /
+  Phase 9 (Governance): the governed operational surface references authoritative domain output and never
+  redefines Phase 4-8 domain mathematics — no Decision, approval, execution, promotion, or override
+  rewrites an issued recommendation, Prediction, planning result, or Demand
+  (`elite/tests/test_phase9_migration_cross.py` items 106-110; the governed-decision regression proves the
+  recommendation stays historical through the whole Decision→execution loop).
 - **Regression fixture (Phase 4):** `elite/tests/test_phase4_bug_cpo_002.py` — baseline
   Demand + qualifying Supply + Need; add an approved synthetic CPO-like commitment only as
   Committed Supply; Demand unchanged; qualifying Supply increases by exactly the committed

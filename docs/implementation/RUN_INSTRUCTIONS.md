@@ -32,7 +32,7 @@ db.migrate()          # applies pending migrations; tracked in migration_record
 print("schema version:", db.version())
 ```
 
-### Run the platform tests (Phase 1 through Phase 8)
+### Run the platform tests (Phase 1 through Phase 9)
 ```
 PYTHONPATH=. python3 elite/tests/run_all.py
 # focused BUG-CPO-002 regressions (Phase 4 synthetic + Phase 5 end-to-end CPO workflow):
@@ -43,6 +43,9 @@ PYTHONPATH=. python3 -m unittest elite.tests.test_phase6_monitoring.TestZeroMile
 PYTHONPATH=. python3 -m unittest elite.tests.test_phase7_preference_bestoverall.TestBestOverallRegression -v
 # focused learning-governance regression (Learning proposes; no change without approved Calibration):
 PYTHONPATH=. python3 -m unittest elite.tests.test_phase8_learning_governance_regression -v
+# focused governed-decision + authority-administration regressions:
+PYTHONPATH=. python3 -m unittest elite.tests.test_phase9_governed_decision_regression \
+    elite.tests.test_phase9_authority_admin_regression -v
 ```
 
 ### Phase 2 — data/identity/facts (example)
@@ -185,6 +188,29 @@ sqlite3 "$ELITE_DB_PATH" "SELECT pairing_status,comparison_spec_version FROM pre
 sqlite3 "$ELITE_DB_PATH" "SELECT signed_error,materiality,resolution_status FROM prediction_error;"
 sqlite3 "$ELITE_DB_PATH" "SELECT review_state,target_type,activation_ref FROM calibration_proposal;"
 sqlite3 "$ELITE_DB_PATH" "SELECT activated_version_kind,scheduled FROM calibration_activation;"
+```
+
+### Phase 9 — governance + operational control (example)
+```python
+from elite.govern.fixtures import Phase9
+from elite.govern import output
+p = Phase9("/path/to/elite.db")               # migrates v1..v9; wires governance services + principals
+it = p.item(domain="new_inventory", rec="rec_1")         # a workspace item REFERENCING a domain rec
+r = p.decisions.issue(p.decider, "store:HG", it, disposition="ACCEPT", selected_action="order")
+a = p.approvals.approve(p.approver, "store:HG", r["decision"])["approval"]   # distinct authority
+e = p.execution.authorize(p.executor, "store:HG", r["decision"], a, execution_capability="ni.execute",
+                          expected_action="order", domain_execute_fn=lambda conn: "domain_exec_ref")
+p.execution.complete(p.executor, "store:HG", e["execution"], domain_completion_ref="done")
+print(p.execution.reconcile(r["decision"]))              # COMPLETED
+print(output.decision_inbox(p.store)[0]["call"])         # workspace summary state
+```
+Inspect Phase 9 records:
+```
+sqlite3 "$ELITE_DB_PATH" "SELECT workspace_state,recommendation_ref,decision_ref FROM decision_workspace_item;"
+sqlite3 "$ELITE_DB_PATH" "SELECT disposition,override,scenario_id FROM governed_decision;"
+sqlite3 "$ELITE_DB_PATH" "SELECT outcome FROM decision_execution_reconciliation;"
+sqlite3 "$ELITE_DB_PATH" "SELECT classification,blockers FROM domain_readiness_assessment;"
+sqlite3 "$ELITE_DB_PATH" "SELECT delegator,delegate,capability,active FROM authority_delegation;"
 ```
 
 ### Inspect the authoritative store

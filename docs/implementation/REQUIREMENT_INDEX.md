@@ -58,6 +58,7 @@ Human-readable view. Machine-readable source of truth: `docs/implementation/requ
 - Phase 6 (service loaner domain): `PHASE6_TRACEABILITY.md`.
 - Phase 7 (executive demo domain): `PHASE7_TRACEABILITY.md`.
 - Phase 8 (prediction/observation/error/attribution/learning/calibration): `PHASE8_TRACEABILITY.md`.
+- Phase 9 (governance/decision-workspace/scenario-admin/operational-control): `PHASE9_TRACEABILITY.md`.
 The canonical DOCX is unchanged, so `requirement_index.json` is unchanged; phase
 traceability maps implemented capabilities to owning segments/families (exact IDs
 bound at review).

@@ -23,8 +23,9 @@ specification is authoritative, what is preserved, and what work is permitted.
 - **Branch:** `elite-pipeline/phase-0` (created from `3bf9162`; does not modify the legacy line)
 
 ## Current phase / work unit
-- **Phase:** Phase 8 — Prediction, Observation, Error, Attribution, Learning, and Calibration
+- **Phase:** Phase 9 — Governance, Decision Workspace, Scenario Administration, and Operational Control
   (**complete; HOLD FOR REVIEW**).
+- **Phase 8:** **approved and complete.**
 - **Phase 7:** **approved and complete.**
 - **Phase 6:** **approved and complete.**
 - **Phase 5:** **approved and complete.**
@@ -207,7 +208,57 @@ specification is authoritative, what is preserved, and what work is permitted.
   + 79 P7 + 91 P8); legacy `39/39`; migration v8 rerun-safe; legacy application paths byte-unchanged.
   All 90 acceptance items pass + the 20-point learning-governance regression. See `PHASE8_COMPLETION.md`,
   `PHASE8_TRACEABILITY.md`, `PHASE8_DOMAIN_MODEL.md`, `PHASE8_REGISTRIES.md`, `adr/ADR-0022..0027`.
-- **Approved next phase:** Phase 9 — **only after review**.
+- **Phase 9 scope:** the completed governance + operational-control layer over Phases 1-8 — consolidated
+  Decision Workspace foundation (references, never duplicates, authoritative domain output); recommendation
+  review (Call/Why/Proof + evidence + Raw History); Economic-Call/Execution-Status review; governed
+  Decision issuance + 9 dispositions; approval; execution authorization (references Phase 5-7 domain
+  execution, never duplicates it); Decision-to-execution reconciliation (15 outcomes); acknowledgment;
+  expiration + staleness (policy-resolved); broad Scenario administration (12 states) + sharing/review +
+  promotion request + policy-review request; Calibration review workspace (uses Phase 8 governance, not a
+  second activation path); consolidated authority administration over Phase 1 grants + delegation +
+  temporary authority + revocation; separation-of-duties rules/exceptions/override; consolidated Audit
+  review; exception + unresolved queues; operational-control summaries; domain launch-readiness views; and
+  the smallest real governance workspace output slices. Migration v9 (appended). Binding governance
+  principles: Recommendation ≠ Decision ≠ approval ≠ execution ≠ completion; Scenario ≠ official state;
+  shared Scenario ≠ approval; Calibration Proposal ≠ activation; policy-review request ≠ policy change;
+  authorization + scope enforced below the UI; governed state change + Audit Event atomic; audit failure
+  blocks unsafe success; stale Decisions/approvals rejected; idempotent retries never duplicate; correction/
+  supersession preserve original history; no governance action silently rewrites an issued recommendation,
+  Prediction, Observation, economic/planning result, or historical Decision; unknown rationale stays
+  unknown; absence of approval ≠ rejection; absence of execution ≠ failure unless the contract says so;
+  propose/approve/execute/complete/correct/activate/roll-back authorities stay distinguishable; Executive
+  Demo, Service Loaner, New Inventory, production workflow, and learning/calibration remain **separate**
+  governed domains; **no universal operational ranker or global score may replace domain truth.** Reuses
+  the Phase 1 Governor/authorization/scope/audit and Phase 8 Calibration governance — **no competing
+  governance framework, no second activation process, no redefinition of Phase 4-8 domain mathematics.**
+  **No** full Phase-10 UX, broad visual design, operational hardening, live-source deployment, migration,
+  or cutover.
+- **Phase 9 result:** new `elite/govern/` package + migration v9 (appended; v1-v8 unchanged), touching no
+  legacy file. Consolidated Decision Workspace referencing (never copying) authoritative domain output (20
+  states); recommendation review (Call/Why/Proof + facts/versions/confidence/uncertainty/Raw History; no
+  invented explanation; revisions preserve prior); governed Decision issuance + 9 dispositions (idempotent;
+  atomic audit; audit-failure rollback; stale-guard + explicit OVERRIDE; Scenario-only; correction/
+  supersession/cancellation preserve history); approval (distinct authority; stale/expired/revoked/
+  over-quantity rejected; idempotent; ≠ execution); execution authorization referencing Phase 5-7 domain
+  execution (never duplicated; requires approval; completion references actual event; failed ≠ completed);
+  Decision-to-execution reconciliation (15 outcomes); acknowledgment (idempotent; ≠ approval/execution);
+  expiration + staleness (policy-resolvable; stale never deletes; expiry ≠ rejection); broad Scenario
+  administration (12 states; isolated; sharing ≠ approval) + promotion routing (policy → policy-review;
+  Calibration → Phase 8 governance; operational → new official Decision) + policy-review requests;
+  Calibration review workspace (uses Phase 8; approval ≠ activation; policy → review recommendation;
+  rollback governed); authority administration over Phase 1 grants + delegation (≤ delegator capability +
+  scope; grant chain) + temporary (auto-expire) + revocation; separation-of-duties rules/exceptions +
+  authorized override; consolidated Audit review (immutable; scoped; correlated traces; missing-event
+  exceptions); 17 exception/unresolved queues (reference source; closing ≠ resolving; dismissal needs
+  authority + reason); operational-control summaries; domain launch-readiness (evidence-based; missing
+  policy/authority/critical-identity blocks; synthetic-only insufficient; does not deploy; immutable); 17
+  output slices; 80 fixtures. Reuses the Phase 1 Governor + Phase 8 Calibration governance — no competing
+  framework, no second activation process, no redefinition of Phase 4-8 domain mathematics. Platform tests
+  `619/619` (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 + 79 P6 + 79 P7 + 91 P8 + 104 P9); legacy `39/39`;
+  migration v9 rerun-safe; legacy application paths byte-unchanged. All 113 acceptance items pass + the
+  20-point governed-decision and 14-point authority-administration regressions. See `PHASE9_COMPLETION.md`,
+  `PHASE9_TRACEABILITY.md`, `PHASE9_DOMAIN_MODEL.md`, `PHASE9_REGISTRIES.md`, `adr/ADR-0028..0034`.
+- **Approved next phase:** Phase 10 — **only after review**.
 
 ## Required commands (legacy launch / inspect)
 ```
@@ -246,12 +297,14 @@ PYTHONPATH=. python3 pipeline_manager/tests/test_loaner_intel.py
 - Product owner / General Sales Manager (dealership). Implementation review pending.
 
 ## Status
-**Phase 8 complete — HOLD FOR REVIEW.** Prediction / Observation / Error / Attribution / Learning /
-Calibration on `elite-pipeline/phase-0` (Phase 7 approved). New `elite/learning/` package + migration
-v8; platform tests `515/515`; legacy `39/39`; all 90 acceptance items + the 20-point learning-governance
-regression pass; legacy application paths byte-unchanged. Learning may **propose** but never activates
-change — no approved Calibration means no operational change; historical Predictions/Decisions remain
-immutable; learning stays domain-aware (no universal scorer). All Phase 1-7 domains remain complete,
-approved, and unmodified; their issued results are immutable historical learning inputs. Legacy line
-preserved at `3bf9162`. **BUG-CPO-002 = FIXED_END_TO_END**, retained permanently in regression coverage.
-Phase 9 not started.
+**Phase 9 complete — HOLD FOR REVIEW.** Governance / Decision Workspace / Scenario Administration /
+Operational Control on `elite-pipeline/phase-0` (Phase 8 approved). New `elite/govern/` package + migration
+v9; platform tests `619/619`; legacy `39/39`; all 113 acceptance items + the 20-point governed-decision and
+14-point authority-administration regressions pass; legacy application paths byte-unchanged. Phase 9
+references authoritative domain output and reuses the Phase 1 Governor/authz/audit + Phase 8 Calibration
+governance — no competing framework, no second activation path, no redefinition of Phase 4-8 domain
+mathematics. Recommendation ≠ Decision ≠ approval ≠ execution ≠ completion; Scenario ≠ official state; no
+universal operational ranker. All Phase 1-8 issued records, Decisions, Predictions, Observations,
+economic/planning/workflow results, and Audit Events are preserved as immutable historical evidence.
+Legacy line preserved at `3bf9162`. **BUG-CPO-002 = FIXED_END_TO_END**, retained permanently in regression
+coverage. Phase 10 not started.
