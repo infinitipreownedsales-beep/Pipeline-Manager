@@ -32,7 +32,7 @@ db.migrate()          # applies pending migrations; tracked in migration_record
 print("schema version:", db.version())
 ```
 
-### Run the platform tests (Phase 1 through Phase 7)
+### Run the platform tests (Phase 1 through Phase 8)
 ```
 PYTHONPATH=. python3 elite/tests/run_all.py
 # focused BUG-CPO-002 regressions (Phase 4 synthetic + Phase 5 end-to-end CPO workflow):
@@ -41,6 +41,8 @@ PYTHONPATH=. python3 -m unittest elite.tests.test_phase4_bug_cpo_002 elite.tests
 PYTHONPATH=. python3 -m unittest elite.tests.test_phase6_monitoring.TestZeroMileRegression -v
 # focused Executive Demo Best Overall regression:
 PYTHONPATH=. python3 -m unittest elite.tests.test_phase7_preference_bestoverall.TestBestOverallRegression -v
+# focused learning-governance regression (Learning proposes; no change without approved Calibration):
+PYTHONPATH=. python3 -m unittest elite.tests.test_phase8_learning_governance_regression -v
 ```
 
 ### Phase 2 — data/identity/facts (example)
@@ -161,6 +163,28 @@ sqlite3 "$ELITE_DB_PATH" "SELECT membership_state,active_fleet_supply_ref FROM e
 sqlite3 "$ELITE_DB_PATH" "SELECT outcome,supply_ref FROM executive_demo_reconciliation_result;"
 sqlite3 "$ELITE_DB_PATH" "SELECT need,selected,best_overall FROM executive_demo_portfolio_plan;"
 sqlite3 "$ELITE_DB_PATH" "SELECT confirming_principal,confirmed_at FROM executive_demo_used_cars_receipt;"
+```
+
+### Phase 8 — learning + calibration (example)
+```python
+from elite.learning.fixtures import Phase8
+from elite.learning import output
+p = Phase8("/path/to/elite.db")               # migrates v1..v8; wires learning services + principals
+pred, obs, pair, err = p.chain(predicted=10, actual=4)   # Prediction->Observation->Pairing->Error
+print(pair.pairing_status, err.signed_error, err.materiality)   # PAIRED -6.0 material/immaterial
+# Learning proposes; nothing changes until an authorized activation:
+cal = p.calibration.propose(p.proposer, "store:HG", target_type="calculation_version",
+                            target_family=p.calc_target_family, proposed_change={"semver": "2.0.0"},
+                            affected_domains=["new_inventory_forecasting"])
+# ... start_review -> require_validation -> mark_validated -> approve -> activate (each governed, audited)
+```
+Inspect Phase 8 records:
+```
+sqlite3 "$ELITE_DB_PATH" "SELECT prediction_type,resolution_status,calculation_version FROM prediction;"
+sqlite3 "$ELITE_DB_PATH" "SELECT pairing_status,comparison_spec_version FROM prediction_observation_pairing;"
+sqlite3 "$ELITE_DB_PATH" "SELECT signed_error,materiality,resolution_status FROM prediction_error;"
+sqlite3 "$ELITE_DB_PATH" "SELECT review_state,target_type,activation_ref FROM calibration_proposal;"
+sqlite3 "$ELITE_DB_PATH" "SELECT activated_version_kind,scheduled FROM calibration_activation;"
 ```
 
 ### Inspect the authoritative store

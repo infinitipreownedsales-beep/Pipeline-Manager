@@ -143,18 +143,24 @@ class PolicyStore:
                                  required_policy_families=json.loads(r["required_policy_families"] or "[]"),
                                  status=r["status"], created_at=r["created_at"])
 
-    def add_calc_version(self, v: CalculationVersion) -> CalculationVersion:
+    def insert_calc_version(self, conn, v: CalculationVersion) -> CalculationVersion:
+        """Raw insert on a caller-supplied connection (no own transaction) — use inside a governed
+        transaction (e.g. a Phase 8 Calibration activation that creates a new Calculation Version)."""
         v.created_at = v.created_at or to_utc_iso(self.clock.now())
+        conn.execute("INSERT INTO calculation_version(id,family_id,semver,impl_revision,input_contract_version,"
+                     "output_contract_version,required_policy_families,effective_start,effective_end,"
+                     "lifecycle_status,approval_metadata,supersedes,superseded_by,rollback_of,change_summary,"
+                     "reproducibility_metadata,created_at,version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     (v.id, v.family_id, v.semver, v.impl_revision, v.input_contract_version,
+                      v.output_contract_version, _j(v.required_policy_families), v.effective_start,
+                      v.effective_end, v.lifecycle_status, _j(v.approval_metadata), v.supersedes,
+                      v.superseded_by, v.rollback_of, v.change_summary, _j(v.reproducibility_metadata),
+                      v.created_at, v.version))
+        return v
+
+    def add_calc_version(self, v: CalculationVersion) -> CalculationVersion:
         with self.conn:
-            self.conn.execute("INSERT INTO calculation_version(id,family_id,semver,impl_revision,input_contract_version,"
-                              "output_contract_version,required_policy_families,effective_start,effective_end,"
-                              "lifecycle_status,approval_metadata,supersedes,superseded_by,rollback_of,change_summary,"
-                              "reproducibility_metadata,created_at,version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                              (v.id, v.family_id, v.semver, v.impl_revision, v.input_contract_version,
-                               v.output_contract_version, _j(v.required_policy_families), v.effective_start,
-                               v.effective_end, v.lifecycle_status, _j(v.approval_metadata), v.supersedes,
-                               v.superseded_by, v.rollback_of, v.change_summary, _j(v.reproducibility_metadata),
-                               v.created_at, v.version))
+            self.insert_calc_version(self.conn, v)
         return v
 
     def get_calc_version(self, vid):
@@ -182,15 +188,20 @@ class PolicyStore:
         return self.get_calc_version(vid)
 
     # ---- model / identity-rule / comparison-spec / reproducibility ----
-    def add_model_version(self, m: ModelVersion) -> ModelVersion:
+    def insert_model_version(self, conn, m: ModelVersion) -> ModelVersion:
+        """Raw insert on a caller-supplied connection — use inside a governed transaction."""
         m.created_at = m.created_at or to_utc_iso(self.clock.now())
+        conn.execute("INSERT INTO model_version(id,model_family,version,scope,purpose,status,activation,"
+                     "supersedes,evidence_refs,calibration_proposal,validation_status,rollback_ref,created_at)"
+                     " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     (m.id, m.model_family, m.version, _j(m.scope), m.purpose, m.status, m.activation,
+                      m.supersedes, _j(m.evidence_refs), m.calibration_proposal, m.validation_status,
+                      m.rollback_ref, m.created_at))
+        return m
+
+    def add_model_version(self, m: ModelVersion) -> ModelVersion:
         with self.conn:
-            self.conn.execute("INSERT INTO model_version(id,model_family,version,scope,purpose,status,activation,"
-                              "supersedes,evidence_refs,calibration_proposal,validation_status,rollback_ref,created_at)"
-                              " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                              (m.id, m.model_family, m.version, _j(m.scope), m.purpose, m.status, m.activation,
-                               m.supersedes, _j(m.evidence_refs), m.calibration_proposal, m.validation_status,
-                               m.rollback_ref, m.created_at))
+            self.insert_model_version(self.conn, m)
         return m
 
     def get_model_version(self, mid):

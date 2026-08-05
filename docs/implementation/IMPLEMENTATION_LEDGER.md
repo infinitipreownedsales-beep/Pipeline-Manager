@@ -306,3 +306,47 @@ and total ≥ 6) so appending v7 keeps them green — no Service Loaner behavior
 
 Result: **Phase 7 complete → HOLD FOR REVIEW.** Executive Demo and Service Loaner remain separate
 bounded domains (no shared fleet engine). Next: Phase 8 only after review.
+
+## Phase 7 review disposition — APPROVED
+
+Phase 7 (Executive Demo domain; `elite/execdemo/` + migration v7) reviewed and **approved**. Recorded
+here and in IMPLEMENTATION_CONTROL.md. Legacy line preserved at `3bf9162`. Executive Demo and Service
+Loaner remain completed, separate bounded domains (no shared fleet engine) and are not modified by
+later phases. BUG-CPO-002 remains FIXED_END_TO_END (permanent regression coverage).
+
+## Phase 8 — Prediction, Observation, Error, Attribution, Learning, Calibration  (branch `elite-pipeline/phase-0`)  [COMPLETE — HOLD FOR REVIEW]
+
+Control records: Phase 7 recorded approved; Phase 8 set active. Building the institutional-memory and
+learning foundation (`elite/learning/`) that preserves and connects Prediction; Decision learning
+context; Observation; an executable versioned Comparison Specification extending the Phase 3 registry;
+Prediction-to-Observation Pairing; Error; Attribution; Learning Signal; Calibration Proposal +
+review/approval/activation/rollback; versioned activation references; historical reproducibility;
+confidence + uncertainty; cross-domain learning without domain collapse; and operational output slices.
+Appends migration v8 (v1-v7 unchanged), touching no legacy file. All Phase 1-7 issued Predictions,
+Decisions, economic/planning/workflow/Service-Loaner/Executive-Demo results are preserved as immutable
+historical inputs. Comparison rules are versioned (Phase 3 foundation, not ad hoc). **Learning may
+propose change but must NEVER activate it — no approved Calibration means no operational change;**
+Learning/Calibration never automatically mutate active policy, calculations, thresholds, valuation,
+permissions, or business behavior. Learning stays domain-aware (New Inventory / CPO / Service Loaner /
+Executive Demo / Dealer Trade / CTP not collapsed into one universal scorer). Carries a dedicated
+20-point learning-governance regression. No completed Phase-9 Governance / full Decision workspace /
+broad Scenario administration / Phase-10 UX / operational hardening / migration-cutover.
+
+Evidence executed: platform harness **515/515** (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 + 79 P6 +
+79 P7 + 91 P8); legacy **39/39**; migration v8 rerun-safe; legacy application paths byte-unchanged vs
+`legacy/inventory-tool` @ `3bf9162`. All 90 mandatory acceptance items pass, plus the dedicated 20-point
+learning-governance regression (PHASE8_COMPLETION.md). The end-to-end loop is proven: Prediction ->
+Observation -> versioned Comparison Specification -> Pairing -> Error -> evidence-based Attribution ->
+domain-aware Learning Signal -> Calibration Proposal -> validation -> approval -> authorized activation
+of a new version -> optional rollback — with Learning able only to PROPOSE, historical Predictions never
+rewritten, and no operational change without an approved, activated Calibration.
+
+Docs: PHASE8_COMPLETION, PHASE8_TRACEABILITY, PHASE8_DOMAIN_MODEL, PHASE8_REGISTRIES,
+adr/ADR-0022..0027; updated IMPLEMENTATION_CONTROL, RUN_INSTRUCTIONS, REQUIREMENT_INDEX (note),
+requirement_index.json (note), KNOWN_BUG_REGISTRY (note). Added raw `insert_calc_version` /
+`insert_model_version` helpers to the Phase 3 policy store so a governed Calibration activation creates
+a new version atomically (the wrapped `add_*` methods are unchanged; no Phase 1-7 behavior changed).
+
+Result: **Phase 8 complete → HOLD FOR REVIEW.** All Phase 1-7 domains remain separate, complete, and
+unmodified; their issued results are immutable historical learning inputs. Next: Phase 9 only after
+review.

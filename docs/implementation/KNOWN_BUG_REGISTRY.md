@@ -66,7 +66,11 @@ contract fields. New defects append here with a stable ID.
   v7 / Phase 7 (Executive Demo): designating a unit as a demo removes it from New Retail Current Supply
   and never recomputes Demand, and its versioned New Retail opportunity cost consumes the Phase 4 plan
   rather than recalculating Demand (`elite/tests/test_phase7_migration_cross.py` items 84-86; regression
-  item 13 asserts Demand unchanged).
+  item 13 asserts Demand unchanged). Verified still green under migration v8 / Phase 8 (Learning): a
+  New Inventory forecast Error/Signal cannot mutate any domain automatically, and no Calibration changes
+  Demand behavior without an approved, activated version — Learning only proposes
+  (`elite/tests/test_phase8_migration_cross.py` items 84-87; the 20-point learning-governance regression
+  proves no operational change without approved Calibration).
 - **Regression fixture (Phase 4):** `elite/tests/test_phase4_bug_cpo_002.py` — baseline
   Demand + qualifying Supply + Need; add an approved synthetic CPO-like commitment only as
   Committed Supply; Demand unchanged; qualifying Supply increases by exactly the committed

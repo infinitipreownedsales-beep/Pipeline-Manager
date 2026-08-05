@@ -23,7 +23,9 @@ specification is authoritative, what is preserved, and what work is permitted.
 - **Branch:** `elite-pipeline/phase-0` (created from `3bf9162`; does not modify the legacy line)
 
 ## Current phase / work unit
-- **Phase:** Phase 7 — Executive Demo Domain (**complete; HOLD FOR REVIEW**).
+- **Phase:** Phase 8 — Prediction, Observation, Error, Attribution, Learning, and Calibration
+  (**complete; HOLD FOR REVIEW**).
+- **Phase 7:** **approved and complete.**
 - **Phase 6:** **approved and complete.**
 - **Phase 5:** **approved and complete.**
 - **Phase 4:** **approved and complete.**
@@ -163,7 +165,49 @@ specification is authoritative, what is preserved, and what work is permitted.
   Overall regression. Executive Demo and Service Loaner remain **separate** bounded domains (no shared
   fleet engine). See `PHASE7_COMPLETION.md`, `PHASE7_TRACEABILITY.md`, `PHASE7_DOMAIN_MODEL.md`,
   `PHASE7_REGISTRIES.md`, `adr/ADR-0018..0021`.
-- **Approved next phase:** Phase 8 — **only after review**.
+- **Phase 8 scope:** the institutional-memory and learning foundation that preserves and connects
+  Prediction; Decision learning context; Observation; executable versioned Comparison Specification
+  (extending the Phase 3 registry, not ad hoc matching); Prediction-to-Observation Pairing; Error;
+  Attribution; Learning Signal; Calibration Proposal + review/approval/activation/rollback; versioned
+  activation references; historical reproducibility; confidence + uncertainty; cross-domain learning
+  without domain collapse; and operational learning/calibration output slices. Migration v8 (appended).
+  Binding constitutional separations: Prediction ≠ Decision ≠ execution ≠ Observation; Error ≠
+  Attribution ≠ Learning Signal ≠ Calibration Proposal ≠ approved Calibration; **Learning may propose
+  change but never activates it — no approved Calibration means no operational change**. Historical
+  Predictions/Decisions immutable after issuance (correction metadata only); prior issued Predictions
+  never rewritten by a later model/calculation. Comparison rules versioned; Pairing only under an
+  applicable Comparison Specification preserving subject identity/timing/units/scope/semantic
+  compatibility. Attribution distinguishes evidence from hypothesis; unknown remains unknown (missing
+  customer intent / Dealer Trade attempts / rejected trades / motivations / unrecorded operational
+  facts are never invented). Learning stays domain-aware — New Inventory, CPO, Service Loaner,
+  Executive Demo, Dealer Trade, CTP are NOT collapsed into one universal scoring system. Reuses the
+  Phase 1-7 platform/policy/calculation-version/model-version/identity-rule/comparison-spec/
+  reproducibility/governance/audit foundations and all Phase 1-7 issued results as immutable historical
+  inputs. **No** completed Phase-9 Governance, full Decision workspace, broad Scenario administration,
+  Phase-10 UX, operational hardening, or migration/cutover; Learning/Calibration must never
+  automatically mutate active policy, calculations, thresholds, valuation, permissions, or business
+  behavior.
+- **Phase 8 result:** new `elite/learning/` package + migration v8 (appended; v1-v7 unchanged), touching
+  no legacy file. Immutable issued Predictions (domain-aware; all versions pinned; correction preserves
+  original; reissue creates new; no-prediction permitted; Scenario-distinct); Decision learning context
+  (rationale absence stays unknown); immutable Observations (missing≠zero; correction/reversal preserve
+  prior-as-known; conflicting→unresolved; scenario output never an Observation); executable versioned
+  Comparison Specification (extends Phase 3 registry); deterministic Pairing (13 outcomes; idempotent;
+  identity/scope/unit/window enforced; never mutates P/O); versioned Error from a valid Pairing (spec
+  semantics; safe percentage; materiality via policy; no causation); evidence-based Attribution
+  (evidence vs hypothesis; multi-factor; unknown stays unknown; human review preserves the automated
+  proposal); domain-aware Learning Signal (min evidence + recurrence; no operational effect); governed
+  Calibration (propose/validate/approve/activate/schedule/rollback; separated authorities; validation
+  before material approval; approval≠activation; activation creates/references a new approved version or
+  a policy-REVIEW recommendation; never rewrites prior Predictions; rollback restores prospectively);
+  deterministic backtesting (preserved inputs; hypothetical; no leakage; cohort improve/degrade;
+  aggregate cannot hide material degradation); cross-domain boundaries (no universal scorer); output
+  slices; 60 fixtures. **Learning may propose change but never activates it — no approved Calibration
+  means no operational change.** Platform tests `515/515` (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 + 79 P6
+  + 79 P7 + 91 P8); legacy `39/39`; migration v8 rerun-safe; legacy application paths byte-unchanged.
+  All 90 acceptance items pass + the 20-point learning-governance regression. See `PHASE8_COMPLETION.md`,
+  `PHASE8_TRACEABILITY.md`, `PHASE8_DOMAIN_MODEL.md`, `PHASE8_REGISTRIES.md`, `adr/ADR-0022..0027`.
+- **Approved next phase:** Phase 9 — **only after review**.
 
 ## Required commands (legacy launch / inspect)
 ```
@@ -202,10 +246,12 @@ PYTHONPATH=. python3 pipeline_manager/tests/test_loaner_intel.py
 - Product owner / General Sales Manager (dealership). Implementation review pending.
 
 ## Status
-**Phase 7 complete — HOLD FOR REVIEW.** Executive Demo Domain on `elite-pipeline/phase-0` (Phase 6
-approved). New `elite/execdemo/` package + migration v7; platform tests `424/424`; legacy `39/39`; all
-90 acceptance items + the 14-point Best Overall regression pass; legacy application paths byte-
-unchanged. Phase 6 (Service Loaner) remains complete, approved, and a **separate** bounded domain —
-Executive Demo is a distinct package and is NOT merged with Service Loaner (no shared fleet engine).
-Legacy line preserved at `3bf9162`. **BUG-CPO-002 = FIXED_END_TO_END**, retained permanently in
-regression coverage. Phase 8 not started.
+**Phase 8 complete — HOLD FOR REVIEW.** Prediction / Observation / Error / Attribution / Learning /
+Calibration on `elite-pipeline/phase-0` (Phase 7 approved). New `elite/learning/` package + migration
+v8; platform tests `515/515`; legacy `39/39`; all 90 acceptance items + the 20-point learning-governance
+regression pass; legacy application paths byte-unchanged. Learning may **propose** but never activates
+change — no approved Calibration means no operational change; historical Predictions/Decisions remain
+immutable; learning stays domain-aware (no universal scorer). All Phase 1-7 domains remain complete,
+approved, and unmodified; their issued results are immutable historical learning inputs. Legacy line
+preserved at `3bf9162`. **BUG-CPO-002 = FIXED_END_TO_END**, retained permanently in regression coverage.
+Phase 9 not started.

@@ -708,6 +708,208 @@ MIGRATIONS = [
         CREATE TRIGGER executive_demo_issued_output_no_delete BEFORE DELETE ON executive_demo_issued_output
             BEGIN SELECT RAISE(ABORT, 'executive_demo_issued_output is preserved'); END;
     """),
+    (8, "learning_calibration", """
+        -- Prediction — an immutable issued Prediction. Domain-aware: the payload keeps domain meaning;
+        -- shared platform fields are common but the domain payload contract stays explicit. Immutable
+        -- after issuance (no-update); a correction is a NEW prediction + a prediction_correction row.
+        CREATE TABLE prediction (
+            id TEXT PRIMARY KEY, prediction_type TEXT NOT NULL, owning_domain TEXT NOT NULL,
+            subject_entity_type TEXT, subject_entity_id TEXT, store_scope TEXT NOT NULL, org_scope TEXT,
+            issue_time TEXT NOT NULL, effective_period TEXT, prediction_horizon TEXT, predicted_payload TEXT,
+            unit_contract TEXT, confidence TEXT, uncertainty TEXT, evidence_classification TEXT, fact_refs TEXT,
+            source_state_refs TEXT, policy_versions TEXT, calculation_version TEXT, model_version TEXT,
+            identity_rule_version TEXT, comparison_spec_version TEXT, comparison_spec_family TEXT,
+            observation_contract TEXT, scenario_id TEXT, reproducibility_package TEXT, implementation_revision TEXT,
+            issuing_actor TEXT, resolution_status TEXT NOT NULL DEFAULT 'issued', status TEXT NOT NULL DEFAULT 'issued',
+            correction_of TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TRIGGER prediction_no_update BEFORE UPDATE ON prediction
+            BEGIN SELECT RAISE(ABORT, 'prediction is immutable after issuance'); END;
+        CREATE TRIGGER prediction_no_delete BEFORE DELETE ON prediction
+            BEGIN SELECT RAISE(ABORT, 'prediction history is preserved'); END;
+        CREATE TABLE prediction_correction (
+            id TEXT PRIMARY KEY, prediction_id TEXT NOT NULL, correction_type TEXT NOT NULL,
+            replacement_prediction_id TEXT, reason TEXT, correcting_actor TEXT, metadata TEXT, corrected_at TEXT NOT NULL
+        );
+        CREATE TRIGGER prediction_correction_no_delete BEFORE DELETE ON prediction_correction
+            BEGIN SELECT RAISE(ABORT, 'prediction_correction is preserved'); END;
+        -- Decision learning context — attached to an issued Decision; immutable-except-correction
+        -- (a correction is a new row with correction_of; rationale absence stays unknown).
+        CREATE TABLE decision_learning_context (
+            id TEXT PRIMARY KEY, decision_ref TEXT, owning_domain TEXT, subject_entity_type TEXT,
+            subject_entity_id TEXT, store_scope TEXT NOT NULL, originating_prediction_refs TEXT, recommendation_refs TEXT,
+            selected_action TEXT, rejected_alternatives TEXT, decision_time TEXT, decision_maker TEXT, applicable_facts TEXT,
+            policies TEXT, calculations TEXT, confidence TEXT, uncertainty TEXT, stated_rationale TEXT,
+            operational_constraints TEXT, scenario_id TEXT, execution_expectation TEXT, correction_of TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TRIGGER decision_learning_context_no_delete BEFORE DELETE ON decision_learning_context
+            BEGIN SELECT RAISE(ABORT, 'decision_learning_context is preserved'); END;
+        -- Observation — an immutable accepted Observation (what actually occurred). Missing stays missing;
+        -- a correction/reversal is a NEW observation + an observation_correction row (prior-as-known kept).
+        CREATE TABLE observation (
+            id TEXT PRIMARY KEY, observation_type TEXT NOT NULL, owning_domain TEXT NOT NULL, subject_entity_type TEXT,
+            subject_entity_id TEXT, observed_period TEXT, observed_payload TEXT, unit_contract TEXT, fact_refs TEXT,
+            source_observation_refs TEXT, accepted_time TEXT, recorded_time TEXT NOT NULL, store_scope TEXT NOT NULL,
+            quality TEXT, confidence TEXT, completeness TEXT, resolution_status TEXT NOT NULL DEFAULT 'accepted',
+            status TEXT NOT NULL DEFAULT 'accepted', provenance TEXT, correction_of TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TRIGGER observation_no_update BEFORE UPDATE ON observation
+            BEGIN SELECT RAISE(ABORT, 'observation is immutable after acceptance'); END;
+        CREATE TRIGGER observation_no_delete BEFORE DELETE ON observation
+            BEGIN SELECT RAISE(ABORT, 'observation history is preserved'); END;
+        CREATE TABLE observation_correction (
+            id TEXT PRIMARY KEY, observation_id TEXT NOT NULL, correction_type TEXT NOT NULL,
+            replacement_observation_id TEXT, negates_effect INTEGER NOT NULL DEFAULT 0, reason TEXT, correcting_actor TEXT,
+            prior_as_known TEXT, corrected_at TEXT NOT NULL
+        );
+        CREATE TRIGGER observation_correction_no_delete BEFORE DELETE ON observation_correction
+            BEGIN SELECT RAISE(ABORT, 'observation_correction is preserved'); END;
+        -- Comparison Specification runtime — an executable versioned contract extending the Phase 3
+        -- comparison_specification_version registry (registry_ref). Changing behavior requires a new
+        -- version; historical Pairings retain the version used.
+        CREATE TABLE comparison_specification_runtime (
+            id TEXT PRIMARY KEY, registry_ref TEXT, version TEXT NOT NULL, prediction_type TEXT NOT NULL,
+            observation_type TEXT NOT NULL, subject_entity_type TEXT, scope_rules TEXT, matching_keys TEXT,
+            timing_rules TEXT, observation_window TEXT, lateness_tolerance TEXT, unit_contract TEXT,
+            transformation_rules TEXT, aggregation_rules TEXT, partial_behavior TEXT, conflicting_behavior TEXT,
+            missing_behavior TEXT, error_semantics TEXT, directionality TEXT, materiality_threshold_ref TEXT,
+            confidence_rules TEXT, status TEXT NOT NULL DEFAULT 'registered', effective_start TEXT, effective_end TEXT,
+            approval_metadata TEXT, supersedes TEXT, superseded_by TEXT, impl_revision TEXT, created_at TEXT NOT NULL,
+            version_no INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TRIGGER comparison_specification_runtime_no_delete BEFORE DELETE ON comparison_specification_runtime
+            BEGIN SELECT RAISE(ABORT, 'comparison_specification_runtime is preserved'); END;
+        -- Prediction-to-Observation Pairing — deterministic; append-preserving; may remain pending.
+        CREATE TABLE prediction_observation_pairing (
+            id TEXT PRIMARY KEY, prediction_id TEXT NOT NULL, observation_id TEXT, comparison_spec_version TEXT NOT NULL,
+            subject_entity_type TEXT, subject_entity_id TEXT, store_scope TEXT, pairing_status TEXT NOT NULL,
+            matching_evidence TEXT, timing_relationship TEXT, unit_compatible INTEGER, completeness TEXT, confidence TEXT,
+            paired_time TEXT, rule_or_principal TEXT, correction_of TEXT, superseded_by TEXT, reason TEXT,
+            idempotency_key TEXT, created_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+            UNIQUE(idempotency_key)
+        );
+        CREATE TRIGGER prediction_observation_pairing_no_delete BEFORE DELETE ON prediction_observation_pairing
+            BEGIN SELECT RAISE(ABORT, 'prediction_observation_pairing is preserved'); END;
+        CREATE TABLE pairing_review (
+            id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL, reviewer TEXT, outcome TEXT, notes TEXT, reviewed_at TEXT NOT NULL
+        );
+        CREATE TRIGGER pairing_review_no_delete BEFORE DELETE ON pairing_review
+            BEGIN SELECT RAISE(ABORT, 'pairing_review is preserved'); END;
+        -- Error — versioned; derived ONLY from a valid Pairing; semantics from the Comparison Spec.
+        CREATE TABLE prediction_error (
+            id TEXT PRIMARY KEY, pairing_id TEXT NOT NULL, prediction_id TEXT NOT NULL, observation_id TEXT,
+            comparison_spec_version TEXT NOT NULL, expected_value TEXT, actual_value TEXT, signed_error TEXT,
+            absolute_error TEXT, percentage_error TEXT, bounded_error TEXT, timing_error TEXT, classification TEXT,
+            materiality TEXT, confidence TEXT, resolution_status TEXT NOT NULL DEFAULT 'calculated', calculation_time TEXT,
+            calculation_version TEXT, reproducibility_package TEXT, correction_of TEXT, superseded_by TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TRIGGER prediction_error_no_delete BEFORE DELETE ON prediction_error
+            BEGIN SELECT RAISE(ABORT, 'prediction_error is preserved'); END;
+        CREATE TABLE error_correction (
+            id TEXT PRIMARY KEY, error_id TEXT NOT NULL, correction_type TEXT NOT NULL, replacement_error_id TEXT,
+            reason TEXT, corrected_at TEXT NOT NULL
+        );
+        CREATE TRIGGER error_correction_no_delete BEFORE DELETE ON error_correction
+            BEGIN SELECT RAISE(ABORT, 'error_correction is preserved'); END;
+        -- Attribution — evidence-based explanation of an Error; distinguishes evidence from hypothesis.
+        CREATE TABLE attribution (
+            id TEXT PRIMARY KEY, error_id TEXT NOT NULL, subject_entity_id TEXT, proposed_factor TEXT,
+            factor_category TEXT, confidence TEXT, evidence_strength TEXT, status TEXT NOT NULL DEFAULT 'PROPOSED',
+            source TEXT, reviewing_principal TEXT, review_time TEXT, correction_of TEXT, superseded_by TEXT,
+            created_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TRIGGER attribution_no_delete BEFORE DELETE ON attribution
+            BEGIN SELECT RAISE(ABORT, 'attribution is preserved'); END;
+        CREATE TABLE attribution_evidence (
+            id TEXT PRIMARY KEY, attribution_id TEXT NOT NULL, evidence_kind TEXT, supports INTEGER, description TEXT,
+            fact_refs TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER attribution_evidence_no_delete BEFORE DELETE ON attribution_evidence
+            BEGIN SELECT RAISE(ABORT, 'attribution_evidence is preserved'); END;
+        CREATE TABLE attribution_review (
+            id TEXT PRIMARY KEY, attribution_id TEXT NOT NULL, reviewer TEXT, outcome TEXT,
+            preserves_automated INTEGER NOT NULL DEFAULT 1, notes TEXT, reviewed_at TEXT NOT NULL
+        );
+        CREATE TRIGGER attribution_review_no_delete BEFORE DELETE ON attribution_review
+            BEGIN SELECT RAISE(ABORT, 'attribution_review is preserved'); END;
+        -- Learning Signal — domain-aware; append-preserving; has NO operational effect.
+        CREATE TABLE learning_signal (
+            id TEXT PRIMARY KEY, owning_domain TEXT NOT NULL, subject_or_cohort TEXT, error_refs TEXT,
+            attribution_refs TEXT, pattern_type TEXT, evidence_window TEXT, sample_size INTEGER, recurrence INTEGER,
+            direction TEXT, magnitude TEXT, confidence TEXT, stability TEXT, data_quality_conditions TEXT,
+            proposed_review_area TEXT, status TEXT NOT NULL DEFAULT 'CANDIDATE', correction_of TEXT, superseded_by TEXT,
+            created_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TRIGGER learning_signal_no_delete BEFORE DELETE ON learning_signal
+            BEGIN SELECT RAISE(ABORT, 'learning_signal is preserved'); END;
+        CREATE TABLE learning_signal_source (
+            id TEXT PRIMARY KEY, learning_signal_id TEXT NOT NULL, source_type TEXT, source_ref TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER learning_signal_source_no_delete BEFORE DELETE ON learning_signal_source
+            BEGIN SELECT RAISE(ABORT, 'learning_signal_source is preserved'); END;
+        -- Calibration Proposal — governed; may RECOMMEND a versioned change but never mutates policy/
+        -- calculations/permissions/facts directly. Lifecycle in review_state.
+        CREATE TABLE calibration_proposal (
+            id TEXT PRIMARY KEY, target_type TEXT NOT NULL, target_family TEXT, current_version TEXT, proposed_change TEXT,
+            affected_domains TEXT, expected_benefit TEXT, known_risks TEXT, proposed_effective_period TEXT,
+            rollback_plan TEXT, proposer TEXT, review_state TEXT NOT NULL DEFAULT 'DRAFT', approval_state TEXT,
+            approving_principal TEXT, decision_ref TEXT, activation_ref TEXT, rejection_reason TEXT,
+            policy_review_recommendation TEXT, correction_of TEXT, superseded_by TEXT, created_at TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TRIGGER calibration_proposal_no_delete BEFORE DELETE ON calibration_proposal
+            BEGIN SELECT RAISE(ABORT, 'calibration_proposal is preserved'); END;
+        CREATE TABLE calibration_evidence (
+            id TEXT PRIMARY KEY, calibration_proposal_id TEXT NOT NULL, evidence_kind TEXT, learning_signal_ref TEXT,
+            description TEXT, refs TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER calibration_evidence_no_delete BEFORE DELETE ON calibration_evidence
+            BEGIN SELECT RAISE(ABORT, 'calibration_evidence is preserved'); END;
+        CREATE TABLE calibration_validation_run (
+            id TEXT PRIMARY KEY, calibration_proposal_id TEXT NOT NULL, current_version TEXT, proposed_version TEXT,
+            training_window TEXT, evaluation_window TEXT, dataset_refs TEXT, hypothetical INTEGER NOT NULL DEFAULT 1,
+            leakage_checked INTEGER NOT NULL DEFAULT 1, calculation_version TEXT, reproducibility_package TEXT,
+            run_time TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'completed'
+        );
+        CREATE TRIGGER calibration_validation_run_no_delete BEFORE DELETE ON calibration_validation_run
+            BEGIN SELECT RAISE(ABORT, 'calibration_validation_run is preserved'); END;
+        CREATE TABLE calibration_validation_result (
+            id TEXT PRIMARY KEY, validation_run_id TEXT NOT NULL, cohort TEXT, current_error TEXT, proposed_error TEXT,
+            delta TEXT, direction TEXT, material INTEGER, notes TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER calibration_validation_result_no_delete BEFORE DELETE ON calibration_validation_result
+            BEGIN SELECT RAISE(ABORT, 'calibration_validation_result is preserved'); END;
+        CREATE TABLE calibration_transition (
+            id TEXT PRIMARY KEY, calibration_proposal_id TEXT NOT NULL, from_state TEXT, to_state TEXT NOT NULL,
+            actor TEXT, action TEXT, audit_ref TEXT, detail TEXT, at TEXT NOT NULL
+        );
+        CREATE TRIGGER calibration_transition_no_delete BEFORE DELETE ON calibration_transition
+            BEGIN SELECT RAISE(ABORT, 'calibration_transition is preserved'); END;
+        -- Activation reference — immutable record that an approved version was activated/scheduled.
+        CREATE TABLE calibration_activation (
+            id TEXT PRIMARY KEY, calibration_proposal_id TEXT NOT NULL, target_type TEXT, activated_version_ref TEXT,
+            activated_version_kind TEXT, effective_start TEXT, scheduled INTEGER NOT NULL DEFAULT 0, prior_version_ref TEXT,
+            actor TEXT, activated_at TEXT NOT NULL, UNIQUE(calibration_proposal_id)
+        );
+        CREATE TRIGGER calibration_activation_no_update BEFORE UPDATE ON calibration_activation
+            BEGIN SELECT RAISE(ABORT, 'calibration_activation is immutable'); END;
+        CREATE TRIGGER calibration_activation_no_delete BEFORE DELETE ON calibration_activation
+            BEGIN SELECT RAISE(ABORT, 'calibration_activation is preserved'); END;
+        CREATE TABLE calibration_rollback (
+            id TEXT PRIMARY KEY, calibration_proposal_id TEXT NOT NULL, activation_ref TEXT, restored_version_ref TEXT,
+            reason TEXT, actor TEXT, effective_start TEXT, rolled_back_at TEXT NOT NULL
+        );
+        CREATE TRIGGER calibration_rollback_no_delete BEFORE DELETE ON calibration_rollback
+            BEGIN SELECT RAISE(ABORT, 'calibration_rollback is preserved'); END;
+        CREATE TABLE learning_issued_output (
+            id TEXT PRIMARY KEY, output_type TEXT NOT NULL, output_id TEXT NOT NULL, owning_domain TEXT,
+            store_scope TEXT, calculation_version TEXT, scenario_id TEXT, issued_time TEXT NOT NULL
+        );
+        CREATE TRIGGER learning_issued_output_no_delete BEFORE DELETE ON learning_issued_output
+            BEGIN SELECT RAISE(ABORT, 'learning_issued_output is preserved'); END;
+    """),
 ]
 
 
