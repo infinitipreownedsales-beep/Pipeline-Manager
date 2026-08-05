@@ -220,3 +220,52 @@ adr/ADR-0009..0013; updated IMPLEMENTATION_CONTROL, KNOWN_BUG_REGISTRY, RUN_INST
 REQUIREMENT_INDEX (note).
 
 Result: **Phase 5 complete → HOLD FOR REVIEW.** Next: Phase 6 only after review.
+
+## Phase 5 review disposition — APPROVED
+
+Phase 5 (production/supply workflows; `elite/workflow/` + migration v5) reviewed and **approved**.
+Recorded here and in IMPLEMENTATION_CONTROL.md. Legacy line preserved at `3bf9162`. BUG-CPO-002 is
+**FIXED_END_TO_END** (Phase 4 synthetic + Phase 5 end-to-end regressions both green), retained
+permanently in the regression registry.
+
+## Phase 6 — Service Loaner Domain  (branch `elite-pipeline/phase-0`)  [ACTIVE]
+
+Control records: Phase 5 recorded approved; Phase 6 set active. **Scope corrected: Phase 6 is
+Service Loaner ONLY — Executive Demo is deferred to Phase 7 and is not built here.** Building the
+complete Service Loaner bounded domain (active-fleet Full Snapshot + membership reconciliation;
+Service Loaner Unit + lifecycle; in-service-date authority; Last Checkout Mileage; zero-mile-rented
+monitoring; versioned Economic Call separate from Execution Status; entry portfolio optimization;
+retirement/provisional/return/final; Used Cars idempotent-receipt handoff; return-to-retail
+reconciliation; scenario exploration; resale/outcome foundations; operational output slices) on the
+Phase 1-5 identity/facts/policy/supply/planning/commitment/workflow/governance/audit foundations,
+appending migration v6 (v1-v5 unchanged), touching no legacy file. Strict domain separation from
+Executive Demo, New Retail Demand, generic acquisition ranking, production workflow, CPO/PPO, and
+Used Cars before confirmed handoff. Carries a dedicated 14-point zero-mile-rented monitoring
+regression. No Executive Demo / Pairing / Learning / completed Phase-9 Governance / full UX /
+operational hardening / migration-cutover.
+
+Implemented a NEW `elite/loaner/` package + migration v6 (appended; v1-v5 unchanged), touching no
+legacy file: authoritative active-fleet Full Snapshot + membership reconciliation by VIN (via Phase 2
+ingestion, raw preserved; only a valid Full Snapshot supports absence, and absence is a review signal
+only); Service Loaner Unit + governed lifecycle (Vehicle Unit identity never replaced; approval ≠
+execution; execution establishes membership once; rental separate from membership); in-service-date
+authority (verified controls tenure; import date never substitutes; conflicts unresolved; corrections
+preserved); Last Checkout Mileage (zero≠blank≠missing≠invalid; supersede preserves history);
+zero-mile-rented monitoring (approved prompt; idempotent; clears on not-rented/nonzero; no invented
+location/mileage); versioned Economic Call separate from Execution Status (incremental exit economics,
+no sunk-cost reapplication); entry portfolio optimization (need resolved separately; explainable;
+opportunity cost an input; no double-select); retirement/provisional/return/final; Used Cars single
+idempotent immutable receipt (auto Principal+time; no checklist; cannot precede retirement; creates no
+New Retail supply); return-to-retail reconciliation (restores Current Supply once; existing prevents
+duplication); scenario exploration (isolated; identifies overrides; no official change);
+resale/outcome foundations; operational output slices; 60 dealership-representative fixtures.
+
+Evidence executed: platform harness **345/345** (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 + 79 P6);
+legacy **39/39**; migration v6 rerun-safe; legacy application paths byte-unchanged vs
+`legacy/inventory-tool` @ `3bf9162`. All 89 mandatory acceptance items pass, plus the dedicated
+14-point zero-mile-rented monitoring regression (PHASE6_COMPLETION.md).
+
+Docs: PHASE6_COMPLETION, PHASE6_TRACEABILITY, PHASE6_DOMAIN_MODEL, PHASE6_REGISTRIES,
+adr/ADR-0014..0017; updated IMPLEMENTATION_CONTROL, RUN_INSTRUCTIONS, REQUIREMENT_INDEX (note).
+
+Result: **Phase 6 complete → HOLD FOR REVIEW.** Next: Phase 7 (Executive Demo) only after review.

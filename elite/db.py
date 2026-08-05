@@ -458,6 +458,126 @@ MIGRATIONS = [
             outcome TEXT, detail TEXT, confirmed_at TEXT NOT NULL
         );
     """),
+    (6, "service_loaner", """
+        -- Service Loaner Unit — a Vehicle Unit's Service Loaner participation (does NOT replace
+        -- Vehicle Unit identity).
+        CREATE TABLE service_loaner_unit (
+            id TEXT PRIMARY KEY, vehicle_unit_id TEXT, vin TEXT, store_scope TEXT NOT NULL, combination_id TEXT,
+            membership_state TEXT NOT NULL DEFAULT 'CANDIDATE', accepted_in_service_date TEXT,
+            in_service_date_authority TEXT, current_rental_state TEXT, last_checkout_mileage TEXT,
+            last_accepted_snapshot TEXT, active_fleet_presence INTEGER NOT NULL DEFAULT 0, entry_decision TEXT,
+            entry_execution_event TEXT, retirement_decision TEXT, return_confirmation TEXT, retirement_event TEXT,
+            used_cars_receipt TEXT, return_to_retail_ref TEXT, correction_of TEXT, superseded_by TEXT,
+            quality_status TEXT, confidence TEXT, created_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TRIGGER service_loaner_unit_no_delete BEFORE DELETE ON service_loaner_unit
+            BEGIN SELECT RAISE(ABORT, 'service_loaner_unit history is preserved'); END;
+        CREATE TABLE service_loaner_membership_history (
+            id TEXT PRIMARY KEY, service_loaner_unit_id TEXT NOT NULL, from_state TEXT, to_state TEXT NOT NULL,
+            actor TEXT, action TEXT, reconciliation_ref TEXT, audit_ref TEXT, detail TEXT, at TEXT NOT NULL
+        );
+        CREATE TRIGGER service_loaner_membership_history_no_delete BEFORE DELETE ON service_loaner_membership_history
+            BEGIN SELECT RAISE(ABORT, 'service_loaner_membership_history is preserved'); END;
+        CREATE TABLE service_loaner_snapshot_reconciliation (
+            id TEXT PRIMARY KEY, import_batch_id TEXT, snapshot_type TEXT, store_scope TEXT, vin TEXT,
+            service_loaner_unit_id TEXT, outcome TEXT NOT NULL, reason TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE service_loaner_operational_state (
+            id TEXT PRIMARY KEY, service_loaner_unit_id TEXT, snapshot_ref TEXT, rental_state TEXT,
+            availability_state TEXT, conflict TEXT, source_refs TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE service_loaner_in_service_date_resolution (
+            id TEXT PRIMARY KEY, service_loaner_unit_id TEXT, candidate_values TEXT, source TEXT, evidence TEXT,
+            authority_level TEXT, effective_time TEXT, accepted_value TEXT, conflict_state TEXT, correction_of TEXT,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE service_loaner_checkout_mileage_fact (
+            id TEXT PRIMARY KEY, service_loaner_unit_id TEXT, value_kind TEXT NOT NULL, value INTEGER,
+            snapshot_ref TEXT, source TEXT, provenance TEXT, status TEXT NOT NULL DEFAULT 'current', supersedes TEXT,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE service_loaner_monitoring_alert (
+            id TEXT PRIMARY KEY, service_loaner_unit_id TEXT, rule TEXT NOT NULL, prompt TEXT, status TEXT NOT NULL,
+            snapshot_ref TEXT, in_service_date TEXT, elapsed_days INTEGER, threshold_days INTEGER, policy_refs TEXT,
+            cleared_reason TEXT, created_at TEXT NOT NULL, cleared_at TEXT
+        );
+        CREATE TRIGGER service_loaner_monitoring_alert_no_delete BEFORE DELETE ON service_loaner_monitoring_alert
+            BEGIN SELECT RAISE(ABORT, 'service_loaner_monitoring_alert history is preserved'); END;
+        CREATE TABLE service_loaner_entry_candidate (
+            id TEXT PRIMARY KEY, vehicle_unit_id TEXT, combination_id TEXT, store_scope TEXT, eligibility TEXT,
+            eligibility_reasons TEXT, availability TEXT, new_retail_opportunity_cost TEXT, actual_state TEXT,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE service_loaner_portfolio_plan (
+            id TEXT PRIMARY KEY, store_scope TEXT NOT NULL, required_quantity INTEGER, current_active INTEGER,
+            selected TEXT, sacrifices TEXT, need_basis TEXT, policy_versions TEXT, calculation_version TEXT,
+            scenario_id TEXT, issued_time TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'issued'
+        );
+        CREATE TRIGGER service_loaner_portfolio_plan_no_delete BEFORE DELETE ON service_loaner_portfolio_plan
+            BEGIN SELECT RAISE(ABORT, 'service_loaner_portfolio_plan is preserved'); END;
+        CREATE TABLE service_loaner_economic_result (
+            id TEXT PRIMARY KEY, service_loaner_unit_id TEXT, store_scope TEXT, decision_point TEXT,
+            alternatives TEXT, economic_call TEXT, assumptions TEXT, uncertainty TEXT, resolution_status TEXT NOT NULL,
+            policy_versions TEXT, calculation_version TEXT, fact_refs TEXT, reproducibility_package TEXT, scenario_id TEXT,
+            issued_time TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'issued'
+        );
+        CREATE TRIGGER service_loaner_economic_result_no_delete BEFORE DELETE ON service_loaner_economic_result
+            BEGIN SELECT RAISE(ABORT, 'service_loaner_economic_result issued history is preserved'); END;
+        CREATE TABLE service_loaner_execution_status (
+            id TEXT PRIMARY KEY, service_loaner_unit_id TEXT, economic_result_id TEXT, status TEXT NOT NULL,
+            reason TEXT, blocking_factors TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE service_loaner_retirement_eligibility (
+            id TEXT PRIMARY KEY, service_loaner_unit_id TEXT, eligible INTEGER, reasons TEXT, policy_versions TEXT,
+            tenure_days INTEGER, recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE service_loaner_retirement_action (
+            id TEXT PRIMARY KEY, service_loaner_unit_id TEXT, store_scope TEXT, lifecycle_status TEXT NOT NULL,
+            economic_result_id TEXT, decision_ref TEXT, approval_time TEXT, provisional INTEGER NOT NULL DEFAULT 0,
+            cancellation_status TEXT, correction_of TEXT, created_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE service_loaner_return_confirmation (
+            id TEXT PRIMARY KEY, service_loaner_unit_id TEXT, retirement_action_id TEXT, actual_event_ref TEXT,
+            confirmed_by TEXT, confirmed_at TEXT NOT NULL
+        );
+        CREATE TABLE service_loaner_retirement_event (
+            id TEXT PRIMARY KEY, service_loaner_unit_id TEXT, retirement_action_id TEXT, return_confirmation_id TEXT,
+            store_scope TEXT, membership_reconciled INTEGER, event_time TEXT NOT NULL
+        );
+        CREATE TRIGGER service_loaner_retirement_event_no_delete BEFORE DELETE ON service_loaner_retirement_event
+            BEGIN SELECT RAISE(ABORT, 'service_loaner_retirement_event is preserved'); END;
+        -- Used Cars receipt — a single idempotent confirmation, immutable, no checklist.
+        CREATE TABLE used_cars_receipt (
+            id TEXT PRIMARY KEY, service_loaner_unit_id TEXT, vehicle_unit_id TEXT, retirement_event_ref TEXT,
+            store_scope TEXT, confirming_principal TEXT, correlation_id TEXT, audit_ref TEXT, confirmed_at TEXT NOT NULL,
+            UNIQUE(service_loaner_unit_id)
+        );
+        CREATE TRIGGER used_cars_receipt_no_update BEFORE UPDATE ON used_cars_receipt
+            BEGIN SELECT RAISE(ABORT, 'used_cars_receipt is immutable'); END;
+        CREATE TRIGGER used_cars_receipt_no_delete BEFORE DELETE ON used_cars_receipt
+            BEGIN SELECT RAISE(ABORT, 'used_cars_receipt is preserved'); END;
+        CREATE TABLE service_loaner_reconciliation_result (
+            id TEXT PRIMARY KEY, service_loaner_unit_id TEXT, vehicle_unit_id TEXT, store_scope TEXT, outcome TEXT NOT NULL,
+            supply_ref TEXT, detail TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER service_loaner_reconciliation_result_no_delete BEFORE DELETE ON service_loaner_reconciliation_result
+            BEGIN SELECT RAISE(ABORT, 'service_loaner_reconciliation_result is preserved'); END;
+        CREATE TABLE service_loaner_scenario_result (
+            id TEXT PRIMARY KEY, scenario_id TEXT NOT NULL, store_scope TEXT, kind TEXT, overrides TEXT, output TEXT,
+            baseline_ref TEXT, issued_time TEXT NOT NULL
+        );
+        CREATE TABLE service_loaner_resale_reference (
+            id TEXT PRIMARY KEY, service_loaner_unit_id TEXT, retirement_event_ref TEXT, used_cars_receipt_ref TEXT,
+            resale_event_ref TEXT, resale_timing TEXT, resale_value TEXT, predicted_ref TEXT, observed_ref TEXT,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE service_loaner_issued_output (
+            id TEXT PRIMARY KEY, output_type TEXT NOT NULL, output_id TEXT NOT NULL, service_loaner_unit_id TEXT,
+            store_scope TEXT, calculation_version TEXT, scenario_id TEXT, issued_time TEXT NOT NULL
+        );
+        CREATE TRIGGER service_loaner_issued_output_no_delete BEFORE DELETE ON service_loaner_issued_output
+            BEGIN SELECT RAISE(ABORT, 'service_loaner_issued_output is preserved'); END;
+    """),
 ]
 
 

@@ -55,6 +55,7 @@ Human-readable view. Machine-readable source of truth: `docs/implementation/requ
 - Phase 3 (policy/versioning): `PHASE3_TRACEABILITY.md`.
 - Phase 4 (new inventory): `PHASE4_TRACEABILITY.md`.
 - Phase 5 (production/supply workflows): `PHASE5_TRACEABILITY.md`.
+- Phase 6 (service loaner domain): `PHASE6_TRACEABILITY.md`.
 The canonical DOCX is unchanged, so `requirement_index.json` is unchanged; phase
 traceability maps implemented capabilities to owning segments/families (exact IDs
 bound at review).

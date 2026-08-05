@@ -32,11 +32,13 @@ db.migrate()          # applies pending migrations; tracked in migration_record
 print("schema version:", db.version())
 ```
 
-### Run the platform tests (Phase 1 + Phase 2 + Phase 3 + Phase 4 + Phase 5)
+### Run the platform tests (Phase 1 through Phase 6)
 ```
 PYTHONPATH=. python3 elite/tests/run_all.py
 # focused BUG-CPO-002 regressions (Phase 4 synthetic + Phase 5 end-to-end CPO workflow):
 PYTHONPATH=. python3 -m unittest elite.tests.test_phase4_bug_cpo_002 elite.tests.test_phase5_bug_cpo_002_e2e -v
+# focused Service Loaner zero-mile-rented monitoring regression:
+PYTHONPATH=. python3 -m unittest elite.tests.test_phase6_monitoring.TestZeroMileRegression -v
 ```
 
 ### Phase 2 — data/identity/facts (example)
@@ -109,6 +111,25 @@ Inspect Phase 5 records:
 sqlite3 "$ELITE_DB_PATH" "SELECT workflow_type,lifecycle_status FROM supply_workflow;"
 sqlite3 "$ELITE_DB_PATH" "SELECT outcome,prior_qualifying,new_qualifying FROM commitment_reconciliation_result;"
 sqlite3 "$ELITE_DB_PATH" "SELECT from_status,to_status,action FROM supply_workflow_transition;"
+```
+
+### Phase 6 — Service Loaner domain (example)
+```python
+from elite.loaner.fixtures import Phase6
+from elite.loaner.output import build_unit_slice
+p = Phase6("/path/to/elite.db")               # migrates v1..v6; wires SL services + principals
+b = p.snapshot.ingest_fleet([{"vin": "1GNSKBKC5FR000001", "rental_status": "rented",
+                              "in_service_date": "2025-01-01", "checkout_mileage": "0"}], snapshot_type="full")
+print(p.snapshot.reconcile(b, [{"vin": "1GNSKBKC5FR000001", "rental_status": "rented"}]))   # membership by VIN
+u = p.store.unit_for_vin("1GNSKBKC5FR000001", "store:HG")
+p.dating.record_mileage(u, "0")
+print(p.monitoring.evaluate(u, at_date="2026-06-01", threshold_days=30).prompt)   # zero-mile-rented alert
+```
+Inspect Phase 6 records:
+```
+sqlite3 "$ELITE_DB_PATH" "SELECT membership_state,current_rental_state FROM service_loaner_unit;"
+sqlite3 "$ELITE_DB_PATH" "SELECT rule,status,prompt FROM service_loaner_monitoring_alert;"
+sqlite3 "$ELITE_DB_PATH" "SELECT confirming_principal,confirmed_at FROM used_cars_receipt;"
 ```
 
 ### Inspect the authoritative store

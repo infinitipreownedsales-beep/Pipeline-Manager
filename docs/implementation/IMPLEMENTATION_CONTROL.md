@@ -23,7 +23,8 @@ specification is authoritative, what is preserved, and what work is permitted.
 - **Branch:** `elite-pipeline/phase-0` (created from `3bf9162`; does not modify the legacy line)
 
 ## Current phase / work unit
-- **Phase:** Phase 5 — Production and Supply Workflows (**complete → HOLD FOR REVIEW**).
+- **Phase:** Phase 6 — Service Loaner Domain (**complete → HOLD FOR REVIEW**).
+- **Phase 5:** **approved and complete.**
 - **Phase 4:** **approved and complete.**
 - **Phase 3:** **approved and complete.**
 - **Phase 2:** **approved and complete.**
@@ -103,7 +104,31 @@ specification is authoritative, what is preserved, and what work is permitted.
   rerun-safe; legacy application paths byte-unchanged. All 78 acceptance items pass + the 15-point
   end-to-end BUG-CPO-002 regression → **BUG-CPO-002 FIXED_END_TO_END**. See `PHASE5_COMPLETION.md`,
   `PHASE5_TRACEABILITY.md`, `PHASE5_DOMAIN_MODEL.md`, `PHASE5_REGISTRIES.md`, `adr/ADR-0009..0013`.
-- **Approved next phase:** Phase 6 — **only after review**.
+- **Phase 6 scope:** the complete **Service Loaner** domain **only** (Executive Demo is Phase 7 and
+  is NOT built here) as an independent governed portfolio domain — authoritative active-fleet Full
+  Snapshot contract + membership reconciliation by VIN; Service Loaner Unit + lifecycle; in-service-
+  date authority; Last Checkout Mileage; zero-mile-rented monitoring; versioned Economic Call
+  (separate from Execution Status; incremental exit timing, no sunk-cost reapplication); entry
+  selection + fleet portfolio optimization; retirement / provisional retirement / return
+  confirmation / final retirement; Used Cars handoff (one idempotent confirmation); return-to-retail
+  reconciliation; scenario/policy exploration; resale/outcome foundations; operational output slices.
+  Migration v6 (appended). Strict domain separation: Service Loaner is distinct from Executive Demo,
+  New Retail Demand, generic acquisition ranking, production workflow, CPO/PPO, and Used Cars before
+  confirmed handoff. All policy/assumptions/thresholds resolve through Phase 3; reuses Phase 1-5
+  identity/facts/policy/supply/planning/commitment/workflow/governance/audit foundations. **No**
+  Executive Demo, Prediction/Observation Pairing, Learning, completed Phase-9 Governance, full UX,
+  operational hardening, or migration/cutover.
+- **Phase 6 result:** new `elite/loaner/` package + migration v6 (appended; v1-v5 unchanged), touching
+  no legacy file. Active-fleet Full Snapshot + membership reconciliation by VIN; Service Loaner Unit +
+  governed lifecycle; in-service-date authority; Last Checkout Mileage; zero-mile-rented monitoring;
+  versioned Economic Call separate from Execution Status; entry portfolio optimization; retirement /
+  provisional / return / final; Used Cars idempotent immutable receipt; return-to-retail
+  reconciliation; scenario exploration; resale foundations; output slices; 60 fixtures. Platform tests
+  `345/345` (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 + 79 P6); legacy `39/39`; migration v6 rerun-safe;
+  legacy application paths byte-unchanged. All 89 acceptance items pass + the 14-point zero-mile-rented
+  regression. See `PHASE6_COMPLETION.md`, `PHASE6_TRACEABILITY.md`, `PHASE6_DOMAIN_MODEL.md`,
+  `PHASE6_REGISTRIES.md`, `adr/ADR-0014..0017`.
+- **Approved next phase:** Phase 7 — **Executive Demo** — **only after review**.
 
 ## Required commands (legacy launch / inspect)
 ```
@@ -142,9 +167,7 @@ PYTHONPATH=. python3 pipeline_manager/tests/test_loaner_intel.py
 - Product owner / General Sales Manager (dealership). Implementation review pending.
 
 ## Status
-**HOLD FOR REVIEW.** Phase 5 complete (Production and Supply Workflows; `elite/workflow/` + migration
-v5; platform `266/266`, legacy `39/39`; legacy line unchanged at `3bf9162`). Real governed CPO/PPO/
-Dealer Trade/CTP workflows consume the Phase 4 Need contract, compute no separate Demand, and are
-count-once + monotone; the 15-point end-to-end BUG-CPO-002 regression is green →
-**BUG-CPO-002 FIXED_END_TO_END** (retained permanently in the regression registry). Do not proceed to
-Phase 6 until reviewed and approved.
+**HOLD FOR REVIEW.** Phase 6 complete (Service Loaner domain; `elite/loaner/` + migration v6; platform
+`345/345`, legacy `39/39`; legacy line unchanged at `3bf9162`). Executive Demo was deliberately NOT
+built (deferred to Phase 7). **BUG-CPO-002 = FIXED_END_TO_END**, retained permanently in regression
+coverage. Do not proceed to Phase 7 until reviewed and approved.

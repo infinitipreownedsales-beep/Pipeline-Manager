@@ -35,7 +35,9 @@ class TestPhase5MigrationCross(unittest.TestCase):
         self.p.close()
         p2 = Phase5(self.dbp)
         self.addCleanup(p2.close)
-        self.assertEqual(p2.stack.db.version(), 5)
+        applied = {r["version"] for r in p2.wf.conn.execute("SELECT version FROM migration_record").fetchall()}
+        self.assertIn(5, applied)                              # v5 applied (later migrations may exist)
+        self.assertGreaterEqual(p2.stack.db.version(), 5)
         self.assertIsNotNone(p2.wf.get_workflow(w.id))
 
     def test_71_migration_v5_rerun_safe(self):
@@ -44,7 +46,8 @@ class TestPhase5MigrationCross(unittest.TestCase):
         p2 = Phase5(self.dbp)
         self.addCleanup(p2.close)
         after = p2.wf.conn.execute("SELECT COUNT(*) n FROM migration_record").fetchone()["n"]
-        self.assertEqual((before, after), (5, 5))
+        self.assertEqual(before, after)                       # rerun applies nothing new
+        self.assertGreaterEqual(after, 5)
 
     def test_72_phase1_tests_remain_green(self):
         run, failed = _run_modules(["elite.tests.test_authz", "elite.tests.test_persistence",
