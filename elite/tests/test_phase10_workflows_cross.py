@@ -87,10 +87,15 @@ class TestPhase10WorkflowsCross(unittest.TestCase):
         self.assertEqual(p2.app.prefs.get_pref(self.p.op_full, "preferred_store"), "store:HG")
 
     def test_109_migration_v10_rerun_safe(self):
+        # version-agnostic: v10 is present and re-running migrate() applies nothing new (rerun-safe),
+        # whatever the latest migration version is (v11+ append after Phase 10).
+        applied = {r["version"] for r in
+                   self.p.stack.db.conn.execute("SELECT version FROM migration_record").fetchall()}
+        self.assertIn(10, applied)
         before = self.p.stack.db.conn.execute("SELECT COUNT(*) n FROM migration_record").fetchone()["n"]
         self.p.stack.db.migrate()
         after = self.p.stack.db.conn.execute("SELECT COUNT(*) n FROM migration_record").fetchone()["n"]
-        self.assertEqual((before, after), (10, 10))
+        self.assertEqual(before, after)                    # rerun added no migration
 
     def test_110_through_118_prior_phases_green(self):
         _r, f = _run_modules([

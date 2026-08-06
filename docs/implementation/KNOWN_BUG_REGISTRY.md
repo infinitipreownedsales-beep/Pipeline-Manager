@@ -83,7 +83,15 @@ contract fields. New defects append here with a stable ID.
   can raise Need or rewrite an issued recommendation, Prediction, planning result, or Demand
   (`elite/tests/test_phase10_domains.py` test_23; `test_phase10_presentation_integrity_regression.py`;
   `test_phase10_workflows_cross.py` test_121). Migration v10 adds presentation-only tables with no
-  immutability triggers and does not touch any Phase 4-9 domain record.
+  immutability triggers and does not touch any Phase 4-9 domain record. Verified still green under migration
+  v11 / Phase 11 (Operational Hardening + Controlled Pilot): the operational layer imports real source data
+  as EVIDENCE and recomputes no domain math — adapters produce only the Phase 2 canonical contract, import
+  success is not acceptance, reconciliation never auto-corrects a domain record, a Full-Snapshot absence is
+  MISSING_EXPECTED (never a deletion), and no import/freshness/reconciliation/comparison/pilot action can
+  raise Need or rewrite an issued recommendation, Prediction, planning result, or Demand
+  (`elite/tests/test_phase11_freshness_reconcile.py` test_018/test_019; the 15-point import-recovery and
+  20-point controlled-pilot regressions; cross-phase greens items 94-103). Migration v11 adds operational
+  records with no business truth and touches no Phase 4-10 domain record.
 - **Regression fixture (Phase 4):** `elite/tests/test_phase4_bug_cpo_002.py` — baseline
   Demand + qualifying Supply + Need; add an approved synthetic CPO-like commitment only as
   Committed Supply; Demand unchanged; qualifying Supply increases by exactly the committed

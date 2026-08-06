@@ -23,7 +23,8 @@ specification is authoritative, what is preserved, and what work is permitted.
 - **Branch:** `elite-pipeline/phase-0` (created from `3bf9162`; does not modify the legacy line)
 
 ## Current phase / work unit
-- **Phase:** Phase 10 — Operator Experience and Presentation Layer (**complete; HOLD FOR REVIEW**).
+- **Phase:** Phase 11 — Operational Hardening, Real-Source Integration, and Controlled Pilot Readiness (**complete; HOLD FOR REVIEW**).
+- **Phase 10:** **approved and complete.**
 - **Phase 9:** **approved and complete.**
 - **Phase 8:** **approved and complete.**
 - **Phase 7:** **approved and complete.**
@@ -304,7 +305,60 @@ specification is authoritative, what is preserved, and what work is permitted.
   P10); legacy `39/39`; migration v10 rerun-safe; legacy application paths byte-unchanged. All 121
   acceptance items pass + the 20-point operator-workflow and 15-point presentation-integrity regressions.
   See `PHASE10_COMPLETION.md`, `PHASE10_ARCHITECTURE.md`, `PHASE10_TRACEABILITY.md`, `adr/ADR-0035..0040`.
-- **Approved next phase:** Phase 11 — **only after review**.
+- **Phase 10 review disposition:** **APPROVED.** Recorded here and in `IMPLEMENTATION_LEDGER.md`. Phase 10
+  is preserved at commit `05ba436` as the first complete working application baseline. Legacy line
+  preserved at `3bf9162`. BUG-CPO-002 remains FIXED_END_TO_END.
+- **Phase 11 scope:** operational hardening + real-source integration + controlled pilot readiness over the
+  Phase 10 application (`elite/ops/` + migration v11): real-source adapter contracts, controlled file
+  ingestion, source discovery/validation, operational scheduling, import orchestration, data freshness,
+  reconciliation/drift, restart + failure recovery, concurrency hardening, transaction durability, backup +
+  restore, observability + structured logging, health checks, performance baselines, security hardening,
+  configuration management, secret handling, pilot environment setup, controlled parallel-run comparison,
+  operator feedback capture, release packaging, deployment documentation, and pilot-readiness certification.
+  Binding operational principles: source data is evidence not truth; raw source preserved; import success ≠
+  acceptance ≠ reconciliation ≠ automatic business action; Partial Snapshot never acts like Full; missing
+  rows are not deletions unless the contract permits absence reconciliation; file import time ≠ business
+  effective time; irregularities are never fixed through hidden UI logic; invalid/conflicting data stays
+  visible; restart never duplicates imports/facts/Decisions/commitments/workflow actions; failed import
+  never corrupts the last valid state; diagnostics never expose customer data/secrets/unnecessary VIN
+  detail; pilot mode runs **alongside** the legacy system; comparison never silently mutates either tool;
+  disagreement is evidence for review, not proof; **no cutover occurs in Phase 11.** Adds migration v11
+  (operational records — append-preserving; no business truth moved). Carries a 15-point import-recovery
+  regression and a 20-point controlled-pilot regression. No final cutover / legacy replacement / destructive
+  migration / production go-live.
+- **Phase 11 result:** new `elite/ops/` package + migration v11 (operational records — append-preserving; no
+  business truth moved; v1-v10 unchanged), touching no legacy file and preserving Phase 10 at `05ba436`. A
+  stdlib-only operational + pilot layer: real-source adapters over Phase 2 ingestion (canonical contract; no
+  domain write; explicit schema detection; deterministic parsing; row traceability; recorded adapter
+  version); a source-contract registry; controlled file intake (allowlist, size bound, filename/traversal
+  sanitization, content hash, duplicate detection, quarantine, upload authz+scope); import-run orchestration
+  (12-state machine; idempotent same-content; failed preserves prior accepted state; partial never
+  COMPLETED; retry links; safe visible failures); domain-aware freshness (effective-time+cadence; fresh-but-
+  stale stays STALE; blocks readiness; append-preserving); operational reconciliation/drift (exact source+
+  domain refs; no auto-correct; Full/Partial preserved; one unit never duplicated; unknown stays UNRESOLVED);
+  scheduling (idempotent, missed visible, overlap-safe, explicit tz, manual vs scheduled); restart/crash
+  recovery (in-flight→failed/reviewable; committed stays; no replay; no evidence deleted); concurrency
+  hardening (optimistic concurrency + idempotency → exactly-once; stale browser rejected); SQLite durability
+  (FK/WAL/synchronous/busy-timeout/integrity/startup validation); transactionally-consistent backup +
+  non-destructive restore validation (reproduces counts + migration version; failed-backup alert; retention
+  preserves record + raw evidence); three-way health (liveness/readiness/operational — live may be not
+  ready); safe operational logging (correlation IDs; no secret/token/session/PII; VIN masking; raw rows
+  never logged; logging failure never corrupts a governed action); performance baselines (immutable metrics;
+  slow-query evidence; optimization changes no result); security hardening (session expiry/invalidation;
+  env-aware cookie flags; CSRF; scope isolation; revocation; runnable checklist); configuration management
+  (safe defaults; startup validation; secret hygiene; unsafe host binding requires explicit opt-in; safe
+  diagnostics); a visible controlled pilot mode alongside the legacy tool (destructive cutover blocked;
+  legacy fallback preserved); a non-authoritative parallel-run comparison (classifies; mutates neither
+  result; unknown unresolved; material blocks readiness); structured operator feedback (exact screen+
+  revision; never mutates authoritative data; incorrect-result → review); evidence-based pilot-readiness
+  certification; and a pilot packaging CLI. Platform tests `826/826` (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5
+  + 79 P6 + 79 P7 + 91 P8 + 104 P9 + 98 P10 + 109 P11); legacy `39/39`; migration v11 rerun-safe; legacy
+  application paths byte-unchanged. All 106 acceptance items pass + the 15-point import-recovery and 20-point
+  controlled-pilot regressions. See `PHASE11_COMPLETION.md`, `PHASE11_ARCHITECTURE.md`,
+  `PHASE11_RUNBOOKS.md`, `PHASE11_TRACEABILITY.md`, `adr/ADR-0041..0046`.
+- **Phase 11 disposition:** **complete → HOLD FOR REVIEW.** No cutover / legacy replacement / destructive
+  migration / production go-live introduced. Phase 12 not started.
+- **Approved next phase:** Phase 12 — **only after review**.
 
 ## Required commands (legacy launch / inspect)
 ```
@@ -343,13 +397,20 @@ PYTHONPATH=. python3 pipeline_manager/tests/test_loaner_intel.py
 - Product owner / General Sales Manager (dealership). Implementation review pending.
 
 ## Status
-**Phase 10 complete — HOLD FOR REVIEW.** Operator Experience and Presentation Layer on
-`elite-pipeline/phase-0` (Phase 9 approved). New `elite/ui/` package (stdlib WSGI; no new dependencies) +
-migration v10 (presentation-only); platform tests `717/717`; legacy `39/39`; all 121 acceptance items +
-the 20-point operator-workflow and 15-point presentation-integrity regressions pass; legacy application
-paths byte-unchanged. The interface reads authoritative Phase 1-9 records and never recomputes domain
-logic; every mutation routes through the governed services; browser/localStorage state is never
-authoritative; below-UI authorization + scope are never bypassed. All Phase 1-9 domain mathematics,
-lifecycle rules, authorization, audit, Decisions, Predictions, Observations, and governed execution
-services are preserved unchanged. Legacy line preserved at `3bf9162`. **BUG-CPO-002 = FIXED_END_TO_END**,
-retained permanently in regression coverage. Phase 11 not started.
+**Phase 11 complete — HOLD FOR REVIEW. Operational Hardening, Real-Source Integration, and Controlled Pilot
+Readiness** on `elite-pipeline/phase-0`. Platform tests `826/826`; legacy `39/39`; migration v11 rerun-safe;
+legacy application paths byte-unchanged; all 106 acceptance items + the 15-point import-recovery and 20-point
+controlled-pilot regressions pass. Phase 10 is **approved and complete** (preserved at commit `05ba436` as
+the first complete working application baseline). Phase 11 hardens the working application for realistic
+dealership
+operation over a NEW `elite/ops/` package + migration v11 (operational records — append-preserving; no
+business truth moved into the operational layer): real-source adapters over Phase 2 ingestion, controlled
+file intake, import orchestration, freshness, reconciliation/drift, scheduling, restart/failure recovery,
+concurrency hardening, SQLite durability, backup/restore, health checks, observability, performance
+baselines, security hardening, configuration management, controlled pilot mode, non-authoritative
+parallel-run comparison, and operator feedback — resulting in a tool ready for a **controlled dealership
+pilot alongside the legacy tool**. Source data is evidence, not truth; raw source is preserved; import
+success is not acceptance; **no cutover, legacy replacement, destructive migration, or production go-live
+occurs in Phase 11.** All Phase 1-10 domain mathematics, identity, policy, governance, workflows, and
+presentation contracts are preserved unchanged. Legacy line preserved at `3bf9162`. **BUG-CPO-002 =
+FIXED_END_TO_END**, retained permanently in regression coverage. Phase 12 not started.

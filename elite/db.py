@@ -1127,6 +1127,192 @@ MIGRATIONS = [
             updated_at TEXT NOT NULL
         );
     """),
+    (11, "operational_pilot_readiness", """
+        -- Phase 11 OPERATIONAL records. These describe how source data was ingested, reconciled, scheduled,
+        -- backed up, compared, and reviewed for a controlled pilot. They hold NO business truth: no Demand,
+        -- Need, Supply, Economic Call, Decision, approval, execution, policy, or identity value lives here.
+        -- Raw source evidence stays in the Phase 2 records (source_observation / import_batch / payload);
+        -- these tables only REFERENCE it. Point-in-time evidence rows are immutable (no-update + no-delete);
+        -- lifecycle/registry rows are append-preserving (no-delete) so history is never lost on restart.
+
+        -- Import orchestration run (state machine over a single source file/payload).
+        CREATE TABLE import_run (
+            id TEXT PRIMARY KEY, source_id TEXT NOT NULL, source_contract TEXT, adapter_key TEXT,
+            adapter_version INTEGER, file_receipt_id TEXT, content_hash TEXT, received_at TEXT NOT NULL,
+            source_effective_time TEXT, store_scope TEXT NOT NULL, initiated_by TEXT, scheduled_actor TEXT,
+            row_count INTEGER NOT NULL DEFAULT 0, accepted_count INTEGER NOT NULL DEFAULT 0,
+            rejected_count INTEGER NOT NULL DEFAULT 0, duplicate_count INTEGER NOT NULL DEFAULT 0,
+            unresolved_count INTEGER NOT NULL DEFAULT 0, reconciliation_status TEXT,
+            state TEXT NOT NULL DEFAULT 'RECEIVED', started_at TEXT, completed_at TEXT, failure_stage TEXT,
+            error_class TEXT, retry_of TEXT, correlation_id TEXT, import_batch_id TEXT,
+            prior_valid_state_ref TEXT, detail TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TRIGGER import_run_no_delete BEFORE DELETE ON import_run
+            BEGIN SELECT RAISE(ABORT, 'import_run is preserved'); END;
+        CREATE INDEX ix_import_run_source ON import_run(source_id, store_scope, content_hash);
+
+        -- Immutable per-run error evidence (safe messages only; never a secret or raw customer row).
+        CREATE TABLE import_run_error (
+            id TEXT PRIMARY KEY, import_run_id TEXT NOT NULL, stage TEXT NOT NULL, error_class TEXT NOT NULL,
+            safe_message TEXT, correlation_id TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER import_run_error_no_update BEFORE UPDATE ON import_run_error
+            BEGIN SELECT RAISE(ABORT, 'import_run_error is immutable'); END;
+        CREATE TRIGGER import_run_error_no_delete BEFORE DELETE ON import_run_error
+            BEGIN SELECT RAISE(ABORT, 'import_run_error is preserved'); END;
+
+        -- Adapter version registry (documented, testable transforms). Append-preserving.
+        CREATE TABLE source_adapter_version (
+            id TEXT PRIMARY KEY, adapter_key TEXT NOT NULL, version INTEGER NOT NULL, source_family TEXT,
+            file_kind TEXT, description TEXT, transforms_doc TEXT, superseded_by TEXT, created_at TEXT NOT NULL,
+            UNIQUE(adapter_key, version)
+        );
+        CREATE TRIGGER source_adapter_version_no_delete BEFORE DELETE ON source_adapter_version
+            BEGIN SELECT RAISE(ABORT, 'source_adapter_version is preserved'); END;
+
+        -- Controlled file intake receipt. Append-preserving; a rejected file is quarantined, never silently
+        -- overwritten. stored_ref points at retained raw evidence (never deleted by cleanup).
+        CREATE TABLE source_file_receipt (
+            id TEXT PRIMARY KEY, source_id TEXT, original_filename TEXT, sanitized_filename TEXT,
+            content_hash TEXT NOT NULL, size_bytes INTEGER NOT NULL, media_type TEXT, store_scope TEXT,
+            received_by TEXT, received_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'received',
+            quarantine_reason TEXT, stored_ref TEXT, correlation_id TEXT
+        );
+        CREATE TRIGGER source_file_receipt_no_delete BEFORE DELETE ON source_file_receipt
+            BEGIN SELECT RAISE(ABORT, 'source_file_receipt is preserved'); END;
+
+        -- Domain-aware freshness evidence (append-preserving history; a restored current source never
+        -- erases prior stale rows).
+        CREATE TABLE source_freshness_result (
+            id TEXT PRIMARY KEY, source_id TEXT NOT NULL, store_scope TEXT, domain TEXT,
+            last_received_at TEXT, source_effective_time TEXT, expected_cadence_seconds INTEGER,
+            age_seconds INTEGER, stale_threshold_seconds INTEGER, status TEXT NOT NULL, blocking_impact TEXT,
+            affected TEXT, confidence_impact TEXT, evidence TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER source_freshness_result_no_update BEFORE UPDATE ON source_freshness_result
+            BEGIN SELECT RAISE(ABORT, 'source_freshness_result is immutable'); END;
+        CREATE TRIGGER source_freshness_result_no_delete BEFORE DELETE ON source_freshness_result
+            BEGIN SELECT RAISE(ABORT, 'source_freshness_result is preserved'); END;
+
+        -- Operational reconciliation / drift evidence (references exact source + domain records).
+        CREATE TABLE source_reconciliation_result (
+            id TEXT PRIMARY KEY, import_run_id TEXT, source_id TEXT, store_scope TEXT, domain TEXT,
+            subject_ref TEXT, source_record_ref TEXT, domain_record_ref TEXT, outcome TEXT NOT NULL,
+            cause TEXT, detail TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER source_reconciliation_result_no_update BEFORE UPDATE ON source_reconciliation_result
+            BEGIN SELECT RAISE(ABORT, 'source_reconciliation_result is immutable'); END;
+        CREATE TRIGGER source_reconciliation_result_no_delete BEFORE DELETE ON source_reconciliation_result
+            BEGIN SELECT RAISE(ABORT, 'source_reconciliation_result is preserved'); END;
+
+        -- Scheduling: stable job identity (registry) + per-fire run evidence.
+        CREATE TABLE scheduled_job (
+            id TEXT PRIMARY KEY, job_key TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, cadence TEXT,
+            timezone TEXT NOT NULL DEFAULT 'UTC', enabled INTEGER NOT NULL DEFAULT 1, store_scope TEXT,
+            description TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TRIGGER scheduled_job_no_delete BEFORE DELETE ON scheduled_job
+            BEGIN SELECT RAISE(ABORT, 'scheduled_job is preserved'); END;
+        -- Append-preserving (a run has a running -> ran/failed lifecycle); UNIQUE claim prevents an
+        -- overlapping duplicate fire for the same scheduled instant.
+        CREATE TABLE scheduled_job_run (
+            id TEXT PRIMARY KEY, job_id TEXT NOT NULL, job_key TEXT NOT NULL, scheduled_for TEXT,
+            trigger TEXT NOT NULL DEFAULT 'scheduled', status TEXT NOT NULL, started_at TEXT, completed_at TEXT,
+            correlation_id TEXT, detail TEXT, recorded_at TEXT NOT NULL, UNIQUE(job_key, scheduled_for, trigger)
+        );
+        CREATE TRIGGER scheduled_job_run_no_delete BEFORE DELETE ON scheduled_job_run
+            BEGIN SELECT RAISE(ABORT, 'scheduled_job_run is preserved'); END;
+
+        -- Health-check evidence (liveness / readiness / operational).
+        CREATE TABLE health_check_result (
+            id TEXT PRIMARY KEY, check_kind TEXT NOT NULL, component TEXT NOT NULL, status TEXT NOT NULL,
+            detail TEXT, correlation_id TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER health_check_result_no_update BEFORE UPDATE ON health_check_result
+            BEGIN SELECT RAISE(ABORT, 'health_check_result is immutable'); END;
+        CREATE TRIGGER health_check_result_no_delete BEFORE DELETE ON health_check_result
+            BEGIN SELECT RAISE(ABORT, 'health_check_result is preserved'); END;
+
+        -- Backup + restore-validation evidence. Append-preserving (retention updates status, never deletes
+        -- the record); backup does not replace source raw-file retention.
+        CREATE TABLE backup_record (
+            id TEXT PRIMARY KEY, artifact_ref TEXT, content_hash TEXT, size_bytes INTEGER,
+            source_schema_version INTEGER, integrity_verified INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL,
+            retention_class TEXT, metadata TEXT, correlation_id TEXT, created_at TEXT NOT NULL,
+            expired_at TEXT
+        );
+        CREATE TRIGGER backup_record_no_delete BEFORE DELETE ON backup_record
+            BEGIN SELECT RAISE(ABORT, 'backup_record is preserved'); END;
+        CREATE TABLE restore_validation (
+            id TEXT PRIMARY KEY, backup_record_id TEXT NOT NULL, started_ok INTEGER NOT NULL DEFAULT 0,
+            migration_version_matched INTEGER NOT NULL DEFAULT 0, counts_matched INTEGER NOT NULL DEFAULT 0,
+            observed_version INTEGER, detail TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER restore_validation_no_update BEFORE UPDATE ON restore_validation
+            BEGIN SELECT RAISE(ABORT, 'restore_validation is immutable'); END;
+        CREATE TRIGGER restore_validation_no_delete BEFORE DELETE ON restore_validation
+            BEGIN SELECT RAISE(ABORT, 'restore_validation is preserved'); END;
+
+        -- Non-authoritative parallel-run comparison between Elite Pipeline and available legacy output.
+        CREATE TABLE pilot_comparison_run (
+            id TEXT PRIMARY KEY, domain TEXT NOT NULL, store_scope TEXT, initiated_by TEXT,
+            trigger TEXT NOT NULL DEFAULT 'manual', subject_count INTEGER NOT NULL DEFAULT 0,
+            match_count INTEGER NOT NULL DEFAULT 0, difference_count INTEGER NOT NULL DEFAULT 0,
+            unresolved_count INTEGER NOT NULL DEFAULT 0, started_at TEXT, completed_at TEXT,
+            correlation_id TEXT, detail TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TRIGGER pilot_comparison_run_no_delete BEFORE DELETE ON pilot_comparison_run
+            BEGIN SELECT RAISE(ABORT, 'pilot_comparison_run is preserved'); END;
+        -- The elite_result / legacy_result / difference / classification columns are captured once and
+        -- never rewritten (comparison mutates NEITHER tool's result); only the review fields are updated
+        -- by a governed review. Append-preserving.
+        CREATE TABLE pilot_comparison_result (
+            id TEXT PRIMARY KEY, comparison_run_id TEXT NOT NULL, domain TEXT NOT NULL, subject_ref TEXT,
+            elite_result TEXT, legacy_result TEXT, difference TEXT, classification TEXT NOT NULL,
+            likely_source TEXT, reviewer TEXT, disposition TEXT, notes TEXT, evidence TEXT,
+            recorded_at TEXT NOT NULL, reviewed_at TEXT
+        );
+        CREATE TRIGGER pilot_comparison_result_no_delete BEFORE DELETE ON pilot_comparison_result
+            BEGIN SELECT RAISE(ABORT, 'pilot_comparison_result is preserved'); END;
+
+        -- Structured pilot operator feedback. Never mutates authoritative data; an incorrect-result claim
+        -- creates review, not a correction. Append-preserving (status/disposition update in place).
+        CREATE TABLE operator_feedback (
+            id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, store_scope TEXT, category TEXT NOT NULL,
+            subject_ref TEXT, screen_ref TEXT, revision_ref TEXT, description TEXT, severity TEXT,
+            expected_behavior TEXT, actual_behavior TEXT, evidence_ref TEXT, status TEXT NOT NULL DEFAULT 'open',
+            owner TEXT, disposition TEXT, correction_ref TEXT, audit_ref TEXT, created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TRIGGER operator_feedback_no_delete BEFORE DELETE ON operator_feedback
+            BEGIN SELECT RAISE(ABORT, 'operator_feedback is preserved'); END;
+
+        -- Pilot-readiness certification (evidence-based; material unresolved discrepancy blocks ready).
+        CREATE TABLE pilot_readiness_certification (
+            id TEXT PRIMARY KEY, store_scope TEXT, domain TEXT, classification TEXT NOT NULL, blockers TEXT,
+            evidence TEXT, certified_by TEXT, correlation_id TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TRIGGER pilot_readiness_certification_no_delete BEFORE DELETE ON pilot_readiness_certification
+            BEGIN SELECT RAISE(ABORT, 'pilot_readiness_certification is preserved'); END;
+
+        -- Performance-baseline evidence (environment + dataset size + cold/warm + duration).
+        CREATE TABLE operational_metric (
+            id TEXT PRIMARY KEY, metric_key TEXT NOT NULL, workload TEXT, dataset_size INTEGER, environment TEXT,
+            cold INTEGER NOT NULL DEFAULT 0, duration_ms REAL, detail TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER operational_metric_no_update BEFORE UPDATE ON operational_metric
+            BEGIN SELECT RAISE(ABORT, 'operational_metric is immutable'); END;
+        CREATE TRIGGER operational_metric_no_delete BEFORE DELETE ON operational_metric
+            BEGIN SELECT RAISE(ABORT, 'operational_metric is preserved'); END;
+
+        -- A reference to where bounded operational logs live (rotation/retention). Not a log copy.
+        CREATE TABLE operational_log_reference (
+            id TEXT PRIMARY KEY, log_kind TEXT NOT NULL, location_ref TEXT, retention_class TEXT,
+            rotation_policy TEXT, note TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER operational_log_reference_no_delete BEFORE DELETE ON operational_log_reference
+            BEGIN SELECT RAISE(ABORT, 'operational_log_reference is preserved'); END;
+    """),
 ]
 
 

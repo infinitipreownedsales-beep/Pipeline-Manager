@@ -32,7 +32,7 @@ db.migrate()          # applies pending migrations; tracked in migration_record
 print("schema version:", db.version())
 ```
 
-### Run the platform tests (Phase 1 through Phase 10)
+### Run the platform tests (Phase 1 through Phase 11)
 ```
 PYTHONPATH=. python3 elite/tests/run_all.py
 # focused BUG-CPO-002 regressions (Phase 4 synthetic + Phase 5 end-to-end CPO workflow):
@@ -49,6 +49,9 @@ PYTHONPATH=. python3 -m unittest elite.tests.test_phase9_governed_decision_regre
 # focused operator-workflow + presentation-integrity regressions (Phase 10):
 PYTHONPATH=. python3 -m unittest elite.tests.test_phase10_operator_workflow_regression \
     elite.tests.test_phase10_presentation_integrity_regression -v
+# focused import-recovery + controlled-pilot regressions (Phase 11):
+PYTHONPATH=. python3 -m unittest elite.tests.test_phase11_import_recovery_regression \
+    elite.tests.test_phase11_controlled_pilot_regression -v
 ```
 
 ### Phase 2 — data/identity/facts (example)
@@ -242,6 +245,33 @@ Presentation state is non-authoritative (migration v10) — deleting it changes 
 ```
 sqlite3 "$ELITE_DB_PATH" "DELETE FROM operator_view_preference;"   # no Decision/Need/Supply effect
 ```
+
+### Phase 11 — operational hardening + controlled pilot (example)
+The operational + pilot layer (`elite/ops/`) is stdlib-only (**no new dependency**). It hardens the Phase 10
+application for a controlled dealership pilot ALONGSIDE the legacy tool. Full runbooks, configuration
+reference, security checklist, and operator/administrator guides are in `PHASE11_RUNBOOKS.md`.
+
+Pilot packaging CLI:
+```
+export ELITE_ENV=development ELITE_DB_PATH=/path/to/pilot/elite.db ELITE_AUTH_SECRET=... ELITE_PILOT_SCOPE=store:HG
+PYTHONPATH=. python3 -m elite.ops.cli diagnostics                         # safe config + startup validation
+PYTHONPATH=. python3 -m elite.ops.cli import new_inventory_current export.csv
+PYTHONPATH=. python3 -m elite.ops.cli backup && PYTHONPATH=. python3 -m elite.ops.cli restore-validate
+PYTHONPATH=. python3 -m elite.ops.cli health store:HG                     # liveness / readiness / operational
+PYTHONPATH=. python3 -m elite.ops.cli scheduler health.check
+PYTHONPATH=. python3 -m elite.ops.cli serve                               # operator app in pilot mode
+```
+Drive the operational + pilot stack in-process:
+```python
+from elite.ops.fixtures import Phase11
+p = Phase11("/path/to/elite.db")                              # migrates v1..v11; pilot mode on
+run = p.import_payload("new_inventory_current", open("export.csv").read(), effective_time=p.now_iso())
+print(run["state"])                                           # COMPLETED / REJECTED / FAILED (safe)
+print(p.health.readiness("store:HG")["status"])               # READY / READY_WITH_WARNINGS / NOT_READY
+print(p.pilot.banner())                                       # PILOT MODE — legacy remains the fallback
+```
+Operational records are evidence only (migration v11) — deleting a domain record is impossible from here;
+the layer references the authoritative Phase 1-10 records and recomputes no domain math.
 
 ### Inspect the authoritative store
 ```

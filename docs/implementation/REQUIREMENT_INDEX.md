@@ -60,6 +60,7 @@ Human-readable view. Machine-readable source of truth: `docs/implementation/requ
 - Phase 8 (prediction/observation/error/attribution/learning/calibration): `PHASE8_TRACEABILITY.md`.
 - Phase 9 (governance/decision-workspace/scenario-admin/operational-control): `PHASE9_TRACEABILITY.md`.
 - Phase 10 (operator experience/presentation layer): `PHASE10_TRACEABILITY.md`.
+- Phase 11 (operational hardening/real-source integration/controlled pilot readiness): `PHASE11_TRACEABILITY.md`.
 The canonical DOCX is unchanged, so `requirement_index.json` is unchanged; phase
 traceability maps implemented capabilities to owning segments/families (exact IDs
 bound at review).

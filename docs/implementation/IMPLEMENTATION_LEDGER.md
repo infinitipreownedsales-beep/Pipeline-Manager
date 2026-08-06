@@ -484,3 +484,124 @@ non-authoritative. No Phase 1-9 behavior changed; every prior domain remains sep
 Result: **Phase 10 complete → HOLD FOR REVIEW.** The operator application is a faithful window over the
 authoritative Phase 1-9 platform — no second business-logic layer, no authoritative browser state, no
 bypass of below-UI authorization or scope. Next: Phase 11 only after review.
+
+## Phase 10 review disposition — APPROVED
+
+Phase 10 (operator experience + presentation layer; `elite/ui/` + migration v10) reviewed and **approved**.
+Recorded here and in IMPLEMENTATION_CONTROL.md. Legacy line preserved at `3bf9162`. Phase 10 is preserved
+at commit `05ba436` as the first complete working application baseline. The operator application is a
+faithful read-only window over the authoritative Phase 1-9 platform (no second business-logic layer, no
+authoritative browser state, no bypass of below-UI authorization or scope). BUG-CPO-002 remains
+FIXED_END_TO_END.
+
+## Phase 11 — Operational Hardening, Real-Source Integration, and Controlled Pilot Readiness  (branch `elite-pipeline/phase-0`)  [COMPLETE — HOLD FOR REVIEW]
+
+Control records: Phase 10 recorded approved; Phase 11 set active. Hardening the working Elite Pipeline
+application (`elite/ops/`) for realistic dealership operation, appending migration v11 (operational
+records — append-preserving; no earlier migration modified; no business truth moved into the operational
+layer), touching no legacy file and preserving Phase 10 at `05ba436` as the first complete working
+application baseline. Scope: real-source adapter contracts; controlled file ingestion; source
+discovery/validation; operational scheduling; import orchestration; data freshness; reconciliation/drift;
+restart recovery; failure recovery; concurrency hardening; transaction durability; backup + restore;
+observability; structured logging; health checks; performance baselines; security hardening; configuration
+management; secret handling; pilot environment setup; controlled parallel-run comparison; operator feedback
+capture; release packaging; deployment documentation; and pilot-readiness certification — resulting in a
+tool ready for a controlled dealership pilot alongside the legacy tool.
+
+Binding operational principles (verbatim intent): source data is evidence, not automatically truth; raw
+source must remain preserved; import success is not acceptance; acceptance is not reconciliation;
+reconciliation is not automatic business action; Partial Snapshot must never act like Full Snapshot;
+missing rows must not become deletions unless the source contract permits absence reconciliation; file
+import time must not replace business effective time; real-source irregularities must not be fixed through
+hidden UI logic; invalid or conflicting source data must remain visible; restart must not duplicate
+imports, facts, Decisions, commitments, or workflow actions; failed import must not corrupt the last valid
+operational state; the application must recover safely after interruption; operational diagnostics must not
+expose customer data, secrets, or unnecessary VIN-level detail; logging must be useful without becoming an
+ungoverned data copy; pilot mode must run alongside the legacy system; pilot comparison must not silently
+mutate Elite Pipeline results to match the legacy tool; legacy disagreement is evidence for review, not
+proof Elite Pipeline is wrong; Elite Pipeline disagreement is not automatically proof the legacy tool is
+wrong; **no cutover occurs in Phase 11.** All Phase 1-10 domain mathematics, identity, policy, governance,
+workflows, and presentation contracts are preserved unchanged; the platform architecture is not redesigned;
+no new business rule is added merely to accommodate malformed live data; no final cutover / legacy
+replacement / destructive migration / production go-live. Carries a dedicated 15-point import-recovery
+regression and a dedicated 20-point controlled-pilot regression.
+
+Implemented a NEW `elite/ops/` package + migration v11 (appended; v1-v10 unchanged), touching no legacy
+file and preserving Phase 10 at `05ba436`: a Python **stdlib-only** operational + controlled-pilot layer
+over the Phase 10 application. Real-source adapters over Phase 2 ingestion (produce the Phase 2 canonical
+contract; never write domain state; explicit schema detection; deterministic encoding/delimiter/date/
+decimal/currency/blank handling; original-row traceability; recorded adapter version); a source-contract
+registry documenting the pilot source families (owner/system/access/file-kind/cadence/snapshot-capability/
+identity-keys/effective+update-time/schema-version/required+optional fields/units/blank-zero-missing/
+duplicate/correction/absence/quality-thresholds/blocking-vs-nonblocking/raw-retention/expected-
+reconciliation; manual-governed where no automated source exists — never a fabricated feed); controlled
+file intake (extension allowlist, bounded size, filename + path-traversal sanitization, content hash,
+duplicate detection, quarantine, upload authorization + scope, no executable handling, no silent
+overwrite); an authoritative import-run orchestrator (RECEIVED→VALIDATING→VALIDATED→INGESTING→INGESTED→
+RECONCILING→COMPLETED/COMPLETED_WITH_WARNINGS with REJECTED/FAILED/CANCELLED/SUPERSEDED; same content
+idempotent; failed import preserves the prior accepted state; partial never masquerades as complete; retry
+links to the failed run; safe, operator-visible failure detail); domain-aware freshness (effective-time +
+cadence — never file import time; a fresh upload with a stale effective date stays STALE; stale/missing
+blocks readiness and reduces confidence; append-preserving history a restored-current reading never
+erases); operational reconciliation/drift referencing the exact source + domain records (MATCHED..UNRESOLVED
+incl LEGACY_DIFFERENCE; a difference never auto-corrects; Full/Partial snapshot semantics preserved — a
+Full-Snapshot absence is MISSING_EXPECTED, never a deletion; one physical unit never duplicated; unknown
+cause stays UNRESOLVED); controlled scheduling (stable job identity; idempotent fire; missed-run visible;
+overlap-safe; explicit timezone; manual vs scheduled distinguishable; scheduler failure corrupts nothing);
+restart/crash recovery (in-flight runs → failed/reviewable; committed stays committed; rolled-back leaves no
+partial state; nothing replayed; no evidence deleted); concurrency hardening (optimistic concurrency +
+idempotency → exactly-once effects; stale browser submission rejected; no silent lost update, no duplicate
+commitment/receipt/activation/Current-Supply); SQLite durability (foreign keys, WAL, synchronous, busy
+timeout, integrity check, startup validation); transactionally-consistent backup (online backup API;
+timestamped, content-hashed, integrity-verified, metadata-recorded) + non-destructive restore validation
+(reproduces authoritative counts + migration version; failed-backup alert; retention preserves the record
+and the raw source-file evidence; NO automated destructive production restore); three-way health checks
+(liveness / readiness / operational — a live application may be operationally NOT ready); safe operational
+logging (correlation IDs; NO secret/token/session-ID/customer-PII; VIN masking; raw rows never logged; a
+logging failure never corrupts a governed action); performance baselines (immutable metrics with
+environment + dataset size + cold/warm; slow-query evidence; optimization changes no authoritative result;
+no stale-risk caching); security hardening (session expiry + invalidation; environment-aware cookie flags;
+CSRF; scope isolation; authority revocation; a runnable deployment-posture checklist — no default
+credential, secrets externalized, debug off outside dev/test, safe host binding, pilot not labeled
+production); configuration management (safe defaults; startup validation; secret hygiene; a non-loopback
+bind requires explicit opt-in; invalid config fails clearly; safe diagnostics expose no secret; environment-
+specific config never changes domain logic); a visible, enforceable controlled pilot mode ALONGSIDE the
+legacy tool (banner + environment; legacy fallback preserved; destructive cutover / legacy-replacement /
+destructive-migration / production-go-live BLOCKED); a non-authoritative parallel-run comparison (captures
+the Elite and legacy results, classifies the difference, MUTATES NEITHER result — only governed review
+fields — keeps an unknown cause UNRESOLVED, stores reviewer rationale only as supplied, and blocks readiness
+on a material unresolved difference until reviewed); structured operator feedback (references the exact
+screen + revision; never mutates authoritative data; an incorrect-result claim opens a review, not an
+automatic correction; governed + audit-referenced); evidence-based pilot-readiness certification
+(READY/READY_WITH_WARNINGS/NOT_READY); and a pilot packaging CLI (`elite.ops.cli`:
+diagnostics/health/import/backup/restore-validate/scheduler/serve). Migration v11 adds seventeen operational
+records (import_run + import_run_error, source_adapter_version, source_file_receipt, source_freshness_result,
+source_reconciliation_result, scheduled_job + scheduled_job_run, health_check_result, backup_record +
+restore_validation, pilot_comparison_run + pilot_comparison_result, operator_feedback,
+pilot_readiness_certification, operational_metric, operational_log_reference): point-in-time evidence is
+immutable (no-update + no-delete), lifecycle/registry rows are append-preserving (no-delete); NO business
+truth is moved into the operational layer and raw source references are retained.
+
+Evidence executed: platform harness **826/826** (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 + 79 P6 + 79 P7 +
+91 P8 + 104 P9 + 98 P10 + 109 P11); legacy **39/39** (29 engine + 10 loaner); migration v11 rerun-safe;
+legacy application paths byte-unchanged vs `legacy/inventory-tool` @ `3bf9162`. All 106 mandatory acceptance
+items pass, plus the dedicated 15-point import-recovery regression and the 20-point controlled-pilot
+regression (PHASE11_COMPLETION.md). The import-recovery loop is proven end to end (prior valid state → new
+import → interruption before acceptance → rollback → prior state intact → failed/reviewable run → linked
+retry → corrected retry succeeds → facts exactly once → restart no replay → freshness updates → traceable
+audit/correlation → no raw/secret in logs). The controlled-pilot loop is proven end to end (pilot banner +
+legacy fallback → cutover blocked → comparison preserves both results + classifies + keeps unknown
+unresolved + records rationale + mutates neither → material unresolved blocks readiness → acceptable review
+permits ready-with-warnings → feedback references exact revision + alters nothing → backup succeeds → health
+distinguishes live from ready → restart preserves comparison + feedback history → pilot continues after a
+failed import using the prior valid state → no production cutover).
+
+Docs: PHASE11_COMPLETION, PHASE11_ARCHITECTURE, PHASE11_RUNBOOKS, PHASE11_TRACEABILITY, adr/ADR-0041..0046;
+updated IMPLEMENTATION_CONTROL, IMPLEMENTATION_LEDGER, KNOWN_BUG_REGISTRY, REQUIREMENT_INDEX (note),
+requirement_index.json (note), RUN_INSTRUCTIONS. No Phase 1-10 behavior changed; every prior domain +
+presentation contract remains unmodified.
+
+Result: **Phase 11 complete → HOLD FOR REVIEW.** The application is hardened for a controlled dealership
+pilot alongside the legacy tool — source data is evidence not truth, raw source preserved, import success
+not acceptance, and no cutover / legacy replacement / destructive migration / production go-live occurred.
+BUG-CPO-002 remains FIXED_END_TO_END. Next: Phase 12 only after review.
