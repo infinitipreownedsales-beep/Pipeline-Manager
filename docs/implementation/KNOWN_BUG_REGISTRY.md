@@ -91,7 +91,17 @@ contract fields. New defects append here with a stable ID.
   raise Need or rewrite an issued recommendation, Prediction, planning result, or Demand
   (`elite/tests/test_phase11_freshness_reconcile.py` test_018/test_019; the 15-point import-recovery and
   20-point controlled-pilot regressions; cross-phase greens items 94-103). Migration v11 adds operational
-  records with no business truth and touches no Phase 4-10 domain record.
+  records with no business truth and touches no Phase 4-10 domain record. Verified still green under
+  migration v12 / Phase 12 (Live Integration + Real-Data Migration + Cutover Package): real data migrates
+  into a DEDICATED migration database through the real adapters/orchestrator (no fabricated source; snapshot
+  ≠ continuous; migration date ≠ event date; duplicates do not duplicate facts), domain-state reconstruction
+  uses accepted real facts with Demand-independence / monotonic-Supply / count-once preserved, and the live
+  executor writes real domain records through the real governed Phase 5-7 methods — so no migration,
+  reconstruction, parallel validation, or live execution can raise Need or rewrite an issued recommendation,
+  Prediction, planning result, or Demand (`elite/tests/test_phase12_migration.py` test_029..034; the 20-point
+  live-execution and 25-point final-readiness regressions; cross-phase greens items 101-111). Migration v12
+  adds live-integration/migration/validation/release records with no business truth and touches no Phase 4-11
+  domain record. No irreversible production cutover occurred.
 - **Regression fixture (Phase 4):** `elite/tests/test_phase4_bug_cpo_002.py` — baseline
   Demand + qualifying Supply + Need; add an approved synthetic CPO-like commitment only as
   Committed Supply; Demand unchanged; qualifying Supply increases by exactly the committed

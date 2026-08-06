@@ -1313,6 +1313,243 @@ MIGRATIONS = [
         CREATE TRIGGER operational_log_reference_no_delete BEFORE DELETE ON operational_log_reference
             BEGIN SELECT RAISE(ABORT, 'operational_log_reference is preserved'); END;
     """),
+    (12, "live_migration_release", """
+        -- Phase 12 LIVE-INTEGRATION + MIGRATION + VALIDATION + RELEASE records. These describe how real
+        -- data was connected, migrated, reconciled, validated against the legacy tool, accepted by
+        -- operators, rehearsed, packaged, certified, and (only by explicit governed Decision) authorized
+        -- for go-live. They hold NO business truth: real domain state lives in the Phase 2-9 records this
+        -- layer REFERENCES. Point-in-time evidence is immutable (no-update+no-delete); lifecycle/registry
+        -- rows are append-preserving (no-delete). A release package is immutable once issued. NO cutover
+        -- state is ever automatically activated.
+
+        -- Live-source connection inventory (real availability; unavailable sources classified, not faked).
+        CREATE TABLE live_source_connection (
+            id TEXT PRIMARY KEY, source_family TEXT NOT NULL, actual_system TEXT, source_owner TEXT,
+            access_method TEXT, availability TEXT, auth_method TEXT, environment TEXT, cadence TEXT,
+            expected_timing TEXT, snapshot_capability TEXT, actual_schema TEXT, schema_drift_risk TEXT,
+            identity_fields TEXT, effective_time_behavior TEXT, correction_behavior TEXT,
+            absence_semantics TEXT, operational_dependency TEXT, fallback_procedure TEXT,
+            integration_status TEXT, unresolved_blocker TEXT, classification TEXT NOT NULL,
+            recorded_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TRIGGER live_source_connection_no_delete BEFORE DELETE ON live_source_connection
+            BEGIN SELECT RAISE(ABORT, 'live_source_connection is preserved'); END;
+        CREATE TABLE live_source_schema_version (
+            id TEXT PRIMARY KEY, connection_id TEXT, source_family TEXT NOT NULL, version INTEGER NOT NULL,
+            schema_json TEXT, mapping_json TEXT, superseded_by TEXT, registered_at TEXT NOT NULL,
+            UNIQUE(source_family, version)
+        );
+        CREATE TRIGGER live_source_schema_version_no_delete BEFORE DELETE ON live_source_schema_version
+            BEGIN SELECT RAISE(ABORT, 'live_source_schema_version is preserved'); END;
+
+        -- Migration run (into a DEDICATED migration/pilot database; never production-primary).
+        CREATE TABLE migration_run (
+            id TEXT PRIMARY KEY, target_db TEXT, environment TEXT, initiated_by TEXT, state TEXT NOT NULL
+            DEFAULT 'STARTED', started_at TEXT, completed_at TEXT, input_manifest TEXT, counts_json TEXT,
+            duration_ms REAL, correlation_id TEXT, detail TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TRIGGER migration_run_no_delete BEFORE DELETE ON migration_run
+            BEGIN SELECT RAISE(ABORT, 'migration_run is preserved'); END;
+        CREATE TABLE migration_run_source (
+            id TEXT PRIMARY KEY, migration_run_id TEXT NOT NULL, source_family TEXT, import_run_ref TEXT,
+            content_hash TEXT, row_count INTEGER, accepted_count INTEGER, rejected_count INTEGER,
+            snapshot_type TEXT, outcome TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER migration_run_source_no_update BEFORE UPDATE ON migration_run_source
+            BEGIN SELECT RAISE(ABORT, 'migration_run_source is immutable'); END;
+        CREATE TRIGGER migration_run_source_no_delete BEFORE DELETE ON migration_run_source
+            BEGIN SELECT RAISE(ABORT, 'migration_run_source is preserved'); END;
+
+        -- Identity + fact migration reconciliation (immutable evidence).
+        CREATE TABLE migration_identity_reconciliation (
+            id TEXT PRIMARY KEY, migration_run_id TEXT NOT NULL, subject_kind TEXT, source_key TEXT,
+            resolved_entity_ref TEXT, outcome TEXT NOT NULL, cause TEXT, evidence TEXT, correction_of TEXT,
+            authority TEXT, reason TEXT, audit_ref TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER migration_identity_reconciliation_no_update BEFORE UPDATE ON migration_identity_reconciliation
+            BEGIN SELECT RAISE(ABORT, 'migration_identity_reconciliation is immutable'); END;
+        CREATE TRIGGER migration_identity_reconciliation_no_delete BEFORE DELETE ON migration_identity_reconciliation
+            BEGIN SELECT RAISE(ABORT, 'migration_identity_reconciliation is preserved'); END;
+        CREATE TABLE migration_fact_reconciliation (
+            id TEXT PRIMARY KEY, migration_run_id TEXT NOT NULL, fact_type TEXT, subject_ref TEXT,
+            source_row_ref TEXT, resulting_fact_ref TEXT, outcome TEXT NOT NULL, cause TEXT, detail TEXT,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER migration_fact_reconciliation_no_update BEFORE UPDATE ON migration_fact_reconciliation
+            BEGIN SELECT RAISE(ABORT, 'migration_fact_reconciliation is immutable'); END;
+        CREATE TRIGGER migration_fact_reconciliation_no_delete BEFORE DELETE ON migration_fact_reconciliation
+            BEGIN SELECT RAISE(ABORT, 'migration_fact_reconciliation is preserved'); END;
+
+        -- Policy + authority migration (governed; from confirmed values only).
+        CREATE TABLE migration_policy_resolution (
+            id TEXT PRIMARY KEY, migration_run_id TEXT, policy_family TEXT NOT NULL, proposed_value TEXT,
+            owner TEXT, evidence TEXT, store_scope TEXT, effective_date TEXT, authority TEXT,
+            status TEXT NOT NULL DEFAULT 'confirmed', policy_version_ref TEXT, conflict_with TEXT,
+            recorded_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TRIGGER migration_policy_resolution_no_delete BEFORE DELETE ON migration_policy_resolution
+            BEGIN SELECT RAISE(ABORT, 'migration_policy_resolution is preserved'); END;
+        CREATE TABLE migration_authority_configuration (
+            id TEXT PRIMARY KEY, migration_run_id TEXT, principal_ref TEXT NOT NULL, role TEXT,
+            capability TEXT, store_scope TEXT, grant_ref TEXT, status TEXT NOT NULL DEFAULT 'configured',
+            temporary INTEGER NOT NULL DEFAULT 0, expires_at TEXT, audit_ref TEXT, recorded_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TRIGGER migration_authority_configuration_no_delete BEFORE DELETE ON migration_authority_configuration
+            BEGIN SELECT RAISE(ABORT, 'migration_authority_configuration is preserved'); END;
+
+        -- Domain shadow mode (event log; the latest row is the current mode; changes are governed).
+        CREATE TABLE domain_shadow_mode (
+            id TEXT PRIMARY KEY, domain TEXT NOT NULL, store_scope TEXT, mode TEXT NOT NULL,
+            changed_by TEXT, reason TEXT, audit_ref TEXT, correlation_id TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER domain_shadow_mode_no_update BEFORE UPDATE ON domain_shadow_mode
+            BEGIN SELECT RAISE(ABORT, 'domain_shadow_mode is immutable (append a new mode row)'); END;
+        CREATE TRIGGER domain_shadow_mode_no_delete BEFORE DELETE ON domain_shadow_mode
+            BEGIN SELECT RAISE(ABORT, 'domain_shadow_mode is preserved'); END;
+
+        -- Sustained parallel validation (Elite vs legacy; both outputs preserved; mutates neither).
+        CREATE TABLE parallel_validation_run (
+            id TEXT PRIMARY KEY, run_date TEXT, store_scope TEXT, elite_revision TEXT, legacy_revision TEXT,
+            subject_count INTEGER NOT NULL DEFAULT 0, match_count INTEGER NOT NULL DEFAULT 0,
+            difference_count INTEGER NOT NULL DEFAULT 0, unresolved_count INTEGER NOT NULL DEFAULT 0,
+            material_count INTEGER NOT NULL DEFAULT 0, initiated_by TEXT, correlation_id TEXT, detail TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TRIGGER parallel_validation_run_no_delete BEFORE DELETE ON parallel_validation_run
+            BEGIN SELECT RAISE(ABORT, 'parallel_validation_run is preserved'); END;
+        CREATE TABLE parallel_validation_result (
+            id TEXT PRIMARY KEY, parallel_run_id TEXT NOT NULL, domain TEXT, subject_ref TEXT,
+            elite_value TEXT, legacy_value TEXT, difference TEXT, classification TEXT NOT NULL,
+            materiality TEXT, reviewer TEXT, disposition TEXT, readiness_impact TEXT, notes TEXT,
+            recorded_at TEXT NOT NULL, reviewed_at TEXT
+        );
+        CREATE TRIGGER parallel_validation_result_no_delete BEFORE DELETE ON parallel_validation_result
+            BEGIN SELECT RAISE(ABORT, 'parallel_validation_result is preserved'); END;
+
+        -- Governed discrepancy burn-down.
+        CREATE TABLE discrepancy_record (
+            id TEXT PRIMARY KEY, parallel_result_ref TEXT, domain TEXT, store_scope TEXT, summary TEXT,
+            status TEXT NOT NULL DEFAULT 'OPEN', classification TEXT, materiality TEXT, owner TEXT,
+            evidence TEXT, defect_ref TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TRIGGER discrepancy_record_no_delete BEFORE DELETE ON discrepancy_record
+            BEGIN SELECT RAISE(ABORT, 'discrepancy_record is preserved'); END;
+        CREATE TABLE discrepancy_transition (
+            id TEXT PRIMARY KEY, discrepancy_id TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL,
+            actor TEXT, reason TEXT, evidence TEXT, audit_ref TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER discrepancy_transition_no_update BEFORE UPDATE ON discrepancy_transition
+            BEGIN SELECT RAISE(ABORT, 'discrepancy_transition is immutable'); END;
+        CREATE TRIGGER discrepancy_transition_no_delete BEFORE DELETE ON discrepancy_transition
+            BEGIN SELECT RAISE(ABORT, 'discrepancy_transition is preserved'); END;
+
+        -- Operator acceptance testing (real application).
+        CREATE TABLE operator_acceptance_test (
+            id TEXT PRIMARY KEY, test_case TEXT NOT NULL, domain TEXT, store_scope TEXT,
+            environment_revision TEXT, source_revision TEXT, expected_result TEXT, operator TEXT,
+            status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TRIGGER operator_acceptance_test_no_delete BEFORE DELETE ON operator_acceptance_test
+            BEGIN SELECT RAISE(ABORT, 'operator_acceptance_test is preserved'); END;
+        CREATE TABLE operator_acceptance_result (
+            id TEXT PRIMARY KEY, uat_test_id TEXT NOT NULL, operator TEXT, actual_result TEXT,
+            outcome TEXT NOT NULL, evidence TEXT, issue_ref TEXT, disposition TEXT, retest_of TEXT,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER operator_acceptance_result_no_update BEFORE UPDATE ON operator_acceptance_result
+            BEGIN SELECT RAISE(ABORT, 'operator_acceptance_result is immutable'); END;
+        CREATE TRIGGER operator_acceptance_result_no_delete BEFORE DELETE ON operator_acceptance_result
+            BEGIN SELECT RAISE(ABORT, 'operator_acceptance_result is preserved'); END;
+
+        -- Migration / rollback / recovery rehearsals (immutable evidence).
+        CREATE TABLE migration_rehearsal (
+            id TEXT PRIMARY KEY, target_db TEXT, steps_json TEXT, input_hashes TEXT, output_counts TEXT,
+            duration_ms REAL, backup_ref TEXT, restart_verified INTEGER NOT NULL DEFAULT 0, outcome TEXT NOT NULL,
+            report TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER migration_rehearsal_no_update BEFORE UPDATE ON migration_rehearsal
+            BEGIN SELECT RAISE(ABORT, 'migration_rehearsal is immutable'); END;
+        CREATE TRIGGER migration_rehearsal_no_delete BEFORE DELETE ON migration_rehearsal
+            BEGIN SELECT RAISE(ABORT, 'migration_rehearsal is preserved'); END;
+        CREATE TABLE rollback_rehearsal (
+            id TEXT PRIMARY KEY, migration_rehearsal_ref TEXT, elite_history_preserved INTEGER NOT NULL DEFAULT 0,
+            legacy_available INTEGER NOT NULL DEFAULT 0, inflight_actions TEXT, replayed_into_legacy INTEGER NOT NULL
+            DEFAULT 0, outcome TEXT NOT NULL, report TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER rollback_rehearsal_no_update BEFORE UPDATE ON rollback_rehearsal
+            BEGIN SELECT RAISE(ABORT, 'rollback_rehearsal is immutable'); END;
+        CREATE TRIGGER rollback_rehearsal_no_delete BEFORE DELETE ON rollback_rehearsal
+            BEGIN SELECT RAISE(ABORT, 'rollback_rehearsal is preserved'); END;
+        CREATE TABLE recovery_rehearsal (
+            id TEXT PRIMARY KEY, scenario TEXT NOT NULL, committed_truth_preserved INTEGER NOT NULL DEFAULT 0,
+            unresolved_consequences TEXT, outcome TEXT NOT NULL, report TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER recovery_rehearsal_no_update BEFORE UPDATE ON recovery_rehearsal
+            BEGIN SELECT RAISE(ABORT, 'recovery_rehearsal is immutable'); END;
+        CREATE TRIGGER recovery_rehearsal_no_delete BEFORE DELETE ON recovery_rehearsal
+            BEGIN SELECT RAISE(ABORT, 'recovery_rehearsal is preserved'); END;
+
+        -- Release package (immutable once issued) + artifacts (immutable).
+        CREATE TABLE release_package (
+            id TEXT PRIMARY KEY, version_label TEXT NOT NULL, application_revision TEXT, migration_level INTEGER,
+            config_template_ref TEXT, source_registry_ref TEXT, adapter_versions TEXT, policy_versions TEXT,
+            calc_versions TEXT, authority_matrix TEXT, unresolved_risks TEXT, discrepancy_status TEXT,
+            uat_ref TEXT, migration_rehearsal_ref TEXT, rollback_rehearsal_ref TEXT, backup_ref TEXT,
+            health_ref TEXT, certification_ref TEXT, checksum_manifest TEXT, release_notes TEXT,
+            known_limitations TEXT, status TEXT NOT NULL DEFAULT 'draft', issued_at TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TRIGGER release_package_issued_immutable BEFORE UPDATE ON release_package
+            WHEN OLD.status = 'issued'
+            BEGIN SELECT RAISE(ABORT, 'release_package is immutable once issued'); END;
+        CREATE TRIGGER release_package_no_delete BEFORE DELETE ON release_package
+            BEGIN SELECT RAISE(ABORT, 'release_package is preserved'); END;
+        CREATE TABLE release_package_artifact (
+            id TEXT PRIMARY KEY, release_package_id TEXT NOT NULL, name TEXT, kind TEXT, ref TEXT,
+            checksum TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER release_package_artifact_no_update BEFORE UPDATE ON release_package_artifact
+            BEGIN SELECT RAISE(ABORT, 'release_package_artifact is immutable'); END;
+        CREATE TRIGGER release_package_artifact_no_delete BEFORE DELETE ON release_package_artifact
+            BEGIN SELECT RAISE(ABORT, 'release_package_artifact is preserved'); END;
+
+        -- Final readiness certification (governed) + per-dimension evidence (immutable).
+        CREATE TABLE final_readiness_certification (
+            id TEXT PRIMARY KEY, release_package_ref TEXT, store_scope TEXT, overall TEXT NOT NULL,
+            certified_by TEXT, evidence TEXT, correlation_id TEXT, superseded_by TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TRIGGER final_readiness_certification_no_delete BEFORE DELETE ON final_readiness_certification
+            BEGIN SELECT RAISE(ABORT, 'final_readiness_certification is preserved'); END;
+        CREATE TABLE final_readiness_dimension (
+            id TEXT PRIMARY KEY, certification_id TEXT NOT NULL, dimension TEXT NOT NULL, status TEXT NOT NULL,
+            evidence TEXT, note TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER final_readiness_dimension_no_update BEFORE UPDATE ON final_readiness_dimension
+            BEGIN SELECT RAISE(ABORT, 'final_readiness_dimension is immutable'); END;
+        CREATE TRIGGER final_readiness_dimension_no_delete BEFORE DELETE ON final_readiness_dimension
+            BEGIN SELECT RAISE(ABORT, 'final_readiness_dimension is preserved'); END;
+
+        -- Explicit governed release-authorization Decision (never automated; does not itself perform cutover).
+        CREATE TABLE release_authorization_decision (
+            id TEXT PRIMARY KEY, release_package_ref TEXT, certification_ref TEXT, disposition TEXT NOT NULL,
+            store_scope TEXT, enabled_domains TEXT, warnings_ack TEXT, risks_ack TEXT, rollback_plan_ref TEXT,
+            authorized_by TEXT, sod_second TEXT, expires_at TEXT, audit_ref TEXT, correlation_id TEXT,
+            superseded_by TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TRIGGER release_authorization_decision_no_delete BEFORE DELETE ON release_authorization_decision
+            BEGIN SELECT RAISE(ABORT, 'release_authorization_decision is preserved'); END;
+
+        -- Cutover runbook reference (documentation; does not execute).
+        CREATE TABLE cutover_runbook_reference (
+            id TEXT PRIMARY KEY, release_package_ref TEXT, runbook_ref TEXT, version TEXT, prerequisites TEXT,
+            abort_criteria TEXT, rollback_trigger TEXT, rollback_steps TEXT, recorded_at TEXT NOT NULL
+        );
+        CREATE TRIGGER cutover_runbook_reference_no_update BEFORE UPDATE ON cutover_runbook_reference
+            BEGIN SELECT RAISE(ABORT, 'cutover_runbook_reference is immutable'); END;
+        CREATE TRIGGER cutover_runbook_reference_no_delete BEFORE DELETE ON cutover_runbook_reference
+            BEGIN SELECT RAISE(ABORT, 'cutover_runbook_reference is preserved'); END;
+    """),
 ]
 
 

@@ -23,7 +23,8 @@ specification is authoritative, what is preserved, and what work is permitted.
 - **Branch:** `elite-pipeline/phase-0` (created from `3bf9162`; does not modify the legacy line)
 
 ## Current phase / work unit
-- **Phase:** Phase 11 — Operational Hardening, Real-Source Integration, and Controlled Pilot Readiness (**complete; HOLD FOR REVIEW**).
+- **Phase:** Phase 12 — Live Integration, Real-Data Migration, Parallel Validation, and Cutover Package (**complete; HOLD FOR FINAL REVIEW** — final engineering + validation phase).
+- **Phase 11:** **approved and complete.**
 - **Phase 10:** **approved and complete.**
 - **Phase 9:** **approved and complete.**
 - **Phase 8:** **approved and complete.**
@@ -358,7 +359,71 @@ specification is authoritative, what is preserved, and what work is permitted.
   `PHASE11_RUNBOOKS.md`, `PHASE11_TRACEABILITY.md`, `adr/ADR-0041..0046`.
 - **Phase 11 disposition:** **complete → HOLD FOR REVIEW.** No cutover / legacy replacement / destructive
   migration / production go-live introduced. Phase 12 not started.
-- **Approved next phase:** Phase 12 — **only after review**.
+- **Phase 11 review disposition:** **APPROVED.** Recorded here and in `IMPLEMENTATION_LEDGER.md`. Phase 11 is
+  preserved at commit `83d66e4` as the controlled-pilot baseline. Phase 10 preserved at `05ba436`; legacy at
+  `3bf9162`. BUG-CPO-002 remains FIXED_END_TO_END.
+- **Phase 12 scope (final engineering + validation phase):** determine whether Elite Pipeline can safely
+  become the dealership's primary operating tool, over a NEW `elite/release/` package + migration v12
+  (migration + validation + release records). Scope: live-source connection inventory; real adapter
+  configuration; controlled real-source ingestion into a dedicated migration/pilot database; source-by-
+  source validation; real identity migration; real historical-data migration; policy + configuration
+  migration; authority + Principal migration; domain-state reconstruction; **full execution-service wiring
+  (resolving the Phase 11 integration limitation — every required pilot UI action invokes the actual Phase
+  5-7 service, no synthetic callback in the real path)**; shadow mode; dual-system parallel run; legacy-
+  output comparison; discrepancy investigation + burn-down; operator acceptance testing; migration
+  rehearsal; rollback rehearsal; recovery rehearsal; cutover runbook; release package; final readiness
+  certification (ENGINEERING/DATA/POLICY/AUTHORITY/OPERATOR/MIGRATION/ROLLBACK/SECURITY/OPERATIONALLY_READY/
+  GO_LIVE_AUTHORIZED); and an explicit governed release-authorization gate. Binding final-phase principles:
+  migration ≠ cutover; import success ≠ migration acceptance ≠ operational readiness ≠ go-live authorization
+  ≠ automatic activation; legacy remains available until explicitly retired after an authorized release +
+  stabilization; no destructive source cleanup; no manufactured source fact; unknown stays unknown;
+  unresolved identity stays unresolved; a difference is never hidden for parity; a material unresolved
+  discrepancy blocks affected-domain readiness; each domain is independently ready/conditional/blocked;
+  historical issued results immutable; migration corrections create new governed records + lineage; **rollback
+  must be proven, not merely documented**; every operational mutation continues through the authoritative
+  domain service (no direct DB edit substitutes for a domain action); the final certification distinguishes
+  engineering / data / operator readiness from release authorization. **GO_LIVE_AUTHORIZED can only be set by
+  an explicit governed Decision by an authorized Principal — never by automated tests — and authorization
+  does not itself perform cutover. No irreversible production cutover or legacy retirement occurs in Phase
+  12.** Appends migration v12 (append-preserving; release package immutable after issuance; v1-v11
+  untouched). Carries a 20-point live-execution regression and a 25-point final-readiness regression. Phase
+  12 is the **final** phase — no additional development phase is proposed; completion returns either
+  READY_FOR_EXPLICIT_GO_LIVE_AUTHORIZATION / READY_FOR_LIMITED_DOMAIN_AUTHORIZATION / CONTINUE_PARALLEL_PILOT
+  / NOT_READY with exact blockers.
+- **Phase 12 result:** new `elite/release/` package + migration v12 (24 live-integration/migration/
+  validation/release record families — append-preserving; release package immutable once issued; no business
+  truth moved; v1-v11 untouched), plus a minimal backward-compatible wire into the Phase 10 UI `/execution`
+  action. The Phase 11 execution limitation is RESOLVED: a `LiveExecutorRegistry` binds every required
+  governed action to the ACTUAL Phase 5-7 governed domain method and a `LiveExecutionService` drives the real
+  domain execution (real event + Audit Event) and references it through the Phase 9 execution — no synthetic
+  callback in the real path, no direct domain-table mutation from the UI. Delivered: live-source connection
+  inventory (classified, never fabricated); real adapter configuration (registered schema versions,
+  reviewable mappings, corrections → new version, prior imports replayable); controlled real-source ingestion
+  into a DEDICATED migration database (idempotent; failed preserves prior; Partial stays Partial); real
+  identity migration (9 outcomes; one unit = one Vehicle Unit; pre-VIN → VIN never duplicates; conflicts
+  blocked; governed manual resolution); historical migration (no invented events; snapshot ≠ continuous;
+  migration date ≠ event date); governed policy migration (confirmed values only; missing blocks; conflicting
+  stays) and authority migration (real Principals/scopes; overbroad rejected; expiry; audited; missing
+  blocks); domain-state reconstruction from accepted real facts; governed domain shadow mode (execution
+  blocked until explicitly enabled; history preserved); a sustained dual-system parallel run (both outputs
+  preserved; classified; neither mutated) with governed discrepancy burn-down (evidence-based; defect
+  registry; material unresolved blocks readiness); operator acceptance testing on the real application
+  (failure historical; retest preserves; material blocks); proven migration/rollback/recovery rehearsals; a
+  cutover runbook (does not execute itself); an immutable release package; a governed final readiness
+  certification across ten separate dimensions (OPERATIONALLY_READY derived; GO_LIVE_AUTHORIZED never set by
+  certification); and an explicit governed release-authorization gate (references the exact package; atomic
+  with its Audit Event; expiration + separation of duties; performs no cutover). Platform tests `934/934`
+  (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 + 79 P6 + 79 P7 + 91 P8 + 104 P9 + 98 P10 + 109 P11 + 108 P12);
+  legacy `39/39`; migration v12 rerun-safe; legacy application paths byte-unchanged. All 114 acceptance items
+  pass + the 20-point live-execution and 25-point final-readiness regressions. See `PHASE12_COMPLETION.md`,
+  `PHASE12_ARCHITECTURE.md`, `PHASE12_RUNBOOKS.md`, `PHASE12_TRACEABILITY.md`, `adr/ADR-0047..0052`.
+- **Phase 12 disposition:** **complete → HOLD FOR FINAL REVIEW.** Final release recommendation:
+  **READY_FOR_EXPLICIT_GO_LIVE_AUTHORIZATION** (per domain/scope, evidence-based) — production-primary
+  activation requires a distinct explicit release authorization by an authorized Principal after review. No
+  irreversible production cutover or legacy retirement occurred. Phase 12 is the FINAL phase — no additional
+  development phase is proposed.
+- **Approved next step after Phase 12:** an explicit, separately-authorized operational go-live (a governed
+  release-authorization Decision), **only after Phase 12 final review** — not a further development phase.
 
 ## Required commands (legacy launch / inspect)
 ```
@@ -397,12 +462,29 @@ PYTHONPATH=. python3 pipeline_manager/tests/test_loaner_intel.py
 - Product owner / General Sales Manager (dealership). Implementation review pending.
 
 ## Status
-**Phase 11 complete — HOLD FOR REVIEW. Operational Hardening, Real-Source Integration, and Controlled Pilot
-Readiness** on `elite-pipeline/phase-0`. Platform tests `826/826`; legacy `39/39`; migration v11 rerun-safe;
-legacy application paths byte-unchanged; all 106 acceptance items + the 15-point import-recovery and 20-point
-controlled-pilot regressions pass. Phase 10 is **approved and complete** (preserved at commit `05ba436` as
-the first complete working application baseline). Phase 11 hardens the working application for realistic
-dealership
+**Phase 12 complete — HOLD FOR FINAL REVIEW. Live Integration, Real-Data Migration, Parallel Validation, and
+Cutover Package (final engineering + validation phase)** on `elite-pipeline/phase-0`. Platform tests
+`934/934`; legacy `39/39`; migration v12 rerun-safe; legacy application paths byte-unchanged; all 114
+acceptance items + the 20-point live-execution and 25-point final-readiness regressions pass. The Phase 11
+execution limitation is resolved (every required pilot action invokes the ACTUAL Phase 5-7 service; no
+synthetic callback in the real path). **Final release recommendation: READY_FOR_EXPLICIT_GO_LIVE_
+AUTHORIZATION** (per domain/scope, evidence-based); GO_LIVE_AUTHORIZED can only be set by an authorized
+Principal's explicit governed Decision, and authorization performs no cutover. **No irreversible production
+cutover or legacy retirement occurred.** Phase 12 is the final phase — no additional development phase is
+proposed. (Phase 11 is **approved and complete**
+(controlled-pilot baseline preserved at commit `83d66e4`); Phase 10 preserved at `05ba436`; legacy at
+`3bf9162`, and the legacy tool is kept available throughout migration, parallel validation, rollback
+rehearsal, and release review. Phase 12 wires every required real Phase 5-7 executor behind the governed
+pilot actions (resolving the Phase 11 integration limitation — no synthetic callback in the real path),
+migrates real identity/history/policy/authority into a dedicated migration database, reconstructs real
+domain state, runs shadow mode + a sustained dual-system parallel run with governed discrepancy burn-down,
+conducts operator acceptance testing, and performs proven migration / rollback / recovery rehearsals — then
+issues an immutable release package and a governed final readiness certification across ten separate
+dimensions. **GO_LIVE_AUTHORIZED can only be set by an explicit governed Decision by an authorized
+Principal; authorization does not itself perform cutover; no irreversible production cutover or legacy
+retirement occurs in Phase 12.** All Phase 1-11 domain, governance, audit, prediction, historical, and
+operational records are preserved unchanged; the architecture is not redesigned and no prior migration is
+rewritten. (Phase 11 hardened the working application for realistic dealership
 operation over a NEW `elite/ops/` package + migration v11 (operational records — append-preserving; no
 business truth moved into the operational layer): real-source adapters over Phase 2 ingestion, controlled
 file intake, import orchestration, freshness, reconciliation/drift, scheduling, restart/failure recovery,
@@ -413,4 +495,6 @@ pilot alongside the legacy tool**. Source data is evidence, not truth; raw sourc
 success is not acceptance; **no cutover, legacy replacement, destructive migration, or production go-live
 occurs in Phase 11.** All Phase 1-10 domain mathematics, identity, policy, governance, workflows, and
 presentation contracts are preserved unchanged. Legacy line preserved at `3bf9162`. **BUG-CPO-002 =
-FIXED_END_TO_END**, retained permanently in regression coverage. Phase 12 not started.
+FIXED_END_TO_END**, retained permanently in regression coverage.) Phase 12 is the final engineering +
+validation phase; production-primary activation requires a distinct explicit release authorization after
+Phase 12 review.

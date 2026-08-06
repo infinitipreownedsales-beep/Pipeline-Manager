@@ -12,6 +12,7 @@ import secrets
 
 from ..render import badge, esc, empty, page, safe, table
 from ..http import Response
+from ...errors import EliteError
 
 
 def _decisions_awaiting_approval(app, scope):
@@ -106,6 +107,18 @@ def register(app):
         if approval is not None and app.p9.expiration.is_expired(approval["id"]):
             return app._safe_page(s, "Approval expired",
                                   "This approval has expired and cannot proceed to execution.", 409)
+        # Phase 12: when a real Phase 5-7 executor is bound to this Decision, the pilot path invokes the
+        # ACTUAL domain service (no synthetic callback). Otherwise fall back to the domain-service reference.
+        live = getattr(app, "live_executor", None)
+        if live is not None and live.has_binding(d["id"]):
+            try:
+                live.execute_bound(principal=s.principal_id, scope=s.scope, decision=d,
+                                   idempotency_key=req.f("_idem"), correlation_id=req.correlation_id)
+            except EliteError as e:
+                return app._safe_page(s, "Not executed", e.message,
+                                      409 if e.category in ("validation", "concurrency") else 403)
+            s.flash = "Executed via the actual Phase 5-7 domain service."
+            return Response.redirect("/execution")
         domain_ref = f"domain_exec::{d['id']}"    # references the domain execution service result
         app.p9.execution.authorize(s.principal_id, s.scope, d, approval, execution_capability="domain.execute",
                                    expected_action=d["selected_action"] or "execute",

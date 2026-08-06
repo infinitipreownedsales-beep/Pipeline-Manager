@@ -32,7 +32,7 @@ db.migrate()          # applies pending migrations; tracked in migration_record
 print("schema version:", db.version())
 ```
 
-### Run the platform tests (Phase 1 through Phase 11)
+### Run the platform tests (Phase 1 through Phase 12)
 ```
 PYTHONPATH=. python3 elite/tests/run_all.py
 # focused BUG-CPO-002 regressions (Phase 4 synthetic + Phase 5 end-to-end CPO workflow):
@@ -52,6 +52,9 @@ PYTHONPATH=. python3 -m unittest elite.tests.test_phase10_operator_workflow_regr
 # focused import-recovery + controlled-pilot regressions (Phase 11):
 PYTHONPATH=. python3 -m unittest elite.tests.test_phase11_import_recovery_regression \
     elite.tests.test_phase11_controlled_pilot_regression -v
+# focused live-execution + final-readiness regressions (Phase 12):
+PYTHONPATH=. python3 -m unittest elite.tests.test_phase12_live_execution_regression \
+    elite.tests.test_phase12_final_readiness_regression -v
 ```
 
 ### Phase 2 — data/identity/facts (example)
@@ -272,6 +275,36 @@ print(p.pilot.banner())                                       # PILOT MODE — l
 ```
 Operational records are evidence only (migration v11) — deleting a domain record is impossible from here;
 the layer references the authoritative Phase 1-10 records and recomputes no domain math.
+
+### Phase 12 — live integration + migration + validation + release (example)
+The final layer (`elite/release/`) is stdlib-only (**no new dependency**). It wires the real Phase 5-7
+executors behind the pilot actions, migrates real data into a dedicated migration database, runs shadow
+mode + a sustained parallel run with governed discrepancy burn-down, conducts UAT, rehearses
+migration/rollback/recovery, and gates an explicit release authorization. Full runbooks in
+`PHASE12_RUNBOOKS.md`. **No irreversible production cutover occurs; the legacy tool stays available.**
+```python
+from elite.release.fixtures import Phase12
+p = Phase12("/path/to/elite.db")                               # migrates v1..v12; wires live executors
+# real live execution through the ACTUAL Phase 7 domain executor (no synthetic callback):
+dec, unit, _ = p.prepare_live_execution("1HGCM82633A700001")
+p.live.execute_bound(principal=p.op_executor, scope="store:HG", decision=dec, idempotency_key="k1")
+print(p.p9.execution.reconcile(dec))                           # COMPLETED / ALREADY_RECONCILED
+# migrate real data into a DEDICATED migration db; validate against legacy; certify; authorize:
+mr = p.migration.start_run(initiated_by=p.op_migrator)
+p.migration.migrate_source(mr["id"], contract_key="new_inventory_current", payload=open("export.csv").read(),
+                           source_family="new_inventory_current", scope="store:HG", content_hash="...")
+pkg  = p.packages.issue(principal=p.op_releaser, scope="store:HG",
+                        release_package_id=p.packages.build(version_label="v1.0.0",
+                            application_revision="<rev>", migration_level=12)["id"])
+cert = p.readiness.certify(principal=p.op_releaser, scope="store:HG", release_package_ref=pkg["id"],
+                           dimensions={d: {"status": "PASS"} for d in
+                               ["ENGINEERING_READY","DATA_READY","POLICY_READY","AUTHORITY_READY",
+                                "OPERATOR_READY","MIGRATION_READY","ROLLBACK_READY","SECURITY_READY"]})
+# GO_LIVE_AUTHORIZED is NEVER set by certification — only by an explicit governed Decision:
+auth = p.authorization.authorize(principal=p.op_authorizer, scope="store:HG", release_package_ref=pkg["id"],
+                                 certification_ref=cert["id"], disposition="AUTHORIZE_GO_LIVE",
+                                 rollback_plan_ref="<rollback>")   # performs NO cutover
+```
 
 ### Inspect the authoritative store
 ```
