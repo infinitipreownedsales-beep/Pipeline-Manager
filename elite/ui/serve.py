@@ -11,11 +11,19 @@ import os
 from .app import App, make_server
 
 
+def _truthy(v):
+    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def build_app(db_path=None, environment=None):
     from ..govern.fixtures import Phase9
     db_path = db_path or os.environ.get("ELITE_DB_PATH", "elite.db")
     p9 = Phase9(db_path)
-    return App(p9, environment=environment or os.environ.get("ELITE_ENV", "development"))
+    # Explicit single-operator pilot exception, off unless deliberately enabled in the environment.
+    # Set ELITE_SINGLE_OPERATOR_PILOT=1 only for a genuine sole-operator pilot; unset it for multi-user.
+    single_operator = _truthy(os.environ.get("ELITE_SINGLE_OPERATOR_PILOT"))
+    return App(p9, environment=environment or os.environ.get("ELITE_ENV", "development"),
+               single_operator_pilot=single_operator)
 
 
 def main():

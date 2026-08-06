@@ -19,6 +19,7 @@ Standard library only; no install step.
 | `ELITE_AUTH_SECRET` | yes (secret) | credential-hash pepper; provide via env/secret store |
 | `ELITE_DEALERSHIP_TZ` | no | default `America/Chicago` (presentation only) |
 | `ELITE_LOG_LEVEL` | no | default `INFO` |
+| `ELITE_SINGLE_OPERATOR_PILOT` | no | default off. `1`/`true` enables the **explicit, audited** single-operator self-approval exception in the operator UI (sole-user pilot only). Unset for multi-user — separation of duties is then enforced (a self-proposed Decision cannot be self-approved). See `adr/ADR-0053`. |
 
 Missing a required value is a **safe startup failure** (ConfigurationError); the
 system never invents configuration.

@@ -31,11 +31,16 @@ class Session:
 
 
 class App:
-    def __init__(self, p9, *, environment="test"):
+    def __init__(self, p9, *, environment="test", single_operator_pilot=False):
         self.p9 = p9
         self.stack = p9.stack
         self.store = p9.store            # GovernStore
         self.environment = environment
+        # Explicit, reversible single-operator pilot exception (scoped, audited, disableable). When True,
+        # the Approvals screen offers a clearly-labelled self-approval path that records the exception on
+        # the approval (SoD NOT satisfied) instead of hiding the action. Multi-user rollout sets this False,
+        # restoring enforced separation of duties (a self-proposed Decision cannot be self-approved).
+        self.single_operator_pilot = single_operator_pilot
         self.prefs = PrefsService(self.stack.db.conn, self.stack.clock)
         self.router = Router()
         self.sessions = {}               # token -> Session

@@ -135,7 +135,62 @@ def register(app):
             if sacrifices:
                 body_parts.append('<div class="card">' + badge("attention", "Necessary sacrifice") +
                                   " " + esc(json.dumps(sacrifices)) + '</div>')
+        # Retirement disposition — governed operator confirmations routed to the real Phase 7 service.
+        eunits = _conn(app).execute(
+            "SELECT * FROM executive_demo_unit WHERE store_scope=? ORDER BY created_at", (s.scope,)).fetchall()
+        drows = []
+        for u in eunits:
+            st = u["membership_state"]
+            if st == "RETIRED":
+                idem = "idem-" + secrets.token_urlsafe(8)
+                act = (f'<form class="mut" method="post" action="/executive-demo/{esc(u["id"])}/return-to-retail">'
+                       f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+                       f'<input type=hidden name=_idem value="{esc(idem)}">'
+                       '<button type=submit>Confirm return to New Retail</button></form>')
+            elif st == "AWAITING_USED_CARS_RECEIPT":
+                idem = "idem-" + secrets.token_urlsafe(8)
+                act = (f'<form class="mut" method="post" action="/executive-demo/{esc(u["id"])}/used-cars">'
+                       f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+                       f'<input type=hidden name=_idem value="{esc(idem)}">'
+                       '<button type=submit>Confirm Used Cars receipt</button></form>')
+            elif st in ("RETURNED_TO_NEW_RETAIL", "USED_CARS_RECEIVED"):
+                act = badge("completed", st.replace("_", " ").title())
+            else:
+                act = '<span class="muted">—</span>'
+            actionable = st in ("RETIRED", "AWAITING_USED_CARS_RECEIPT")
+            drows.append([esc(u["vin"] or u["id"]),
+                          safe(badge("attention" if actionable else "ok", st)), safe(act)])
+        if drows:
+            body_parts.append('<h2>Retirement disposition</h2>')
+            body_parts.append('<div class="card"><p>After retirement, confirm the disposition through the '
+                              'authoritative Phase 7 service. Return to New Retail restores Current Supply '
+                              'exactly once; Used Cars receipt is a single confirmation (no checklist). '
+                              'Each is governed, scoped, idempotent, and audited.</p></div>')
+            body_parts.append(table(["VIN", "State", "Confirmation"], drows))
         return _resp(app, s, "Executive Demos", "".join(body_parts), "/executive-demo")
+
+    @app.post("/executive-demo/{unit_id}/return-to-retail")
+    def confirm_execdemo_return(app, req):
+        s = req.session
+        u = app.p9.p8.p7.store.get_unit(req.params["unit_id"])
+        if u is None or u.store_scope != s.scope:
+            return app._safe_page(s, "Not found", "That Executive Demo unit is not in your store.", 404)
+        # governed, scoped, idempotent, audited — routed through the real Phase 7 service (no table write here)
+        app.p9.p8.p7.retirement.return_to_new_retail(s.principal_id, s.scope, u)
+        s.flash = "Return to New Retail confirmed through the authoritative Phase 7 service."
+        return Response.redirect("/executive-demo")
+
+    @app.post("/executive-demo/{unit_id}/used-cars")
+    def confirm_execdemo_used_cars(app, req):
+        s = req.session
+        u = app.p9.p8.p7.store.get_unit(req.params["unit_id"])
+        if u is None or u.store_scope != s.scope:
+            return app._safe_page(s, "Not found", "That Executive Demo unit is not in your store.", 404)
+        # one simple confirmation, no checklist — routed through the real Phase 7 service
+        app.p9.p8.p7.retirement.confirm_used_cars_receipt(s.principal_id, s.scope, u,
+                                                          correlation_id=req.correlation_id)
+        s.flash = "Used Cars receipt confirmed (one action, no checklist)."
+        return Response.redirect("/executive-demo")
 
 
 def _resp(app, s, title, body, active):

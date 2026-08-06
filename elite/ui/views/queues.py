@@ -32,18 +32,31 @@ def register(app):
         rows = []
         for it, d in _decisions_awaiting_approval(app, s.scope):
             self_conflict = (d["decision_maker"] == s.principal_id)
-            note = badge("blocked", "You proposed this — separation of duties") if self_conflict else \
-                badge("ok", "Distinct authority")
             idem = "idem-" + secrets.token_urlsafe(10)
-            btn = (f'<form class="mut" method="post" action="/approval/{esc(d["id"])}/approve">'
-                   f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
-                   f'<input type=hidden name=_idem value="{esc(idem)}">'
-                   '<button type=submit>Approve</button></form>') if not self_conflict else \
-                '<span class="muted">Approval must come from another operator.</span>'
+            approve_form = (
+                f'<form class="mut" method="post" action="/approval/{esc(d["id"])}/approve">'
+                f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+                f'<input type=hidden name=_idem value="{esc(idem)}">'
+                '<button type=submit>{label}</button></form>')
+            if not self_conflict:
+                note = badge("ok", "Distinct authority")
+                btn = approve_form.format(label="Approve")
+            elif app.single_operator_pilot:
+                # Explicit, labelled exception — NOT a claim that separation of duties was satisfied.
+                note = badge("attention", "SINGLE-OPERATOR PILOT EXCEPTION — separation of duties NOT satisfied")
+                btn = approve_form.format(label="Approve under single-operator pilot exception")
+            else:
+                note = badge("blocked", "You proposed this — separation of duties")
+                btn = '<span class="muted">Approval must come from another operator.</span>'
             rows.append([safe(f'<a href="/item/{esc(it["id"])}">{esc(it["subject_entity_id"] or it["id"])}</a>'),
                          esc(it["owning_domain"]), esc(d["selected_action"] or "—"), safe(note), safe(btn)])
+        pilot_note = ('<div class="card"><p>' + badge("attention", "Single-operator pilot")
+                      + ' A self-proposed Decision may be approved <strong>only</strong> under the explicit, '
+                      'audited single-operator pilot exception. This does <strong>not</strong> satisfy normal '
+                      'separation of duties and is recorded as such on the approval.</p></div>') \
+            if app.single_operator_pilot else ''
         body = ('<div class="card"><p>Approval is a separate authority from the Decision maker and does '
-                '<strong>not</strong> execute anything.</p></div>'
+                '<strong>not</strong> execute anything.</p></div>' + pilot_note
                 + table(["Subject", "Domain", "Action", "Separation of duties", ""], rows))
         flash, s.flash = s.flash, None
         return Response(page("Approvals", body, ctx=app.ctx(s), active_path="/approvals", flash=flash))
@@ -54,9 +67,25 @@ def register(app):
         d = app.store.get_decision(req.params["decision_id"])
         if d is None or d["store_scope"] != s.scope:
             return app._safe_page(s, "Not found", "That decision is not in your store.", 404)
-        app.p9.approvals.approve(s.principal_id, s.scope, d, idempotency_key=req.f("_idem"),
-                                 correlation_id=req.correlation_id)
-        s.flash = "Approval recorded (this does not execute the action)."
+        self_conflict = (d["decision_maker"] == s.principal_id)
+        conditions = None
+        if self_conflict:
+            # Enforced at the POST layer too: without the explicit exception, a self-proposed Decision
+            # cannot be self-approved (defence in depth — not only a hidden button).
+            if not app.single_operator_pilot:
+                return app._safe_page(
+                    s, "Approval requires a separate operator",
+                    "Separation of duties: this Decision must be approved by a different Principal than "
+                    "the Decision maker.", 403)
+            conditions = {"single_operator_pilot_exception": True,
+                          "separation_of_duties": "NOT_SATISFIED_SINGLE_OPERATOR_PILOT",
+                          "decision_maker": d["decision_maker"], "approver": s.principal_id,
+                          "scope": s.scope}
+        app.p9.approvals.approve(s.principal_id, s.scope, d, conditions=conditions,
+                                 idempotency_key=req.f("_idem"), correlation_id=req.correlation_id)
+        s.flash = ("Approval recorded UNDER THE SINGLE-OPERATOR PILOT EXCEPTION — separation of duties NOT "
+                   "satisfied; the exception is recorded on the approval and audited."
+                   if self_conflict else "Approval recorded (this does not execute the action).")
         return Response.redirect("/approvals")
 
     @app.get("/execution")
@@ -69,6 +98,10 @@ def register(app):
                 apps = app.store.approvals_for(d["id"])
                 if not apps or d["scenario_id"]:
                     continue
+                ap = app.store.get_approval(apps[-1]["id"])
+                sop = (" " + badge("attention", "Approved under single-operator pilot exception")) \
+                    if (ap is not None and ap["conditions"]
+                        and "single_operator_pilot_exception" in ap["conditions"]) else ""
                 execs = app.store.execauths_for(d["id"])
                 idem = "idem-" + secrets.token_urlsafe(10)
                 if not execs:
@@ -86,7 +119,7 @@ def register(app):
                               '<button type=submit class=secondary>Mark completed</button></form>'
                               if e["state"] == "in_execution" else "—")
                 rows.append([safe(f'<a href="/item/{esc(it["id"])}">{esc(it["subject_entity_id"] or it["id"])}</a>'),
-                             esc(it["owning_domain"]), safe(state), safe(action)])
+                             esc(it["owning_domain"]), safe(state + sop), safe(action)])
         body = ('<div class="card"><p>Execution runs the existing domain service. A failed execution is '
                 'never shown as completed; Scenario Decisions cannot be executed officially.</p></div>'
                 + table(["Subject", "Domain", "Execution", ""], rows))
