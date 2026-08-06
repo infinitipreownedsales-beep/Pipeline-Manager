@@ -7,11 +7,23 @@
   the Phase 10 UI `/execution` action). No legacy file changed; no Phase 1-11 domain, governance, audit,
   prediction, historical, or operational record changed; the architecture is not redesigned; no prior
   migration is rewritten.
-- **This is the FINAL engineering + validation phase.** At completion the system is certified either
-  READY_FOR_EXPLICIT_GO_LIVE_AUTHORIZATION (per domain/scope, evidence-based) or NOT_READY with exact
-  blockers. **Production-primary activation does not occur automatically — it requires a distinct explicit
-  release authorization after Phase 12 review. No irreversible production cutover or legacy retirement
+- **This is the FINAL engineering + validation phase.** Phase 12 **engineering is complete and approved**;
+  the system is certified **CONTINUE_PARALLEL_PILOT** — a controlled parallel pilot alongside the legacy tool
+  is approved, and **production-primary go-live is NOT yet authorized**. Production-primary activation does not
+  occur automatically — it requires a distinct explicit release authorization after the go-live gate below is
+  satisfied and a final release review is passed. **No irreversible production cutover or legacy retirement
   occurred.**
+- **Go-live gate — BLOCKED, pending operational evidence.** Production-primary go-live remains blocked until
+  ALL of the following are met and reviewed: (a) a **completed full platform harness** with an authoritative
+  final count + EXIT status (see "Platform harness" below — the fresh full-suite run has not yet produced a
+  final EXIT marker in this session); (b) **real end-to-end executor validation for every intended live
+  domain** (only Executive Demo retirement has been driven fully end-to-end through the real live path so far;
+  the other registered domain executors still require full governed pilot execution); (c) **sustained
+  parallel-run evidence** meeting the approved duration + sample-coverage criterion (currently unmet);
+  (d) governed **discrepancy burn-down** to no material unresolved discrepancy; (e) **real operator UAT /
+  sign-off** on the live application; (f) **domain-specific readiness certification** for each intended live
+  domain; and (g) **final release review**. Any intended live domain not meeting these returns NOT_READY for
+  that domain.
 
 ## Implemented
 A new live-integration / migration / validation / release layer (`elite/release/`, Python **stdlib only —
@@ -75,8 +87,15 @@ GO_LIVE_AUTHORIZED. The legacy tool remains available throughout.
 **Fixtures:** 64 final-phase scenarios (`release/fixtures.build_all_fixtures`, `FIXTURE_NAMES`), completeness
 proven by `test_phase12_readiness_authorization.test_64_fixture_completeness`.
 
-**Platform harness:** `934/934 passed` (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 + 79 P6 + 79 P7 + 91 P8 +
-104 P9 + 98 P10 + 109 P11 + 108 P12). **Legacy:** `39/39` (29 engine + 10 loaner).
+**Platform harness.** Recorded build-time full-suite result: `934/934 passed` (26 P1 + 35 P2 + 59 P3 +
+65 P4 + 81 P5 + 79 P6 + 79 P7 + 91 P8 + 104 P9 + 98 P10 + 109 P11 + 108 P12). **A completed fresh full-suite
+run with a final EXIT marker is a go-live gate item and has NOT been reproduced in the current session:** the
+detached re-run terminated before its EXIT marker (last reached `test_phase8_migration_cross.test_84`, with
+**0 failures / 0 errors** across every module executed) and must NOT be represented as a completed full-harness
+result. What IS freshly verified this session, all green: (i) a targeted re-run of all 5 Phase 12 modules +
+all 8 Phase 9 modules — `Ran 212 tests … OK`, **EXIT 0**, 0 failures; and (ii) the legacy suite (below).
+A completed full-harness EXIT remains required operational evidence before go-live. **Legacy:** `39/39`
+(29 engine + 10 loaner) — re-verified green this session.
 
 ## Dedicated live-execution regression (20-point)
 `test_phase12_live_execution_regression` — real accepted source → real planning output → recommendation →
@@ -113,13 +132,21 @@ inventory-tool` remains at `3bf9162`; legacy suite `39/39`.
 - Single-node SQLite pilot; multi-node/HA and production hosting remain out of scope.
 
 ## Final release recommendation
-**READY_FOR_EXPLICIT_GO_LIVE_AUTHORIZATION** — engineering, data-path, migration, rollback, and security
-readiness are demonstrated and the governed certification + authorization gate are in place; actual
-production-primary go-live remains a **distinct explicit release authorization by an authorized Principal
-after this review**. Per-domain and per-scope readiness are independently certifiable (a limited-domain
-authorization is supported); any domain with an unresolved material discrepancy, missing policy/authority,
-or a failed rollback rehearsal returns NOT_READY for that domain until resolved.
+**CONTINUE_PARALLEL_PILOT.** Phase 12 **engineering is complete and approved**, and a **controlled parallel
+pilot alongside the legacy tool is approved**. **Production-primary go-live is NOT yet authorized.** The
+engineering foundation — full execution-service wiring (Phase 11 gap resolved), real-data migration, shadow
+mode, parallel-validation + discrepancy machinery, rehearsals, immutable release package, ten-dimension
+certification, and the explicit authorization gate — is demonstrated in the acceptance suite and regressions.
+Go-live authorization is deferred and the gate remains BLOCKED pending operational evidence: a **completed
+full platform harness** (authoritative final count + EXIT), **real end-to-end executor validation for every
+intended live domain** (only Executive Demo retirement is proven end-to-end so far), **sustained parallel-run
+evidence** (unmet duration/coverage criterion), **discrepancy burn-down** to no material unresolved item,
+**real operator UAT / sign-off**, **per-domain readiness certification**, and a **final release review**.
+Per-domain and per-scope readiness are independently certifiable (a `LIMITED_DOMAIN` authorization is
+supported); any domain with an unresolved material discrepancy, missing policy/authority, a failed rollback
+rehearsal, or without real end-to-end pilot execution returns NOT_READY for that domain until resolved.
 
 ## Status
-**HOLD FOR FINAL REVIEW.** No production cutover performed. Phase 12 is the final phase — no additional
-development phase is proposed.
+**HOLD FOR FINAL OPERATIONAL EVIDENCE.** Phase 12 engineering complete and approved; controlled parallel
+pilot approved; production-primary go-live not authorized. No production cutover performed; the legacy tool
+remains available throughout. Phase 12 is the final phase — no additional development phase is proposed.

@@ -614,7 +614,7 @@ preserved at commit `83d66e4` as the controlled-pilot baseline; Phase 10 at `05b
 The operational layer holds no business truth, source data is evidence not truth, and no cutover occurred.
 BUG-CPO-002 remains FIXED_END_TO_END.
 
-## Phase 12 — Live Integration, Real-Data Migration, Parallel Validation, and Cutover Package  (branch `elite-pipeline/phase-0`)  [COMPLETE — HOLD FOR FINAL REVIEW — FINAL ENGINEERING + VALIDATION PHASE]
+## Phase 12 — Live Integration, Real-Data Migration, Parallel Validation, and Cutover Package  (branch `elite-pipeline/phase-0`)  [ENGINEERING COMPLETE & APPROVED — HOLD FOR FINAL OPERATIONAL EVIDENCE — recommendation CONTINUE_PARALLEL_PILOT — FINAL ENGINEERING + VALIDATION PHASE]
 
 Control records: Phase 11 recorded approved; Phase 12 set active. This is the **final** engineering +
 validation phase — no additional development phase is proposed. The objective is to determine whether Elite
@@ -709,11 +709,18 @@ mode). Migration v12 adds 24 record families with immutable point-in-time eviden
 lifecycle/registry rows, and a release package immutable once issued; NO business truth is moved into the
 release layer.
 
-Evidence executed: platform harness **934/934** (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 + 79 P6 + 79 P7 +
-91 P8 + 104 P9 + 98 P10 + 109 P11 + 108 P12); legacy **39/39** (29 engine + 10 loaner); migration v12
-rerun-safe; legacy application paths byte-unchanged vs `legacy/inventory-tool` @ `3bf9162`. All 114 mandatory
-acceptance items pass, plus the dedicated 20-point live-execution regression and the 25-point final-readiness
-regression (PHASE12_COMPLETION.md). The live-execution loop is proven end to end through the pilot UI and the
+Evidence executed: recorded build-time platform harness **934/934** (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 +
+79 P6 + 79 P7 + 91 P8 + 104 P9 + 98 P10 + 109 P11 + 108 P12). **A completed fresh full-suite run with a final
+EXIT marker is a go-live gate item and was NOT reproduced in the certification-correction session** — the
+detached re-run terminated before its EXIT marker (last reached `test_phase8_migration_cross.test_84`, 0
+failures across every module executed) and must not be represented as a completed full-harness result.
+Freshly verified this session, all green: a targeted re-run of all 5 Phase 12 + all 8 Phase 9 modules
+(`Ran 212 tests … OK`, EXIT 0), and legacy **39/39** (29 engine + 10 loaner). Migration v12 rerun-safe;
+legacy application paths byte-unchanged vs `legacy/inventory-tool` @ `3bf9162`. All 114 mandatory acceptance
+items pass, plus the dedicated 20-point live-execution regression and the 25-point final-readiness regression
+(PHASE12_COMPLETION.md). Real end-to-end live execution is proven **for Executive Demo retirement only**; the
+registry binds the real Phase 5-7 methods for the other intended live domains, each of which still requires
+full governed pilot execution. The live-execution loop is proven end to end through the pilot UI and the
 ACTUAL Phase 7 domain executor (real event → state changes exactly once → completion + reconciliation →
 replay/concurrent-replay no-duplicate → restart-preserved → audit/correlation complete → historical
 recommendation + Decision preserved → Scenario blocked → failure safe → no direct UI DB mutation). The
@@ -730,8 +737,12 @@ requirement_index.json (note), RUN_INSTRUCTIONS. No Phase 1-11 behavior changed 
 new package is a backward-compatible fallback in the UI `/execution` handler that uses a bound real executor
 when present).
 
-Result: **Phase 12 complete → HOLD FOR FINAL REVIEW.** Final release recommendation:
-**READY_FOR_EXPLICIT_GO_LIVE_AUTHORIZATION** (per domain/scope, evidence-based). Production-primary activation
-requires a distinct explicit release authorization by an authorized Principal after this review — not a
-further development phase. No irreversible production cutover or legacy retirement occurred. BUG-CPO-002
-remains FIXED_END_TO_END. Phase 12 is the FINAL engineering + validation phase.
+Result (final review): **Phase 12 engineering complete and APPROVED → HOLD FOR FINAL OPERATIONAL EVIDENCE.**
+Final release recommendation: **CONTINUE_PARALLEL_PILOT** — a controlled parallel pilot alongside the legacy
+tool is approved; **production-primary go-live is NOT yet authorized.** The go-live gate remains BLOCKED
+pending the completed full harness, real end-to-end executor validation for every intended live domain,
+sustained parallel-run evidence, discrepancy burn-down, real operator UAT/sign-off, per-domain readiness
+certification, and final release review. Production-primary activation then requires a distinct explicit
+release authorization by an authorized Principal — not a further development phase. No irreversible production
+cutover or legacy retirement occurred. BUG-CPO-002 remains FIXED_END_TO_END. Phase 12 is the FINAL
+engineering + validation phase.

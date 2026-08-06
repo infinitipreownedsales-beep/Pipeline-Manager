@@ -23,7 +23,7 @@ specification is authoritative, what is preserved, and what work is permitted.
 - **Branch:** `elite-pipeline/phase-0` (created from `3bf9162`; does not modify the legacy line)
 
 ## Current phase / work unit
-- **Phase:** Phase 12 — Live Integration, Real-Data Migration, Parallel Validation, and Cutover Package (**complete; HOLD FOR FINAL REVIEW** — final engineering + validation phase).
+- **Phase:** Phase 12 — Live Integration, Real-Data Migration, Parallel Validation, and Cutover Package (**engineering complete & APPROVED; HOLD FOR FINAL OPERATIONAL EVIDENCE** — final engineering + validation phase; recommendation `CONTINUE_PARALLEL_PILOT`, production-primary go-live not yet authorized).
 - **Phase 11:** **approved and complete.**
 - **Phase 10:** **approved and complete.**
 - **Phase 9:** **approved and complete.**
@@ -412,18 +412,29 @@ specification is authoritative, what is preserved, and what work is permitted.
   cutover runbook (does not execute itself); an immutable release package; a governed final readiness
   certification across ten separate dimensions (OPERATIONALLY_READY derived; GO_LIVE_AUTHORIZED never set by
   certification); and an explicit governed release-authorization gate (references the exact package; atomic
-  with its Audit Event; expiration + separation of duties; performs no cutover). Platform tests `934/934`
-  (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 + 79 P6 + 79 P7 + 91 P8 + 104 P9 + 98 P10 + 109 P11 + 108 P12);
-  legacy `39/39`; migration v12 rerun-safe; legacy application paths byte-unchanged. All 114 acceptance items
-  pass + the 20-point live-execution and 25-point final-readiness regressions. See `PHASE12_COMPLETION.md`,
+  with its Audit Event; expiration + separation of duties; performs no cutover). Recorded build-time platform
+  harness `934/934` (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 + 79 P6 + 79 P7 + 91 P8 + 104 P9 + 98 P10 +
+  109 P11 + 108 P12); **a completed fresh full-suite EXIT is a go-live gate item not yet reproduced this
+  session** (the detached re-run terminated before its EXIT marker with 0 failures across every module run —
+  not to be represented as a completed full-harness result). Freshly verified this session, all green:
+  targeted P12 + P9 re-run `Ran 212 tests … OK` (EXIT 0), and legacy `39/39` (29 engine + 10 loaner).
+  Migration v12 rerun-safe; legacy application paths byte-unchanged. All 114 acceptance items pass + the
+  20-point live-execution and 25-point final-readiness regressions. See `PHASE12_COMPLETION.md`,
   `PHASE12_ARCHITECTURE.md`, `PHASE12_RUNBOOKS.md`, `PHASE12_TRACEABILITY.md`, `adr/ADR-0047..0052`.
-- **Phase 12 disposition:** **complete → HOLD FOR FINAL REVIEW.** Final release recommendation:
-  **READY_FOR_EXPLICIT_GO_LIVE_AUTHORIZATION** (per domain/scope, evidence-based) — production-primary
-  activation requires a distinct explicit release authorization by an authorized Principal after review. No
-  irreversible production cutover or legacy retirement occurred. Phase 12 is the FINAL phase — no additional
-  development phase is proposed.
-- **Approved next step after Phase 12:** an explicit, separately-authorized operational go-live (a governed
-  release-authorization Decision), **only after Phase 12 final review** — not a further development phase.
+- **Phase 12 disposition (final review):** **engineering complete and APPROVED → HOLD FOR FINAL OPERATIONAL
+  EVIDENCE.** Final release recommendation: **CONTINUE_PARALLEL_PILOT** — a controlled parallel pilot alongside
+  the legacy tool is approved; **production-primary go-live is NOT yet authorized.** The go-live gate remains
+  BLOCKED pending: a **completed full platform harness** (authoritative final count + EXIT — not yet reproduced
+  this session), **real end-to-end executor validation for every intended live domain** (only Executive Demo
+  retirement proven end-to-end so far), **sustained parallel-run evidence** (unmet duration/coverage
+  criterion), governed **discrepancy burn-down** to no material unresolved item, **real operator UAT /
+  sign-off**, **per-domain readiness certification**, and a **final release review**. No irreversible production
+  cutover or legacy retirement occurred. Phase 12 is the FINAL phase — no additional development phase is
+  proposed.
+- **Approved next step after Phase 12:** run the **controlled parallel pilot** to gather the operational
+  evidence above; an explicit, separately-authorized production-primary go-live (a governed
+  release-authorization Decision) follows **only after** the go-live gate is satisfied and the final release
+  review passes — not a further development phase.
 
 ## Required commands (legacy launch / inspect)
 ```
@@ -462,16 +473,22 @@ PYTHONPATH=. python3 pipeline_manager/tests/test_loaner_intel.py
 - Product owner / General Sales Manager (dealership). Implementation review pending.
 
 ## Status
-**Phase 12 complete — HOLD FOR FINAL REVIEW. Live Integration, Real-Data Migration, Parallel Validation, and
-Cutover Package (final engineering + validation phase)** on `elite-pipeline/phase-0`. Platform tests
-`934/934`; legacy `39/39`; migration v12 rerun-safe; legacy application paths byte-unchanged; all 114
-acceptance items + the 20-point live-execution and 25-point final-readiness regressions pass. The Phase 11
-execution limitation is resolved (every required pilot action invokes the ACTUAL Phase 5-7 service; no
-synthetic callback in the real path). **Final release recommendation: READY_FOR_EXPLICIT_GO_LIVE_
-AUTHORIZATION** (per domain/scope, evidence-based); GO_LIVE_AUTHORIZED can only be set by an authorized
-Principal's explicit governed Decision, and authorization performs no cutover. **No irreversible production
-cutover or legacy retirement occurred.** Phase 12 is the final phase — no additional development phase is
-proposed. (Phase 11 is **approved and complete**
+**Phase 12 engineering complete and APPROVED — HOLD FOR FINAL OPERATIONAL EVIDENCE. Live Integration,
+Real-Data Migration, Parallel Validation, and Cutover Package (final engineering + validation phase)** on
+`elite-pipeline/phase-0`. Recorded build-time platform harness `934/934`; a completed fresh full-suite EXIT
+is a go-live gate item **not yet reproduced this session** (detached re-run ended before its EXIT marker, 0
+failures across every module run — not a completed full-harness result); freshly green this session: targeted
+P12 + P9 `Ran 212 tests … OK` (EXIT 0) and legacy `39/39`. Migration v12 rerun-safe; legacy application paths
+byte-unchanged; all 114 acceptance items + the 20-point live-execution and 25-point final-readiness
+regressions pass. The Phase 11 execution limitation is resolved (every required pilot action invokes the
+ACTUAL Phase 5-7 service; no synthetic callback in the real path). **Final release recommendation:
+CONTINUE_PARALLEL_PILOT** — a controlled parallel pilot is approved; **production-primary go-live is NOT yet
+authorized** and its gate remains BLOCKED pending the completed full harness, real end-to-end executor
+validation for every intended live domain, sustained parallel-run evidence, discrepancy burn-down, real
+operator UAT/sign-off, per-domain readiness certification, and final release review. GO_LIVE_AUTHORIZED can
+only be set by an authorized Principal's explicit governed Decision, and authorization performs no cutover.
+**No irreversible production cutover or legacy retirement occurred.** Phase 12 is the final phase — no
+additional development phase is proposed. (Phase 11 is **approved and complete**
 (controlled-pilot baseline preserved at commit `83d66e4`); Phase 10 preserved at `05ba436`; legacy at
 `3bf9162`, and the legacy tool is kept available throughout migration, parallel validation, rollback
 rehearsal, and release review. Phase 12 wires every required real Phase 5-7 executor behind the governed
