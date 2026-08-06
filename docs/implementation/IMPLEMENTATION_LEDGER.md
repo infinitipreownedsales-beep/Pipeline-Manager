@@ -398,3 +398,89 @@ requirement_index.json (note), KNOWN_BUG_REGISTRY (note). Phase 9 added `elite/g
 
 Result: **Phase 9 complete → HOLD FOR REVIEW.** Phases 1-8 remain complete, approved, and unmodified;
 their issued records are immutable historical evidence. Next: Phase 10 only after review.
+
+## Phase 9 review disposition — APPROVED
+
+Phase 9 (governance + operational control; `elite/govern/` + migration v9) reviewed and **approved**.
+Recorded here and in IMPLEMENTATION_CONTROL.md. Legacy line preserved at `3bf9162`. The governed
+operational surface references authoritative domain output and reuses the Phase 1 Governor + Phase 8
+Calibration governance (no competing framework, no second activation path, no redefinition of Phase 4-8
+domain mathematics). BUG-CPO-002 remains FIXED_END_TO_END.
+
+## Phase 10 — Operator Experience and Presentation Layer  (branch `elite-pipeline/phase-0`)  [COMPLETE — HOLD FOR REVIEW]
+
+Control records: Phase 9 recorded approved; Phase 10 set active. Building the first complete
+operator-facing Elite Pipeline application (`elite/ui/`) — a server-rendered presentation layer (stdlib
+WSGI; no new dependencies) built strictly on the Phase 9 output slices and Phase 1-8 authoritative read
+models: application shell, navigation, unified Decision Inbox, recommendation detail (Call/Why/Proof/Raw
+History), New Inventory / Production & Supply / Service Loaner / Executive Demo workspaces, the governed
+Decision-issuance experience, approval/execution/acknowledgment queues, Scenario administration,
+Calibration review, authority administration, Audit review, exception + unresolved queues,
+operational-control summaries, domain readiness, operator search, and durable presentation preferences
+(migration v10 — presentation-only, non-authoritative). The interface READS authoritative records and
+never recomputes domain logic; introduces no second business-logic layer; browser/localStorage state is
+never authoritative; every mutation routes through the Phase 1-9 services; below-UI authorization + scope
+are never bypassed. Safe templating + output encoding, CSRF for state-changing browser actions, session
+context, correlation-ID preservation, double-submission prevention, no stack traces/secrets to operators.
+Carries a dedicated 20-point operator-workflow regression and a 15-point presentation-integrity
+regression. No Phase-11 operational hardening / live-source deployment / broad real-data migration /
+cutover / legacy replacement.
+
+Implemented a NEW `elite/ui/` package + migration v10 (appended; v1-v9 unchanged), touching no legacy
+file: a server-rendered operator application on the Python **stdlib only** (`wsgiref`, `html`,
+`http.cookies`, `secrets`, `urllib.parse`) — no third-party web framework, no new dependency. It is a
+thin window over Phase 1-9 services: it reads authoritative records and recomputes no domain logic,
+routes every mutation through the governed services, and holds no authoritative state in the browser.
+Delivered: the application shell (name/environment, authenticated Principal, current store scope,
+primary navigation, attention count, freshness + data-quality + current-revision indicators, help, a
+safe error boundary, and unauthorized/out-of-scope/revoked states); a unified Decision Inbox over the
+Phase 9 workspace records (counts reconcile to source; domain/status/priority filters; Scenario-only
+and stale items visually distinct); a consistent recommendation-detail pattern (Call / Why / Proof /
+Raw History evidence timeline; missing explanation stays *unknown*; official vs Scenario and current
+vs historical distinguishable; no recompute); New Inventory / Production & Supply / Service Loaner /
+Executive Demo workspaces (every number read from the Phase 4-7 stores — proposal vs committed,
+membership vs rental, Economic Call vs Execution Status distinct; the zero-mile question verbatim;
+Used Cars confirmed in one action; Best Overall shows why it wins with visible tradeoffs and a labeled
+sacrifice; one physical unit counted once); the governed Decision-issuance experience (9 dispositions,
+exact recommendation revision, presented alternatives, optional rationale, override-with-reason, stale
+guard, per-render idempotency nonce → double-submit safe, Scenario-only); approval / execution /
+acknowledgment queues (separate approval authority + visible separation-of-duties, approval ≠
+execution, the real domain service invoked, a failed run never shown as completed, Scenario Decisions
+cannot execute officially, idempotent replays, approval-expiry guard); Scenario administration;
+Calibration review over Phase 8 records (approval ≠ activation); authority administration over the
+Phase 1 grants (governed + audited, immediate revocation); read-only Audit review; exception +
+unresolved queues (dismissal needs authority + reason; closing never resolves source); operational-
+control summaries (reconcile to source); domain readiness (evidence-based; synthetic-only
+insufficient; never deploys); operator search (scope-filtered, links to authoritative detail); and
+durable presentation preferences (migration v10 — presentation-only, non-authoritative, freely
+deletable, no immutability triggers; deleting them changes no Decision/approval/execution/policy/
+identity/supply/Demand/Need/Economic-Call/governance state). Safe templating with output encoding
+everywhere, a strict CSP + `X-Frame-Options: DENY`, `HttpOnly`/`SameSite=Strict` server-side sessions,
+a `_csrf` token on every non-public state-changing action, correlation-ID preservation across the
+governed call chain, and a safe error boundary that never leaks a stack trace or secret.
+
+Evidence executed: platform harness **717/717** (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 + 79 P6 +
+79 P7 + 91 P8 + 104 P9 + 98 P10); legacy **39/39** (29 engine + 10 loaner); migration v10 rerun-safe
+(presentation-only, re-application leaves the applied-count at 10 and every table freely deletable);
+legacy application paths byte-unchanged vs `legacy/inventory-tool` @ `3bf9162`. All 121 mandatory
+acceptance items pass, plus the dedicated 20-point operator-workflow regression and the 15-point
+presentation-integrity regression (PHASE10_COMPLETION.md). The full operator loop is proven through
+the real routes and services: open inbox → open an authoritative recommendation → Call/Why/Proof/Raw
+History → issue an audited Decision → a separate approver approves under an enforced separation-of-
+duties rule → approval does not execute → an authorized executor drives the real domain service
+returning an actual event → completion + reconciliation shown → repeated submission does not duplicate
+→ a new fact makes the recommendation stale → stale cannot execute → an authorized override requires a
+reason → a Scenario recommendation cannot execute officially → the correlation ID is preserved → the
+UI performs no domain calculation → prior recommendation + Decision remain historical → an audit
+failure produces a visible safe failure → the legacy application remains untouched.
+
+Docs: PHASE10_COMPLETION, PHASE10_ARCHITECTURE, PHASE10_TRACEABILITY, adr/ADR-0035..0040; updated
+IMPLEMENTATION_CONTROL, IMPLEMENTATION_LEDGER, RUN_INSTRUCTIONS, REQUIREMENT_INDEX (note),
+KNOWN_BUG_REGISTRY (note). Migration v10 adds five presentation-only tables
+(`operator_view_preference`, `saved_filter`, `saved_workspace_view`, `instructional_hint_state`,
+`recent_operator_context`) with NO immutability triggers — proving presentation state is
+non-authoritative. No Phase 1-9 behavior changed; every prior domain remains separate and unmodified.
+
+Result: **Phase 10 complete → HOLD FOR REVIEW.** The operator application is a faithful window over the
+authoritative Phase 1-9 platform — no second business-logic layer, no authoritative browser state, no
+bypass of below-UI authorization or scope. Next: Phase 11 only after review.

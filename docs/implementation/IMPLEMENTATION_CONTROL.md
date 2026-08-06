@@ -23,8 +23,8 @@ specification is authoritative, what is preserved, and what work is permitted.
 - **Branch:** `elite-pipeline/phase-0` (created from `3bf9162`; does not modify the legacy line)
 
 ## Current phase / work unit
-- **Phase:** Phase 9 — Governance, Decision Workspace, Scenario Administration, and Operational Control
-  (**complete; HOLD FOR REVIEW**).
+- **Phase:** Phase 10 — Operator Experience and Presentation Layer (**complete; HOLD FOR REVIEW**).
+- **Phase 9:** **approved and complete.**
 - **Phase 8:** **approved and complete.**
 - **Phase 7:** **approved and complete.**
 - **Phase 6:** **approved and complete.**
@@ -258,7 +258,53 @@ specification is authoritative, what is preserved, and what work is permitted.
   migration v9 rerun-safe; legacy application paths byte-unchanged. All 113 acceptance items pass + the
   20-point governed-decision and 14-point authority-administration regressions. See `PHASE9_COMPLETION.md`,
   `PHASE9_TRACEABILITY.md`, `PHASE9_DOMAIN_MODEL.md`, `PHASE9_REGISTRIES.md`, `adr/ADR-0028..0034`.
-- **Approved next phase:** Phase 10 — **only after review**.
+- **Phase 10 scope:** the first complete operator-facing Elite Pipeline application — a server-rendered
+  presentation layer (stdlib WSGI; no new dependencies) built strictly on the Phase 9 output slices and
+  Phase 1-8 authoritative read models: application shell (identity/scope/attention/freshness/data-quality/
+  revision/help/error boundary/unauthorized+out-of-scope states); navigation; unified Decision Inbox;
+  recommendation detail with Call/Why/Proof/Raw History; New Inventory, Production & Supply, Service Loaner,
+  and Executive Demo workspaces; the governed Decision-issuance experience; approval/execution/
+  acknowledgment queues; Scenario administration; Calibration review; authority administration; Audit
+  review; exception + unresolved queues; operational-control summaries; domain readiness; operator search;
+  and durable presentation preferences where justified (migration v10 — presentation-only, non-
+  authoritative). Binding principles: the interface **reads** authoritative records and **never recomputes
+  domain logic**; it introduces **no second business-logic layer**; browser state / localStorage /
+  client-side ranking / display logic are **never authoritative**; all mutations route through the Phase
+  1-9 services; below-UI authorization + scope are never bypassed; recommendation ≠ Economic Call ≠
+  Execution Status ≠ Decision ≠ approval ≠ execution ≠ completion stay separated; Scenario ≠ official;
+  unknown/unresolved stay explicit; no universal red/yellow/green score replaces domain truth; New
+  Inventory / production workflows / Service Loaner / Executive Demo / Learning / Governance stay
+  distinguishable. Safe templating + output encoding, CSRF protection for state-changing browser actions,
+  session context, correlation-ID preservation, double-submission prevention, and no stack traces/secrets
+  to operators. **No** Phase-11 operational hardening, live-source deployment, broad real-data migration,
+  cutover, or replacement of the legacy tool.
+- **Phase 10 result:** new `elite/ui/` package + migration v10 (presentation-only; v1-v9 unchanged),
+  touching no legacy file. A server-rendered operator application (stdlib WSGI; **no new dependencies**):
+  application shell (identity/scope/attention/freshness/data-quality/revision/help/error boundary/
+  unauthorized+out-of-scope); navigation; unified Decision Inbox (counts reconcile; filters; Scenario/
+  stale distinct); recommendation detail (Call/Why/Proof/Raw History evidence timeline; reads authoritative
+  records, recomputes nothing; unknown stays unknown; official/scenario + current/historical distinct);
+  New Inventory / Production & Supply / Service Loaner / Executive Demo workspaces (every number read from
+  Phase 4-7 stores; proposal≠committed; membership≠rental; exact zero-mile question; one-action Used Cars
+  receipt; Best Overall why + tradeoffs + labeled sacrifice; opportunity cost≠benefit); governed
+  Decision-issuance (9 dispositions; revision-pinned; override-with-reason; stale guard; idempotency nonce;
+  Scenario-only); approval/execution/acknowledgment queues (separate approval authority + visible SoD;
+  approval≠execution; execution invokes the real domain service and never shows a failed run completed;
+  Scenario can't execute officially; idempotent); Scenario administration; Calibration review (Phase 8;
+  approval≠activation; scheduled future-effective; policy→review); authority administration (Phase 1 grants;
+  grant chain; immediate revocation; governed+audited); read-only Audit review (immutable; correlated
+  traces; missing-event exceptions); exception queues (reference source; close≠resolve; dismissal needs
+  authority+reason); operational-control summaries; domain readiness (evidence-based; synthetic-insufficient;
+  no deploy); operator search (scope-filtered); durable presentation preferences (non-authoritative;
+  deletion inert). Safe templating + output encoding, strict CSP, HttpOnly/SameSite server-side sessions,
+  CSRF on every state-changing action, correlation-ID preservation, double-submit prevention, and no stack
+  traces/secrets to operators. The UI reads authoritative records and never recomputes domain logic; all
+  mutations route through the Phase 1-9 services; below-UI authorization + scope are never bypassed.
+  Platform tests `717/717` (26 P1 + 35 P2 + 59 P3 + 65 P4 + 81 P5 + 79 P6 + 79 P7 + 91 P8 + 104 P9 + 98
+  P10); legacy `39/39`; migration v10 rerun-safe; legacy application paths byte-unchanged. All 121
+  acceptance items pass + the 20-point operator-workflow and 15-point presentation-integrity regressions.
+  See `PHASE10_COMPLETION.md`, `PHASE10_ARCHITECTURE.md`, `PHASE10_TRACEABILITY.md`, `adr/ADR-0035..0040`.
+- **Approved next phase:** Phase 11 — **only after review**.
 
 ## Required commands (legacy launch / inspect)
 ```
@@ -297,14 +343,13 @@ PYTHONPATH=. python3 pipeline_manager/tests/test_loaner_intel.py
 - Product owner / General Sales Manager (dealership). Implementation review pending.
 
 ## Status
-**Phase 9 complete — HOLD FOR REVIEW.** Governance / Decision Workspace / Scenario Administration /
-Operational Control on `elite-pipeline/phase-0` (Phase 8 approved). New `elite/govern/` package + migration
-v9; platform tests `619/619`; legacy `39/39`; all 113 acceptance items + the 20-point governed-decision and
-14-point authority-administration regressions pass; legacy application paths byte-unchanged. Phase 9
-references authoritative domain output and reuses the Phase 1 Governor/authz/audit + Phase 8 Calibration
-governance — no competing framework, no second activation path, no redefinition of Phase 4-8 domain
-mathematics. Recommendation ≠ Decision ≠ approval ≠ execution ≠ completion; Scenario ≠ official state; no
-universal operational ranker. All Phase 1-8 issued records, Decisions, Predictions, Observations,
-economic/planning/workflow results, and Audit Events are preserved as immutable historical evidence.
-Legacy line preserved at `3bf9162`. **BUG-CPO-002 = FIXED_END_TO_END**, retained permanently in regression
-coverage. Phase 10 not started.
+**Phase 10 complete — HOLD FOR REVIEW.** Operator Experience and Presentation Layer on
+`elite-pipeline/phase-0` (Phase 9 approved). New `elite/ui/` package (stdlib WSGI; no new dependencies) +
+migration v10 (presentation-only); platform tests `717/717`; legacy `39/39`; all 121 acceptance items +
+the 20-point operator-workflow and 15-point presentation-integrity regressions pass; legacy application
+paths byte-unchanged. The interface reads authoritative Phase 1-9 records and never recomputes domain
+logic; every mutation routes through the governed services; browser/localStorage state is never
+authoritative; below-UI authorization + scope are never bypassed. All Phase 1-9 domain mathematics,
+lifecycle rules, authorization, audit, Decisions, Predictions, Observations, and governed execution
+services are preserved unchanged. Legacy line preserved at `3bf9162`. **BUG-CPO-002 = FIXED_END_TO_END**,
+retained permanently in regression coverage. Phase 11 not started.

@@ -1101,6 +1101,32 @@ MIGRATIONS = [
         CREATE TRIGGER governance_issued_output_no_delete BEFORE DELETE ON governance_issued_output
             BEGIN SELECT RAISE(ABORT, 'governance_issued_output is preserved'); END;
     """),
+    (10, "operator_presentation", """
+        -- Presentation-ONLY preference records. These are NON-authoritative: they hold no business
+        -- state, and deleting any of them changes no Decision, approval, execution, policy, identity,
+        -- supply, Demand, Need, Economic Call, or governance state. Freely mutable + deletable (no
+        -- immutability triggers) — the opposite of every authoritative table above.
+        CREATE TABLE operator_view_preference (
+            id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, pref_key TEXT NOT NULL, pref_value TEXT,
+            updated_at TEXT NOT NULL, UNIQUE(principal_id, pref_key)
+        );
+        CREATE TABLE saved_filter (
+            id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, name TEXT NOT NULL, screen TEXT NOT NULL,
+            filter_json TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE saved_workspace_view (
+            id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, name TEXT NOT NULL, screen TEXT NOT NULL,
+            config_json TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE instructional_hint_state (
+            id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, hint_key TEXT NOT NULL, dismissed INTEGER NOT NULL
+            DEFAULT 0, updated_at TEXT NOT NULL, UNIQUE(principal_id, hint_key)
+        );
+        CREATE TABLE recent_operator_context (
+            id TEXT PRIMARY KEY, principal_id TEXT NOT NULL UNIQUE, last_domain TEXT, last_scope TEXT,
+            updated_at TEXT NOT NULL
+        );
+    """),
 ]
 
 

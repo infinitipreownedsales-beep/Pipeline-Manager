@@ -75,7 +75,15 @@ contract fields. New defects append here with a stable ID.
   redefines Phase 4-8 domain mathematics — no Decision, approval, execution, promotion, or override
   rewrites an issued recommendation, Prediction, planning result, or Demand
   (`elite/tests/test_phase9_migration_cross.py` items 106-110; the governed-decision regression proves the
-  recommendation stays historical through the whole Decision→execution loop).
+  recommendation stays historical through the whole Decision→execution loop). Verified still green under
+  migration v10 / Phase 10 (Operator Experience and Presentation Layer): the operator UI is a faithful
+  read-only window — it displays the stored Demand / Supply / Need / Economic Call / Execution Status and
+  recomputes no domain math, contains no alternative Demand or Need formula, and every mutation routes
+  through the governed Phase 1-9 services, so no screen, filter, presentation preference, or browser state
+  can raise Need or rewrite an issued recommendation, Prediction, planning result, or Demand
+  (`elite/tests/test_phase10_domains.py` test_23; `test_phase10_presentation_integrity_regression.py`;
+  `test_phase10_workflows_cross.py` test_121). Migration v10 adds presentation-only tables with no
+  immutability triggers and does not touch any Phase 4-9 domain record.
 - **Regression fixture (Phase 4):** `elite/tests/test_phase4_bug_cpo_002.py` — baseline
   Demand + qualifying Supply + Need; add an approved synthetic CPO-like commitment only as
   Committed Supply; Demand unchanged; qualifying Supply increases by exactly the committed

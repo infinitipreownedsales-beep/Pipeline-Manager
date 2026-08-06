@@ -32,7 +32,7 @@ db.migrate()          # applies pending migrations; tracked in migration_record
 print("schema version:", db.version())
 ```
 
-### Run the platform tests (Phase 1 through Phase 9)
+### Run the platform tests (Phase 1 through Phase 10)
 ```
 PYTHONPATH=. python3 elite/tests/run_all.py
 # focused BUG-CPO-002 regressions (Phase 4 synthetic + Phase 5 end-to-end CPO workflow):
@@ -46,6 +46,9 @@ PYTHONPATH=. python3 -m unittest elite.tests.test_phase8_learning_governance_reg
 # focused governed-decision + authority-administration regressions:
 PYTHONPATH=. python3 -m unittest elite.tests.test_phase9_governed_decision_regression \
     elite.tests.test_phase9_authority_admin_regression -v
+# focused operator-workflow + presentation-integrity regressions (Phase 10):
+PYTHONPATH=. python3 -m unittest elite.tests.test_phase10_operator_workflow_regression \
+    elite.tests.test_phase10_presentation_integrity_regression -v
 ```
 
 ### Phase 2 — data/identity/facts (example)
@@ -211,6 +214,33 @@ sqlite3 "$ELITE_DB_PATH" "SELECT disposition,override,scenario_id FROM governed_
 sqlite3 "$ELITE_DB_PATH" "SELECT outcome FROM decision_execution_reconciliation;"
 sqlite3 "$ELITE_DB_PATH" "SELECT classification,blockers FROM domain_readiness_assessment;"
 sqlite3 "$ELITE_DB_PATH" "SELECT delegator,delegate,capability,active FROM authority_delegation;"
+```
+
+### Phase 10 — operator experience + presentation layer (example)
+The operator application is a server-rendered stdlib WSGI app (`wsgiref`; **no new dependencies**). It
+reads the authoritative Phase 1-9 records and never recomputes domain logic; every mutation routes
+through the governed services.
+
+Serve it locally:
+```
+export ELITE_ENV=development
+export ELITE_DB_PATH=/path/to/elite.db
+PYTHONPATH=. python3 -m elite.ui.serve            # serves the operator app on http://127.0.0.1:8010
+# then open http://127.0.0.1:8010/login  (sign in with an operator id + password + store scope)
+```
+Drive it in-process (no socket) — the same routes and services the browser uses:
+```python
+from elite.ui.fixtures import Phase10
+p = Phase10("/path/to/elite.db")                  # migrates v1..v10; builds the App over Phase 9
+c = p.login(p.op_full)                            # in-process client (auto-injects the CSRF token)
+print(c.get("/").status)                          # 200 — Decision Inbox (counts reconcile to source)
+print(c.get("/new-inventory").status)             # 200 — domain workspace (numbers read from Phase 4)
+# a below-UI unauthorized operator is refused regardless of navigation visibility:
+print(p.login(p.op_unauth).get("/").status)       # 403
+```
+Presentation state is non-authoritative (migration v10) — deleting it changes no business record:
+```
+sqlite3 "$ELITE_DB_PATH" "DELETE FROM operator_view_preference;"   # no Decision/Need/Supply effect
 ```
 
 ### Inspect the authoritative store
