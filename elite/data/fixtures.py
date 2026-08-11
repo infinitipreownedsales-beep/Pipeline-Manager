@@ -26,8 +26,12 @@ VEHICLE_FIELDS = [
 class Phase2:
     """Phase 1 platform + Phase 2 data/identity/facts, with sources registered."""
 
-    def __init__(self, db_path):
-        self.stack = Stack(db_path)                 # migrates v1 + v2
+    def __init__(self, db_path, *, runtime=None):
+        # runtime=None -> deterministic test defaults (tests/fixtures); a RuntimeConfig -> real
+        # pepper + real clock + real environment for the production/pilot launcher.
+        self.stack = (Stack(db_path) if runtime is None else
+                      Stack(db_path, environment=runtime.environment, pepper=runtime.pepper,
+                            clock=runtime.clock))                 # migrates v1 + v2
         self.store = DataStore(self.stack.db.conn, self.stack.clock)
         self.facts = FactService(self.store, self.stack.clock)
         self.ingestion = IngestionService(self.store, self.facts, self.stack.clock)

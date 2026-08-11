@@ -45,9 +45,9 @@ class Client:
 
 
 class Phase10:
-    def __init__(self, db_path, *, seed=True):
+    def __init__(self, db_path, *, seed=True, runtime=None):
         from ..govern.fixtures import Phase9
-        self.p9 = Phase9(db_path, seed=seed)
+        self.p9 = Phase9(db_path, seed=seed, runtime=runtime)
         self.stack = self.p9.stack
         self.clock = self.stack.clock
         self.app = App(self.p9, environment="test")

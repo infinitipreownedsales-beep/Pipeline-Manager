@@ -34,10 +34,21 @@ class TestLauncherWiring(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.db = os.path.join(self.tmp, "elite.db")
+        self._prev = {k: os.environ.get(k) for k in ("ELITE_ENV", "ELITE_AUTH_SECRET",
+                                                      "ELITE_SINGLE_OPERATOR_PILOT")}
+        os.environ["ELITE_ENV"] = "pilot"
+        os.environ["ELITE_AUTH_SECRET"] = "launcher-wiring-test-secret"
+
+    def tearDown(self):
+        for k, v in self._prev.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
     def test_launcher_is_phase12_wired_without_seeding(self):
         os.environ["ELITE_SINGLE_OPERATOR_PILOT"] = "1"
-        app = build_app(db_path=self.db, environment="pilot")
+        app = build_app(db_path=self.db)
 
         # 1. opens a v12 database WITHOUT seeding: zero synthetic principals / grants / scheduled jobs
         conn = app.stack.db.conn

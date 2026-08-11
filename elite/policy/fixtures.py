@@ -26,8 +26,8 @@ def local_date_to_utc(date_str, tz=TZ, end=False):
 
 
 class Phase3:
-    def __init__(self, db_path, *, seed=True):
-        self.p2 = Phase2(db_path)                 # migrates v1 + v2 + v3
+    def __init__(self, db_path, *, seed=True, runtime=None):
+        self.p2 = Phase2(db_path, runtime=runtime)                 # migrates v1 + v2 + v3
         self.stack = self.p2.stack
         self.clock = self.stack.clock
         self.store = PolicyStore(self.stack.db.conn, self.clock)

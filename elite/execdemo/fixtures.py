@@ -34,8 +34,8 @@ CAPS = ["executive_demo.view", "executive_demo.designation.propose", "executive_
 
 
 class Phase7:
-    def __init__(self, db_path, *, seed=True):
-        self.p6 = Phase6(db_path, seed=seed)                     # migrates v1-v6
+    def __init__(self, db_path, *, seed=True, runtime=None):
+        self.p6 = Phase6(db_path, seed=seed, runtime=runtime)                     # migrates v1-v6
         self.stack = self.p6.stack
         self.clock = self.stack.clock
         self.stack.db.migrate()                       # apply v7

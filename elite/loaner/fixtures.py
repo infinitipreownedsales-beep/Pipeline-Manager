@@ -40,8 +40,8 @@ LOANER_FIELDS = [
 
 
 class Phase6:
-    def __init__(self, db_path, *, seed=True):
-        self.p5 = Phase5(db_path, seed=seed)                       # migrates v1-v5
+    def __init__(self, db_path, *, seed=True, runtime=None):
+        self.p5 = Phase5(db_path, seed=seed, runtime=runtime)                       # migrates v1-v5
         self.stack = self.p5.stack
         self.clock = self.stack.clock
         self.stack.db.migrate()                         # apply v6

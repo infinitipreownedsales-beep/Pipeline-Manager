@@ -15,22 +15,36 @@ def _truthy(v):
     return str(v or "").strip().lower() in ("1", "true", "yes", "on")
 
 
-def build_app(db_path=None, environment=None):
+def build_app(db_path=None):
     """Build the operator application for local dealership use.
 
     Constructs the SAME fully-wired Phase 12 stack proven by the live-execution regression — the real
     Phase 5-7 executor registry + `LiveExecutionService` attached to the operator app — but with seeding
-    OFF: no fixtures, no synthetic principals or records. Opens the configured `ELITE_DB_PATH` in place and
-    applies only pending migrations (a no-op at v12); it never recreates, reseeds, or resets the database.
+    OFF and REAL runtime configuration threaded into the base Stack: the credential pepper from
+    `ELITE_AUTH_SECRET`, a real system clock, and the explicit `ELITE_ENV` environment (never the fixture
+    defaults `test-pepper` / FixedClock / TEST). Opens the configured `ELITE_DB_PATH` in place and applies
+    only pending migrations (a no-op at v12); it never recreates, reseeds, or resets the database.
     `ELITE_SINGLE_OPERATOR_PILOT=1` enables the explicit self-approval pilot exception (unset for multi-user).
     """
     from ..release.fixtures import Phase12
-    db_path = db_path or os.environ.get("ELITE_DB_PATH", "elite.db")
-    pilot = Phase12(db_path, seed=False)          # migrates v1..v12 in place; wires the real live executor
+    from ..fixtures import RuntimeConfig
+    from ..environment import resolve_environment
+    from ..clock import SystemClock
+    from ..errors import ConfigurationError
+    env = os.environ
+    db_path = db_path or env.get("ELITE_DB_PATH", "elite.db")
+    # Fail closed: never fall back to the test pepper for a real runtime.
+    pepper = (env.get("ELITE_AUTH_SECRET") or "").strip()
+    if not pepper:
+        raise ConfigurationError(
+            message="The operator application is not configured to start.",
+            technical_detail="ELITE_AUTH_SECRET is required; refusing to start with a test credential pepper.")
+    runtime = RuntimeConfig(pepper=pepper, clock=SystemClock(), environment=resolve_environment(env))
+    pilot = Phase12(db_path, seed=False, runtime=runtime)   # real pepper/clock/environment; no seeding
     app = pilot.app
-    app.environment = environment or os.environ.get("ELITE_ENV", "development")
-    app.single_operator_pilot = _truthy(os.environ.get("ELITE_SINGLE_OPERATOR_PILOT"))
-    app._pilot_stack = pilot                      # keep the wired stack (live executor + services) referenced
+    app.environment = runtime.environment.value            # authoritative runtime identity (e.g. "pilot")
+    app.single_operator_pilot = _truthy(env.get("ELITE_SINGLE_OPERATOR_PILOT"))
+    app._pilot_stack = pilot                               # keep the wired stack (live executor + services) referenced
     return app
 
 

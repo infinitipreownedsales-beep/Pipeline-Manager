@@ -17,6 +17,7 @@ class Environment(enum.Enum):
     TEST = "test"
     PRODUCTION = "production"
     DEMO = "demo"
+    PILOT = "pilot"          # controlled dealership pilot runtime — distinct from TEST and PRODUCTION
 
     @property
     def is_production(self) -> bool:

@@ -30,8 +30,8 @@ OTHER_SCOPE = "store:WEST"
 
 
 class Phase9:
-    def __init__(self, db_path, *, seed=True):
-        self.p8 = Phase8(db_path, seed=seed)                     # migrates v1-v8
+    def __init__(self, db_path, *, seed=True, runtime=None):
+        self.p8 = Phase8(db_path, seed=seed, runtime=runtime)                     # migrates v1-v8
         self.stack = self.p8.stack
         self.clock = self.stack.clock
         self.stack.db.migrate()                       # apply v9

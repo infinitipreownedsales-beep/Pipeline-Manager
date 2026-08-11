@@ -26,8 +26,8 @@ COMPLETE_CAPS = ["dealer_trade.complete", "production.execute", "ctp.execute"]
 
 
 class Phase5:
-    def __init__(self, db_path, *, seed=True):
-        self.p4 = Phase4(db_path, seed=seed)                     # migrates v1-v4
+    def __init__(self, db_path, *, seed=True, runtime=None):
+        self.p4 = Phase4(db_path, seed=seed, runtime=runtime)                     # migrates v1-v4
         self.stack = self.p4.stack
         self.clock = self.stack.clock
         self.stack.db.migrate()                       # apply v5

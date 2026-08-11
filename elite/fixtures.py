@@ -6,6 +6,7 @@ so tests are reproducible and never depend on wall-clock or ambient config.
 from __future__ import annotations
 
 import datetime as _dt
+from dataclasses import dataclass
 
 from .audit import SqliteAuditRepository
 from .authz import Authorizer
@@ -24,8 +25,23 @@ from .repositories import (SqliteGrantRepository, SqliteIdempotencyStore,
 FIXED_START = _dt.datetime(2026, 1, 2, 15, 4, 5, tzinfo=_dt.timezone.utc)
 
 
+@dataclass(frozen=True)
+class RuntimeConfig:
+    """Real runtime configuration for the production/pilot launcher.
+
+    The launcher resolves this ONCE from the environment (the credential pepper from ELITE_AUTH_SECRET,
+    a real system clock, and the explicit ELITE_ENV environment) and threads it down the constructor chain
+    so the base Stack is built with real runtime identity instead of the test defaults. Test and fixture
+    constructors pass no RuntimeConfig and keep their deterministic defaults.
+    """
+    pepper: str
+    clock: object
+    environment: Environment
+
+
 class Stack:
-    """A wired platform stack for tests/bootstrap."""
+    """A wired platform stack. Test/fixture callers use the deterministic defaults; the production launcher
+    passes a real pepper, a real clock, and the real environment."""
 
     def __init__(self, db_path, *, environment=Environment.TEST, pepper="test-pepper",
                  clock=None):

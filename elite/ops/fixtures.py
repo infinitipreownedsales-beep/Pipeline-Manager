@@ -56,9 +56,9 @@ def _kind(name):
 
 
 class Phase11:
-    def __init__(self, db_path, *, pilot_mode=True, seed=True):
+    def __init__(self, db_path, *, pilot_mode=True, seed=True, runtime=None):
         from ..ui.fixtures import Phase10
-        self.p10 = Phase10(db_path, seed=seed)                     # migrates v1-v10, builds the operator App
+        self.p10 = Phase10(db_path, seed=seed, runtime=runtime)                     # migrates v1-v10, builds the operator App
         self.app = self.p10.app
         self.p9 = self.p10.p9
         self.stack = self.p9.stack
