@@ -28,7 +28,7 @@ def build_app(db_path=None):
     """
     from ..release.fixtures import Phase12
     from ..fixtures import RuntimeConfig
-    from ..environment import resolve_environment, resolve_pilot_scope
+    from ..environment import resolve_environment, resolve_pilot_scope, resolve_revision
     from ..clock import SystemClock
     from ..errors import ConfigurationError
     env = os.environ
@@ -41,8 +41,12 @@ def build_app(db_path=None):
             technical_detail="ELITE_AUTH_SECRET is required; refusing to start with a test credential pepper.")
     # Fail closed on the store scope too: the real runtime resolves ELITE_PILOT_SCOPE (no store:HG fallback).
     pilot_scope = resolve_pilot_scope(env)
-    runtime = RuntimeConfig(pepper=pepper, clock=SystemClock(), environment=resolve_environment(env),
-                            pilot_scope=pilot_scope)
+    environment = resolve_environment(env)
+    # Technical build/release identity for logs: ELITE_REVISION if set, else the environment value
+    # (e.g. "pilot") — never the fixture "test" default.
+    revision = resolve_revision(env, environment=environment)
+    runtime = RuntimeConfig(pepper=pepper, clock=SystemClock(), environment=environment,
+                            pilot_scope=pilot_scope, revision=revision)
     pilot = Phase12(db_path, seed=False, runtime=runtime)   # real pepper/clock/environment; no seeding
     app = pilot.app
     app.environment = runtime.environment.value            # authoritative runtime identity (e.g. "pilot")

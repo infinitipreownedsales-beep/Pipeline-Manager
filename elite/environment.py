@@ -61,3 +61,18 @@ def resolve_pilot_scope(env: dict | None = None, *, default: str | None = None) 
         message="The store scope is not configured.",
         technical_detail="ELITE_PILOT_SCOPE is unset/empty; refusing to assume a store scope "
                          "(never silently falls back to store:HG).")
+
+
+def resolve_revision(env: dict | None = None, *, environment: Environment | None = None) -> str:
+    """Resolve the technical build/release identity stamped on diagnostic logs.
+
+    Uses ELITE_REVISION when present and nonempty; otherwise falls back to the resolved runtime
+    environment value (e.g. "pilot"). ELITE_REVISION is optional and never required. The real runtime
+    therefore never emits the fixture "test" revision — only fixture/test construction defaults to "test".
+    """
+    env = os.environ if env is None else env
+    raw = (env.get("ELITE_REVISION") or "").strip()
+    if raw:
+        return raw
+    resolved = environment if environment is not None else resolve_environment(env)
+    return resolved.value

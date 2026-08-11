@@ -23,7 +23,7 @@ from ..data.ingestion import IngestionService
 from ..data.models import FieldSpec, SchemaProfile, SourceRegistry
 from ..data.store import DataStore
 from ..db import Db
-from ..environment import resolve_environment, resolve_pilot_scope
+from ..environment import resolve_environment, resolve_pilot_scope, resolve_revision
 from .backup import BackupService
 from .contracts import SOURCE_CONTRACTS, get_contract
 from .durability import apply_durability, startup_validation
@@ -51,7 +51,8 @@ class OpsStack:
         self.db.migrate()
         apply_durability(self.db.conn)
         self.opsconfig = load_ops_config(os.environ)
-        self.oplog = OperationalLogger(self.environment, "pilot")
+        # Single source of truth for the log revision: ELITE_REVISION or the environment value (never "test").
+        self.oplog = OperationalLogger(self.environment, resolve_revision(os.environ, environment=self.environment))
         self.data = DataStore(self.db.conn, self.clock)
         self.facts = FactService(self.data, self.clock)
         self.ingestion = IngestionService(self.data, self.facts, self.clock)

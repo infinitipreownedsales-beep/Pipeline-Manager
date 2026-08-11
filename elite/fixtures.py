@@ -37,11 +37,16 @@ class RuntimeConfig:
     ``pilot_scope`` is the authoritative store scope (resolved once from ELITE_PILOT_SCOPE) that the login
     UI and ops CLI operate at — kept here as the single source of truth so no UI/CLI site re-parses the
     environment or hardcodes a dealership string.
+
+    ``revision`` is the technical build/release identity stamped on diagnostic logs (distinct from
+    ``environment``, the deployment class, and from the UI's schema/db revision). The real launcher resolves
+    it once from ELITE_REVISION, falling back to the environment value — never the fixture "test" default.
     """
     pepper: str
     clock: object
     environment: Environment
     pilot_scope: str = ""
+    revision: str = "test"
 
 
 class Stack:
@@ -49,7 +54,7 @@ class Stack:
     passes a real pepper, a real clock, and the real environment."""
 
     def __init__(self, db_path, *, environment=Environment.TEST, pepper="test-pepper",
-                 clock=None):
+                 clock=None, revision="test"):
         self.environment = environment
         self.clock = clock or FixedClock(FIXED_START, step=_dt.timedelta(seconds=1))
         self.db = Db(db_path, self.clock)
@@ -63,7 +68,7 @@ class Stack:
         self.audit = SqliteAuditRepository(conn)
         self.authn = Authenticator(self.principals, pepper)
         self.authz = Authorizer(self.grants)
-        self.logger = StructuredLogger(environment, "test")
+        self.logger = StructuredLogger(environment, revision)
         self.governor = Governor(self.db, self.authz, self.audit, self.idempotency,
                                  self.clock, environment, self.logger)
         # Stamp environment identity so a store is never silently mistaken for another.

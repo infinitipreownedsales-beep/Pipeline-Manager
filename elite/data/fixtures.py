@@ -31,7 +31,7 @@ class Phase2:
         # pepper + real clock + real environment for the production/pilot launcher.
         self.stack = (Stack(db_path) if runtime is None else
                       Stack(db_path, environment=runtime.environment, pepper=runtime.pepper,
-                            clock=runtime.clock))                 # migrates v1 + v2
+                            clock=runtime.clock, revision=runtime.revision))   # migrates v1 + v2
         self.store = DataStore(self.stack.db.conn, self.stack.clock)
         self.facts = FactService(self.store, self.stack.clock)
         self.ingestion = IngestionService(self.store, self.facts, self.stack.clock)
