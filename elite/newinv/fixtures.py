@@ -26,8 +26,8 @@ AT = "2026-08-15T00:00:00+00:00"
 class Phase4:
     """Phase 1-3 foundations + Phase 4 New Inventory domain services, deterministically wired."""
 
-    def __init__(self, db_path):
-        self.p3 = Phase3(db_path)                    # migrates v1+v2+v3; +v4 below
+    def __init__(self, db_path, *, seed=True):
+        self.p3 = Phase3(db_path, seed=seed)                    # migrates v1+v2+v3; +v4 below
         self.stack = self.p3.stack
         self.clock = self.stack.clock
         self.stack.db.migrate()                      # ensure migration v4 applied

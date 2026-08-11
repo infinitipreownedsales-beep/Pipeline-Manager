@@ -45,14 +45,15 @@ class Client:
 
 
 class Phase10:
-    def __init__(self, db_path):
+    def __init__(self, db_path, *, seed=True):
         from ..govern.fixtures import Phase9
-        self.p9 = Phase9(db_path)
+        self.p9 = Phase9(db_path, seed=seed)
         self.stack = self.p9.stack
         self.clock = self.stack.clock
         self.app = App(self.p9, environment="test")
-        self._operators()
-        self.seed()
+        if seed:
+            self._operators()
+            self.seed()
 
     def _op(self, key, name, caps, scope="*"):
         pid = self.stack.metadata.get(key)

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 
-from .app import App, make_server
+from .app import make_server
 
 
 def _truthy(v):
@@ -16,14 +16,22 @@ def _truthy(v):
 
 
 def build_app(db_path=None, environment=None):
-    from ..govern.fixtures import Phase9
+    """Build the operator application for local dealership use.
+
+    Constructs the SAME fully-wired Phase 12 stack proven by the live-execution regression — the real
+    Phase 5-7 executor registry + `LiveExecutionService` attached to the operator app — but with seeding
+    OFF: no fixtures, no synthetic principals or records. Opens the configured `ELITE_DB_PATH` in place and
+    applies only pending migrations (a no-op at v12); it never recreates, reseeds, or resets the database.
+    `ELITE_SINGLE_OPERATOR_PILOT=1` enables the explicit self-approval pilot exception (unset for multi-user).
+    """
+    from ..release.fixtures import Phase12
     db_path = db_path or os.environ.get("ELITE_DB_PATH", "elite.db")
-    p9 = Phase9(db_path)
-    # Explicit single-operator pilot exception, off unless deliberately enabled in the environment.
-    # Set ELITE_SINGLE_OPERATOR_PILOT=1 only for a genuine sole-operator pilot; unset it for multi-user.
-    single_operator = _truthy(os.environ.get("ELITE_SINGLE_OPERATOR_PILOT"))
-    return App(p9, environment=environment or os.environ.get("ELITE_ENV", "development"),
-               single_operator_pilot=single_operator)
+    pilot = Phase12(db_path, seed=False)          # migrates v1..v12 in place; wires the real live executor
+    app = pilot.app
+    app.environment = environment or os.environ.get("ELITE_ENV", "development")
+    app.single_operator_pilot = _truthy(os.environ.get("ELITE_SINGLE_OPERATOR_PILOT"))
+    app._pilot_stack = pilot                      # keep the wired stack (live executor + services) referenced
+    return app
 
 
 def main():

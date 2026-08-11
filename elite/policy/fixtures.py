@@ -26,31 +26,34 @@ def local_date_to_utc(date_str, tz=TZ, end=False):
 
 
 class Phase3:
-    def __init__(self, db_path):
+    def __init__(self, db_path, *, seed=True):
         self.p2 = Phase2(db_path)                 # migrates v1 + v2 + v3
         self.stack = self.p2.stack
         self.clock = self.stack.clock
         self.store = PolicyStore(self.stack.db.conn, self.clock)
         self.data = self.p2.store
         self.gov = self.stack.governor
-        # owner principal (persisted id so reopen reuses it) with policy capabilities
-        oid = self.stack.metadata.get("policy_owner_id")
-        if oid is None:
-            owner = self.stack.authn.register("Policy Owner", "pw")
-            oid = owner.id
-            self.stack.metadata.put_if_absent("policy_owner_id", oid)
-            for cap in ("policy.propose", "policy.approve", "policy.activate", "scenario.override",
-                        "probe.write"):
-                self.stack.grant(oid, cap, "*")
-        self.owner = oid
-        # a limited principal WITHOUT scenario.override (negative tests)
-        lid = self.stack.metadata.get("limited_id")
-        if lid is None:
-            lim = self.stack.authn.register("Limited User", "pw")
-            lid = lim.id
-            self.stack.metadata.put_if_absent("limited_id", lid)
-            self.stack.grant(lid, "policy.propose", "*")
-        self.limited = lid
+        self.owner = None
+        self.limited = None
+        if seed:
+            # owner principal (persisted id so reopen reuses it) with policy capabilities
+            oid = self.stack.metadata.get("policy_owner_id")
+            if oid is None:
+                owner = self.stack.authn.register("Policy Owner", "pw")
+                oid = owner.id
+                self.stack.metadata.put_if_absent("policy_owner_id", oid)
+                for cap in ("policy.propose", "policy.approve", "policy.activate", "scenario.override",
+                            "probe.write"):
+                    self.stack.grant(oid, cap, "*")
+            self.owner = oid
+            # a limited principal WITHOUT scenario.override (negative tests)
+            lid = self.stack.metadata.get("limited_id")
+            if lid is None:
+                lim = self.stack.authn.register("Limited User", "pw")
+                lid = lim.id
+                self.stack.metadata.put_if_absent("limited_id", lid)
+                self.stack.grant(lid, "policy.propose", "*")
+            self.limited = lid
 
     def reopen(self):
         return Phase3(self.stack.db.path)

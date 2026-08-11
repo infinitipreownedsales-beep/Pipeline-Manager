@@ -40,8 +40,8 @@ LOANER_FIELDS = [
 
 
 class Phase6:
-    def __init__(self, db_path):
-        self.p5 = Phase5(db_path)                       # migrates v1-v5
+    def __init__(self, db_path, *, seed=True):
+        self.p5 = Phase5(db_path, seed=seed)                       # migrates v1-v5
         self.stack = self.p5.stack
         self.clock = self.stack.clock
         self.stack.db.migrate()                         # apply v6
@@ -65,7 +65,8 @@ class Phase6:
         self.retirement = RetirementService(self.store, self.ni, self.gov, self.clock)
         self.scenario = ScenarioService(self.store, self.clock)
         self.resale = ResaleService(self.store, self.clock)
-        self._principals()
+        if seed:
+            self._principals()
 
     def _cv(self, family, key):
         cid = self.stack.metadata.get(key)

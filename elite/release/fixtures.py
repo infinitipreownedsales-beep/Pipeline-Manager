@@ -22,9 +22,9 @@ ALL_CAPS = list(CAPS.values())
 
 
 class Phase12:
-    def __init__(self, db_path):
+    def __init__(self, db_path, *, seed=True):
         from ..ops.fixtures import Phase11
-        self.p11 = Phase11(db_path)                    # migrates v1-v11, controlled pilot stack
+        self.p11 = Phase11(db_path, seed=seed)                    # migrates v1-v11, controlled pilot stack
         self.app = self.p11.app
         self.p9 = self.p11.p9
         self.p8 = self.p9.p8
@@ -54,7 +54,8 @@ class Phase12:
                                          self.clock, logger=self.oplog)
         self.app.live_executor = self.live             # wire into the operator app
 
-        self._operators()
+        if seed:
+            self._operators()
 
     # ---- operators -----------------------------------------------------------
     def _op(self, key, name, caps, scope=SCOPE):

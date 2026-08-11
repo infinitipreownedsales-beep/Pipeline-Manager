@@ -56,9 +56,9 @@ def _kind(name):
 
 
 class Phase11:
-    def __init__(self, db_path, *, pilot_mode=True):
+    def __init__(self, db_path, *, pilot_mode=True, seed=True):
         from ..ui.fixtures import Phase10
-        self.p10 = Phase10(db_path)                     # migrates v1-v10, builds the operator App
+        self.p10 = Phase10(db_path, seed=seed)                     # migrates v1-v10, builds the operator App
         self.app = self.p10.app
         self.p9 = self.p10.p9
         self.stack = self.p9.stack
@@ -92,9 +92,10 @@ class Phase11:
                                   logger=self.oplog)
         self.intake = FileIntake(self.ops, max_bytes=self.opsconfig.max_upload_bytes)
 
-        self._register_sources()
-        self._operators()
-        self._register_jobs()
+        if seed:
+            self._register_sources()
+            self._operators()
+            self._register_jobs()
 
     # ---- wiring helpers ------------------------------------------------------
     def _register_sources(self):

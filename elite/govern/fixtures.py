@@ -30,8 +30,8 @@ OTHER_SCOPE = "store:WEST"
 
 
 class Phase9:
-    def __init__(self, db_path):
-        self.p8 = Phase8(db_path)                     # migrates v1-v8
+    def __init__(self, db_path, *, seed=True):
+        self.p8 = Phase8(db_path, seed=seed)                     # migrates v1-v8
         self.stack = self.p8.stack
         self.clock = self.stack.clock
         self.stack.db.migrate()                       # apply v9
@@ -51,7 +51,8 @@ class Phase9:
         self.queues = ExceptionQueueService(self.store, self.gov, self.clock)
         self.summaries = OperationalControlService(self.store, self.clock)
         self.readiness = ReadinessService(self.store, self.gov, self.clock)
-        self._principals()
+        if seed:
+            self._principals()
 
     def _principal(self, key, name, caps):
         pid = self.stack.metadata.get(key)

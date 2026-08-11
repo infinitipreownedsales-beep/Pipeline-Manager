@@ -26,8 +26,8 @@ COMPLETE_CAPS = ["dealer_trade.complete", "production.execute", "ctp.execute"]
 
 
 class Phase5:
-    def __init__(self, db_path):
-        self.p4 = Phase4(db_path)                     # migrates v1-v4
+    def __init__(self, db_path, *, seed=True):
+        self.p4 = Phase4(db_path, seed=seed)                     # migrates v1-v4
         self.stack = self.p4.stack
         self.clock = self.stack.clock
         self.stack.db.migrate()                       # apply v5
@@ -46,7 +46,8 @@ class Phase5:
         self.ctp = CtpService(self.wf, self.ni, self.supply, self.gov, self.clock)
         self.integrate = IntegrateService(self.ni, self.supply, self.planning, self.wf, self.plan_cv)
         self.sequential = SequentialPlanner(self.ni, self.supply, self.planning, self.wf, self.clock, self.plan_cv)
-        self._principals()
+        if seed:
+            self._principals()
 
     def _principal(self, meta_key, name, caps):
         pid = self.stack.metadata.get(meta_key)

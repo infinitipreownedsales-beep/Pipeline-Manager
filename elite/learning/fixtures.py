@@ -34,8 +34,8 @@ RETAIL_OT = "actual_monthly_retail"
 
 
 class Phase8:
-    def __init__(self, db_path):
-        self.p7 = Phase7(db_path)                     # migrates v1-v7
+    def __init__(self, db_path, *, seed=True):
+        self.p7 = Phase7(db_path, seed=seed)                     # migrates v1-v7
         self.stack = self.p7.stack
         self.clock = self.stack.clock
         self.stack.db.migrate()                       # apply v8
@@ -56,7 +56,8 @@ class Phase8:
         self.signals = LearningSignalService(self.store, self.clock)
         self.calibration = CalibrationService(self.store, self.policy, self.gov, self.clock)
         self.backtest = BacktestService(self.store, self.policy, self.clock, self.backtest_cv)
-        self._principals()
+        if seed:
+            self._principals()
 
     def _cv(self, family, key):
         cid = self.stack.metadata.get(key)
