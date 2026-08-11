@@ -28,7 +28,7 @@ def build_app(db_path=None):
     """
     from ..release.fixtures import Phase12
     from ..fixtures import RuntimeConfig
-    from ..environment import resolve_environment
+    from ..environment import resolve_environment, resolve_pilot_scope
     from ..clock import SystemClock
     from ..errors import ConfigurationError
     env = os.environ
@@ -39,10 +39,14 @@ def build_app(db_path=None):
         raise ConfigurationError(
             message="The operator application is not configured to start.",
             technical_detail="ELITE_AUTH_SECRET is required; refusing to start with a test credential pepper.")
-    runtime = RuntimeConfig(pepper=pepper, clock=SystemClock(), environment=resolve_environment(env))
+    # Fail closed on the store scope too: the real runtime resolves ELITE_PILOT_SCOPE (no store:HG fallback).
+    pilot_scope = resolve_pilot_scope(env)
+    runtime = RuntimeConfig(pepper=pepper, clock=SystemClock(), environment=resolve_environment(env),
+                            pilot_scope=pilot_scope)
     pilot = Phase12(db_path, seed=False, runtime=runtime)   # real pepper/clock/environment; no seeding
     app = pilot.app
     app.environment = runtime.environment.value            # authoritative runtime identity (e.g. "pilot")
+    app.pilot_scope = runtime.pilot_scope                   # authoritative store scope for login/authorization
     app.single_operator_pilot = _truthy(env.get("ELITE_SINGLE_OPERATOR_PILOT"))
     app._pilot_stack = pilot                               # keep the wired stack (live executor + services) referenced
     return app

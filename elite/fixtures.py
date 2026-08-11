@@ -33,10 +33,15 @@ class RuntimeConfig:
     a real system clock, and the explicit ELITE_ENV environment) and threads it down the constructor chain
     so the base Stack is built with real runtime identity instead of the test defaults. Test and fixture
     constructors pass no RuntimeConfig and keep their deterministic defaults.
+
+    ``pilot_scope`` is the authoritative store scope (resolved once from ELITE_PILOT_SCOPE) that the login
+    UI and ops CLI operate at — kept here as the single source of truth so no UI/CLI site re-parses the
+    environment or hardcodes a dealership string.
     """
     pepper: str
     clock: object
     environment: Environment
+    pilot_scope: str = ""
 
 
 class Stack:

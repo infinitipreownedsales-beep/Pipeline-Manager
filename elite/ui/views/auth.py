@@ -8,17 +8,24 @@ from ..http import Response
 def register(app):
     @app.get("/login")
     def login_form(app, req):
+        # The store scope is the single-store pilot's configured scope (ELITE_PILOT_SCOPE), read-only:
+        # a default sign-in authenticates at exactly that scope, so the operator never types or misremembers
+        # the dealership string and can never land in the wrong scope from this form.
+        scope = esc(app.pilot_scope)
         body = ('<div class="card"><form method="post" action="/login">'
                 '<label for="pid">Operator ID</label><input id="pid" name="principal_id" required>'
                 '<label for="sec">Password</label><input id="sec" name="secret" type="password" required>'
-                '<label for="scope">Store / scope</label><input id="scope" name="scope" value="store:HG" required>'
+                '<label for="scope">Store / scope</label>'
+                f'<input id="scope" name="scope" value="{scope}" readonly required>'
                 '<div style="margin-top:10px"><button type="submit">Sign in</button></div></form></div>')
         return Response(page("Sign in", body, ctx={"environment": app.environment}))
 
     @app.post("/login")
     def do_login(app, req):
         try:
-            token = app.login(req.f("principal_id", ""), req.f("secret", ""), req.f("scope", "store:HG"))
+            # Fall back to the configured runtime scope — never a hardcoded store:HG.
+            token = app.login(req.f("principal_id", ""), req.f("secret", ""),
+                              req.f("scope", app.pilot_scope) or app.pilot_scope)
         except Exception:
             return Response(page("Sign in", '<div class="err" role="alert">Sign-in failed. Check your '
                                  'operator ID and password.</div>', ctx={"environment": app.environment}),

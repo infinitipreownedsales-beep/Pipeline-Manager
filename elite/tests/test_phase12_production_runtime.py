@@ -16,7 +16,7 @@ from elite.errors import AuthenticationError, ConfigurationError
 from elite.release.fixtures import Phase12
 from elite.ui.serve import build_app
 
-REAL_SECRET = "S1-real-production-pepper"
+REAL_PEPPER = "S1-real-production-pepper"
 
 
 class TestProductionRuntimeConfig(unittest.TestCase):
@@ -24,9 +24,11 @@ class TestProductionRuntimeConfig(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.db = os.path.join(self.tmp, "elite.db")
         self._prev = {k: os.environ.get(k)
-                      for k in ("ELITE_ENV", "ELITE_AUTH_SECRET", "ELITE_SINGLE_OPERATOR_PILOT")}
+                      for k in ("ELITE_ENV", "ELITE_AUTH_SECRET", "ELITE_PILOT_SCOPE",
+                                "ELITE_SINGLE_OPERATOR_PILOT")}
         os.environ["ELITE_ENV"] = "pilot"
-        os.environ["ELITE_AUTH_SECRET"] = REAL_SECRET
+        os.environ["ELITE_AUTH_SECRET"] = REAL_PEPPER
+        os.environ["ELITE_PILOT_SCOPE"] = "store:HG_INFINITI_JACKSON"
         os.environ.pop("ELITE_SINGLE_OPERATOR_PILOT", None)
 
     def tearDown(self):
@@ -55,7 +57,7 @@ class TestProductionRuntimeConfig(unittest.TestCase):
             for row in conn.execute('SELECT * FROM "%s"' % t):
                 for val in tuple(row):
                     if isinstance(val, str):
-                        self.assertNotIn(REAL_SECRET, val)
+                        self.assertNotIn(REAL_PEPPER, val)
 
     # B. MISSING SECRET ------------------------------------------------------
     def test_B_missing_secret_fails_closed(self):

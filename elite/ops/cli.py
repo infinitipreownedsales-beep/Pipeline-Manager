@@ -23,7 +23,7 @@ from ..data.ingestion import IngestionService
 from ..data.models import FieldSpec, SchemaProfile, SourceRegistry
 from ..data.store import DataStore
 from ..db import Db
-from ..environment import resolve_environment
+from ..environment import resolve_environment, resolve_pilot_scope
 from .backup import BackupService
 from .contracts import SOURCE_CONTRACTS, get_contract
 from .durability import apply_durability, startup_validation
@@ -43,6 +43,8 @@ class OpsStack:
 
     def __init__(self, db_path=None, env=None):
         self.environment = resolve_environment({"ELITE_ENV": env} if env else os.environ)
+        # Authoritative store scope for real pilot operation — fail closed, never a silent store:HG fallback.
+        self.pilot_scope = resolve_pilot_scope(os.environ)
         db_path = db_path or os.environ.get("ELITE_DB_PATH", "elite.db")
         self.clock = SystemClock()
         self.db = Db(db_path, self.clock)
@@ -81,10 +83,9 @@ class OpsStack:
             fields = [FieldSpec(n, required=(n in c.required_fields), kind=_kind(n), meaning=n) for n in names]
             auth = [c.fact_type] if c.fact_type else []
             snap = c.snapshot_capability in ("full", "full_or_partial")
-            scope = os.environ.get("ELITE_PILOT_SCOPE", "store:HG")
             self.data.add_source(SourceRegistry(id=sid, name=c.key, owner=c.owner, source_type=c.source_system,
                                                 supported_profiles=[sid + "_p1"], authoritative_fact_types=auth,
-                                                scope=scope))
+                                                scope=self.pilot_scope))
             self.data.add_profile(SchemaProfile(id=sid + "_p1", source_id=sid, version=1, fields=fields,
                                                 snapshot_capable=snap, full_snapshot_requirements={}))
 
@@ -100,7 +101,7 @@ def cmd_diagnostics(stack, args):
 
 
 def cmd_health(stack, args):
-    scope = args[0] if args else os.environ.get("ELITE_PILOT_SCOPE", "store:HG")
+    scope = args[0] if args else stack.pilot_scope
     _out({"liveness": stack.health.liveness(), "readiness": stack.health.readiness(scope),
           "operational": stack.health.operational_health(scope)})
     return 0
@@ -114,7 +115,7 @@ def cmd_import(stack, args):
         print(f"unknown contract {ck}", file=sys.stderr); return 2
     with open(path, "rb") as f:
         payload = f.read()
-    scope = os.environ.get("ELITE_PILOT_SCOPE", "store:HG")
+    scope = stack.pilot_scope
     run = stack.orch.run(contract_key=ck, payload=payload, source_id="src_p11_" + ck, scope=scope,
                          content_hash=content_hash(payload), initiated_by="cli")
     _out({"import_run": run["id"], "state": run["state"], "accepted": run["accepted_count"]})

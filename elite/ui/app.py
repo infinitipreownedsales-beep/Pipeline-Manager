@@ -31,11 +31,14 @@ class Session:
 
 
 class App:
-    def __init__(self, p9, *, environment="test", single_operator_pilot=False):
+    def __init__(self, p9, *, environment="test", single_operator_pilot=False, pilot_scope="store:HG"):
         self.p9 = p9
         self.stack = p9.stack
         self.store = p9.store            # GovernStore
         self.environment = environment
+        # Authoritative store scope the login UI defaults to. Fixture/test construction keeps the
+        # deterministic "store:HG"; the real launcher overrides this from the resolved RuntimeConfig.
+        self.pilot_scope = pilot_scope
         # Explicit, reversible single-operator pilot exception (scoped, audited, disableable). When True,
         # the Approvals screen offers a clearly-labelled self-approval path that records the exception on
         # the approval (SoD NOT satisfied) instead of hiding the action. Multi-user rollout sets this False,

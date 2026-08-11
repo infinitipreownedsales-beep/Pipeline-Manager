@@ -35,9 +35,10 @@ class TestLauncherWiring(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.db = os.path.join(self.tmp, "elite.db")
         self._prev = {k: os.environ.get(k) for k in ("ELITE_ENV", "ELITE_AUTH_SECRET",
-                                                      "ELITE_SINGLE_OPERATOR_PILOT")}
+                                                      "ELITE_PILOT_SCOPE", "ELITE_SINGLE_OPERATOR_PILOT")}
         os.environ["ELITE_ENV"] = "pilot"
         os.environ["ELITE_AUTH_SECRET"] = "launcher-wiring-test-secret"
+        os.environ["ELITE_PILOT_SCOPE"] = SCOPE
 
     def tearDown(self):
         for k, v in self._prev.items():
