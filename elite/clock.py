@@ -47,6 +47,24 @@ def to_utc_iso(t: _dt.datetime) -> str:
     return t.astimezone(_dt.timezone.utc).isoformat()
 
 
+def local_business_date(t, tz_name: str = "America/Chicago") -> str:
+    """The local civil date (YYYY-MM-DD) at instant `t` in `tz_name`.
+
+    Accepts a timezone-aware datetime or a UTC ISO string (a naive value is read as UTC). This is the
+    business-date anchor for longitudinal snapshot idempotency: two uploads on different local business
+    days are different observations even when their bytes are identical. Falls back to the UTC date only
+    if the zoneinfo database is unavailable (documented, deterministic degradation)."""
+    if isinstance(t, str):
+        t = _dt.datetime.fromisoformat(t)
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=_dt.timezone.utc)
+    try:
+        from zoneinfo import ZoneInfo
+        return t.astimezone(ZoneInfo(tz_name)).strftime("%Y-%m-%d")
+    except Exception:
+        return t.astimezone(_dt.timezone.utc).strftime("%Y-%m-%d")
+
+
 def present_in_dealership_tz(t: _dt.datetime, tz_name: str) -> str:
     """Presentation-only conversion for display in the dealership timezone. Falls
     back to a fixed offset label if the zoneinfo database is unavailable."""

@@ -98,6 +98,22 @@ class DataStore:
             (source_id, scope, checksum)).fetchone()
         return self._batch(r)
 
+    def find_completed_batch_for_business_date(self, source_id, scope, checksum, business_date, tz):
+        """Business-date-aware replay lookup (longitudinal-snapshot sources). Mirrors the ops-layer rule so
+        the two idempotency layers always agree: a prior COMPLETED batch with identical content is a replay
+        only when its observation anchor (effective_time -> received_at) falls on the same local business
+        date; a later business day is a new snapshot."""
+        from ..clock import local_business_date
+        rows = self.conn.execute(
+            "SELECT * FROM import_batch WHERE source_id=? AND store_scope=? AND payload_checksum=?"
+            " AND lifecycle_status='completed' AND replay_of IS NULL ORDER BY received_at",
+            (source_id, scope, checksum)).fetchall()
+        for r in rows:
+            anchor = r["effective_time"] or r["received_at"]
+            if anchor and local_business_date(anchor, tz) == business_date:
+                return self._batch(r)
+        return None
+
     def add_batch(self, b: ImportBatch) -> ImportBatch:
         with self.conn:
             self.conn.execute(

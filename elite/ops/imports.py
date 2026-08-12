@@ -69,9 +69,31 @@ class ImportOrchestrator:
                                      description=f"adapter for {contract.key}",
                                      transforms_doc="strip/whitespace; declared-numeric currency cleanup")
 
-        # idempotency: a prior COMPLETED run with the same content short-circuits (no new facts).
+        # Longitudinal-snapshot sources anchor idempotency on the local business date. Resolve the
+        # observation time once (trustworthy DMS/export as-of -> FileIntake receipt -> import time) and
+        # thread it consistently into the run, batch, and observations. Other sources are unaffected.
+        snapshot_tz = "America/Chicago"
+        snapshot_bdate = None
+        if getattr(contract, "snapshot_idempotency", "content_hash") == "content_hash_per_business_date":
+            from ..clock import local_business_date
+            obs_ts = effective_time
+            if obs_ts is None and file_receipt_id:
+                receipt = self.ops.get_file_receipt(file_receipt_id)
+                if receipt is not None:
+                    obs_ts = receipt["received_at"]
+            if obs_ts is None:
+                obs_ts = self.ops._now()
+            effective_time = obs_ts
+            snapshot_bdate = local_business_date(obs_ts, snapshot_tz)
+
+        # idempotency: a prior COMPLETED run with the same content short-circuits (no new facts). For a
+        # longitudinal-snapshot source the match additionally requires the same local business date.
         if content_hash and correction_of is None and retry_of is None:
-            prior = self.ops.find_import_run_by_hash(source_id, scope, content_hash)
+            if snapshot_bdate is not None:
+                prior = self.ops.find_import_run_by_hash_and_business_date(
+                    source_id, scope, content_hash, snapshot_bdate, snapshot_tz)
+            else:
+                prior = self.ops.find_import_run_by_hash(source_id, scope, content_hash)
             if prior is not None:
                 if self.logger:
                     self.logger.op("import", "import.run", result="idempotent_replay",
@@ -117,7 +139,9 @@ class ImportOrchestrator:
             batch = self.ingestion.ingest(**adapter.ingest_kwargs(
                 source_id=source_id, scope=scope, entity_kind=contract.entity_kind,
                 fact_type=contract.fact_type, claimed_snapshot=claimed_snapshot,
-                effective_time=effective_time, correlation_id=correlation_id, correction_of=correction_of))
+                effective_time=effective_time, correlation_id=correlation_id, correction_of=correction_of,
+                observed_time=(effective_time if snapshot_bdate is not None else None),
+                snapshot_business_date=snapshot_bdate, snapshot_tz=snapshot_tz))
         except EliteError as e:
             return self._fail(run, "INGESTING", e, correlation_id)
         except Exception as e:

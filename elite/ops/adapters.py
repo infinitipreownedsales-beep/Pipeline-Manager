@@ -37,12 +37,14 @@ class AdapterResult:
     stock_identity: bool = True      # False -> stock_number is not an identity/dedup key for this source
 
     def ingest_kwargs(self, *, source_id, scope, entity_kind, fact_type, claimed_snapshot,
-                      effective_time=None, correlation_id=None, correction_of=None):
+                      effective_time=None, correlation_id=None, correction_of=None,
+                      observed_time=None, snapshot_business_date=None, snapshot_tz="America/Chicago"):
         return dict(source_id=source_id, profile_version=1, rows=self.rows, raw_text=self.raw_text,
                     scope=scope, entity_kind=entity_kind, fact_type=fact_type or None,
                     claimed_snapshot=claimed_snapshot, effective_time=effective_time,
                     correlation_id=correlation_id, correction_of=correction_of,
-                    stock_identity=self.stock_identity)
+                    stock_identity=self.stock_identity, observed_time=observed_time,
+                    snapshot_business_date=snapshot_business_date, snapshot_tz=snapshot_tz)
 
 
 def _decode(payload) -> str:

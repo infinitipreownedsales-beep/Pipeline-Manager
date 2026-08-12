@@ -46,6 +46,12 @@ class SourceContract:
     sheet: str = ""                                      # worksheet name for workbook sources ("" = first sheet)
     stock_number_is_identity: bool = True                # False: stock_number is NOT an identity/dedup key
     serial_lifecycle: bool = False                       # True: Serial is lifecycle-dependent; classify UNKNOWN
+    # Snapshot idempotency policy. "content_hash" (default): a prior COMPLETED run with the same content is a
+    # replay (legacy behavior, unchanged for every existing source). "content_hash_per_business_date": for a
+    # recurring longitudinal-memory source, dedup identity is (source, scope, local business date, content
+    # hash) — a byte-identical export on a LATER business day is a NEW legitimate snapshot (inventory
+    # unchanged into another day), while a same-day identical re-upload is still a replay.
+    snapshot_idempotency: str = "content_hash"
 
 
 # The minimum source families required for the controlled pilot.
@@ -170,6 +176,10 @@ SOURCE_CONTRACTS = {
                         "Trans": "trans", "Ext": "ext", "Int": "int", "MSRP": "msrp", "Inv": "inv",
                         "Location": "location", "DIS": "dis", "ETA": "eta", "Production Month": "production_month"},
         sheet="vehicleInventorySummary0", stock_number_is_identity=False,
+        # Recurring longitudinal-memory source: dedup by (source, scope, local business date, content hash)
+        # so an identical export on a later business day is retained as a new snapshot, not swallowed as a
+        # pure content replay (America/Chicago; observation time resolved as-of -> receipt -> import time).
+        snapshot_idempotency="content_hash_per_business_date",
         raw_retention="original workbook retained via FileIntake; rows retained as Source Observations",
         domain="new_inventory", fact_type="", entity_kind="inventory_pipeline_record"),
 }

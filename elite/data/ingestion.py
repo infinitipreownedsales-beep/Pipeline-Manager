@@ -48,7 +48,8 @@ class IngestionService:
 
     def ingest(self, *, source_id, profile_version, rows, raw_text, scope,
                entity_kind="vehicle", fact_type=None, claimed_snapshot="partial",
-               correlation_id=None, effective_time=None, correction_of=None, stock_identity=True):
+               correlation_id=None, effective_time=None, correction_of=None, stock_identity=True,
+               observed_time=None, snapshot_business_date=None, snapshot_tz="America/Chicago"):
         source = self.store.get_source(source_id)
         if source is None:
             raise ValidationError(technical_detail=f"unknown source {source_id}")
@@ -58,7 +59,14 @@ class IngestionService:
 
         cs = checksum(raw_text)
         if correction_of is None:
-            prior = self.store.find_completed_batch(source_id, scope, cs)
+            # A longitudinal-snapshot source (snapshot_business_date supplied) dedups per (source, scope,
+            # business date, content) so an identical export on a later business day is a new snapshot;
+            # every other source keeps pure content-hash replay (unchanged behavior).
+            if snapshot_business_date is not None:
+                prior = self.store.find_completed_batch_for_business_date(
+                    source_id, scope, cs, snapshot_business_date, snapshot_tz)
+            else:
+                prior = self.store.find_completed_batch(source_id, scope, cs)
             if prior is not None:
                 return prior            # idempotent: exact replay, no new official effect
 
@@ -79,7 +87,7 @@ class IngestionService:
             obs = self.store.add_observation(SourceObservation(
                 id=new_id("obs"), import_batch_id=batch.id, raw_values=row, normalized_values=normalized,
                 recorded_time=to_utc_iso(self.clock.now()), validation_status=vstatus, acceptance_status="pending",
-                source_scope=scope,
+                source_scope=scope, observed_time=observed_time,
                 source_record_identity=_record_identity(entity_kind, row, normalized, stock_identity),
                 provenance={"source": source_id, "batch": batch.id, "row": i}))
 

@@ -61,6 +61,21 @@ class OpsStore:
             " AND state IN ('COMPLETED','COMPLETED_WITH_WARNINGS') ORDER BY created_at LIMIT 1",
             (source_id, scope, content_hash)).fetchone()
 
+    def find_import_run_by_hash_and_business_date(self, source_id, scope, content_hash, business_date, tz):
+        """Business-date-aware replay lookup for longitudinal-snapshot sources: a prior COMPLETED run with
+        the same content is a replay ONLY when its observation time falls on the same local business date.
+        The observation anchor mirrors the resolver (source_effective_time -> received_at)."""
+        from ..clock import local_business_date
+        rows = self.conn.execute(
+            "SELECT * FROM import_run WHERE source_id=? AND store_scope=? AND content_hash=?"
+            " AND state IN ('COMPLETED','COMPLETED_WITH_WARNINGS') ORDER BY created_at",
+            (source_id, scope, content_hash)).fetchall()
+        for r in rows:
+            anchor = r["source_effective_time"] or r["received_at"] or r["created_at"]
+            if anchor and local_business_date(anchor, tz) == business_date:
+                return r
+        return None
+
     def list_import_runs(self, source_id=None, scope=None):
         q, args = "SELECT * FROM import_run", []
         cond = []
