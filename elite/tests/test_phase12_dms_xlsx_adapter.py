@@ -256,6 +256,56 @@ class TestDmsXlsxAdapter(unittest.TestCase):
                           make_xlsx([HEADERS] + self.MERGED, merges=["ZZZ", "A2:A4"]))
         self.assertEqual([r["stock_number"] for r in res.rows], ["75", "75", "75"])
 
+    # === BLANK Stock# IS LEGITIMATE (incoming ONS + some DLR-INV) ===============
+    # Rows with a genuinely blank Stock# (no merge involved) plus a mix of populated real stock strings.
+    BLANK_STOCK = [
+        ["",         "800200", "ONS",         "2027", "QX60", "60111", "QX60 INCOMING", "AUTO", "BLK", "GRY",
+         "58,000", "", "ONS", "", "10/01/2026", "2025-10"],   # incoming, blank stock
+        ["",         "800201", "Deal Opened", "2026", "QX80", "83816", "QX80 IN STOCK", "AUTO", "WHT", "BLK",
+         "92,000", "88,000", "DLR-INV", 5, "07/01/2026", "2025-07"],  # in-stock, blank stock
+        ["N15255",   "800202", "Deal Opened", "2026", "QX60", "60111", "QX60 LUXE",     "AUTO", "SIL", "GRY",
+         "59,000", "56,000", "DLR-INV", 8, "06/15/2026", "2025-06"],  # populated real stock
+        ["N15193",   "800203", "Deal Closed", "2026", "QX65", "65220", "QX65 SENSORY",  "AUTO", "BLU", "TAN",
+         "71,000", "68,000", "DLR-INV", 3, "05/20/2026", "2025-05"],  # populated real stock
+    ]
+
+    def test_blank_stock_rows_retained_as_observations(self):
+        wbx = make_xlsx([HEADERS] + self.BLANK_STOCK)
+        run = self.p.import_payload(CONTRACT, wbx, chash=content_hash(wbx))
+        obs = self._obs(run["import_batch_id"])
+        self.assertEqual(len(obs), 4)                                  # all retained, none rejected
+        self.assertTrue(all(o[1] == "unresolved" for o in obs))       # observation-only, no identity
+        self.assertTrue(all(o[0] != "rejected" for o in obs))         # blank Stock# is NOT a rejection
+        stocks = [o[2].get("stock_number") for o in obs]
+        self.assertEqual(stocks.count(""), 2)                         # two legitimate blank-stock rows retained
+        self.assertIn("N15255", stocks)                               # populated stock preserved exactly
+        self.assertIn("N15193", stocks)
+        self.assertTrue(all(o[2].get("serial_semantic") == "unknown" for o in obs))
+        # blank Stock# never fabricates identity / ProductionOrder / VehicleUnit / fact, never collapses
+        self.assertTrue(all(o[0] != "duplicate" for o in obs))
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) c FROM vehicle_unit").fetchone()["c"], 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) c FROM production_order").fetchone()["c"], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) c FROM business_fact WHERE store_scope=?", (SCOPE,)).fetchone()["c"], 0)
+
+    def test_stock_number_optional_model_still_required(self):
+        c = get_contract(CONTRACT)
+        self.assertNotIn("stock_number", c.required_fields)            # optional now
+        self.assertIn("stock_number", c.optional_fields)
+        self.assertIn("model", c.required_fields)                      # model stays required
+        self.assertFalse(c.stock_number_is_identity)                  # still non-identity-bearing
+        # a row with blank MODEL is still rejected (model required)
+        wbx = make_xlsx([HEADERS, ["N9", "800300", "ONS", "2027", "", "", "", "", "", "", "", "", "ONS",
+                                   "", "", "2025-11"]])
+        run = self.p.import_payload(CONTRACT, wbx, chash=content_hash(wbx))
+        obs = self._obs(run["import_batch_id"])
+        self.assertEqual([o[0] for o in obs], ["rejected"])
+
+    def test_unrelated_contract_keeps_stock_required(self):
+        c = get_contract("new_inventory_current")                     # must be unchanged
+        self.assertIn("stock_number", c.required_fields)
+        self.assertIn("model", c.required_fields)
+
 
 if __name__ == "__main__":
     unittest.main()

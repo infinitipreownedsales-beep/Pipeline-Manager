@@ -155,9 +155,13 @@ SOURCE_CONTRACTS = {
         access="operator_upload", file_kind="xlsx", cadence="daily", snapshot_capability="partial",
         identity_keys=(), effective_time="production/ETA columns (not import date)",
         update_time="export date", schema_version=1,
-        required_fields=("stock_number", "model"),
-        optional_fields=("serial", "serial_semantic", "status", "model_year", "model_code", "description",
-                         "trans", "ext", "int", "msrp", "inv", "location", "dis", "eta", "production_month"),
+        # stock_number is NOT required: the real DMS legitimately emits blank Stock# for both incoming (ONS)
+        # and even some in-stock (DLR-INV) vehicles. Blank is a normal pipeline state, retained as-is, never
+        # fabricated, never identity-bearing. model stays required.
+        required_fields=("model",),
+        optional_fields=("stock_number", "serial", "serial_semantic", "status", "model_year", "model_code",
+                         "description", "trans", "ext", "int", "msrp", "inv", "location", "dis", "eta",
+                         "production_month"),
         serial_lifecycle=True,
         blocking_validation=("missing_required_field", "malformed_row"),
         nonblocking_validation=("extra_unknown_column",),
