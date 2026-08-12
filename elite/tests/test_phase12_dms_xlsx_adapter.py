@@ -55,8 +55,12 @@ def _col(n):
     return s
 
 
-def make_xlsx(rows, sheet_name=SHEET):
-    """Build a minimal but valid .xlsx (stdlib only) with shared strings + numeric cells."""
+def make_xlsx(rows, sheet_name=SHEET, merges=None):
+    """Build a minimal but valid .xlsx (stdlib only) with shared strings + numeric cells.
+
+    Blank/empty cell values are omitted (as Excel does for merged non-anchor cells); pass ``merges`` as a
+    list of A1 ranges (e.g. ["A2:A4"]) to declare merged ranges via <mergeCells>.
+    """
     shared, sidx = [], {}
 
     def si(v):
@@ -77,9 +81,13 @@ def make_xlsx(rows, sheet_name=SHEET):
             else:
                 cells.append(f'<c r="{ref}" t="s"><v>{si(str(val))}</v></c>')
         sheet_rows.append(f'<row r="{r_i}">{"".join(cells)}</row>')
+    mc = ""
+    if merges:
+        mc = ('<mergeCells count="%d">' % len(merges)
+              + "".join('<mergeCell ref="%s"/>' % _esc(r) for r in merges) + '</mergeCells>')
     sheet_xml = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                  '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-                 f'<sheetData>{"".join(sheet_rows)}</sheetData></worksheet>')
+                 f'<sheetData>{"".join(sheet_rows)}</sheetData>{mc}</worksheet>')
     sst = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
            f'<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{len(shared)}" '
            f'uniqueCount="{len(shared)}">'
@@ -203,6 +211,50 @@ class TestDmsXlsxAdapter(unittest.TestCase):
                                        scope=SCOPE, received_by=self.p.op_importer)
         self.assertEqual(receipt["status"], "received")
         self.assertEqual(receipt["content_hash"], content_hash(self.xlsx))
+
+    # === MERGED-CELL RETENTION (the real DMS Stock#=75 merged-range bug) ========
+    # Three rows share a MERGED Stock#=75 (anchor on the first, blank on the rest — exactly how Excel
+    # stores it), but differ in Serial / model / model_year.
+    MERGED = [
+        ["75", "800100", "Deal Opened", "2026", "QX80", "83816", "QX80 SPORT 4WD", "AUTO", "BLK", "GRY",
+         "92,000", "88,000", "DLR-INV", 10, "07/15/2026", "2025-07"],
+        ["",   "800101", "Deal Opened", "2027", "QX60", "60111", "QX60 LUXE AWD", "AUTO", "WHT", "BLK",
+         "58,000", "55,000", "DLR-INV", 20, "08/01/2026", "2025-08"],
+        ["",   "800102", "Deal Closed", "2026", "QX65", "65220", "QX65 SENSORY", "AUTO", "SIL", "GRY",
+         "71,000", "68,000", "DLR-INV", 30, "06/20/2026", "2025-06"],
+    ]
+
+    def test_numeric_stock_without_merge_survives(self):
+        # A plain per-row numeric Stock# is unaffected by the merge fix.
+        one = [HEADERS, ["75"] + ROWS[0][1:]]
+        res = run_adapter(get_contract(CONTRACT), make_xlsx(one))
+        self.assertEqual(res.rows[0]["stock_number"], "75")
+
+    def test_vertical_merge_propagates_stock(self):
+        res = run_adapter(get_contract(CONTRACT), make_xlsx([HEADERS] + self.MERGED, merges=["A2:A4"]))
+        self.assertEqual([r["stock_number"] for r in res.rows], ["75", "75", "75"])  # propagated verbatim
+        self.assertEqual([r["serial"] for r in res.rows], ["800100", "800101", "800102"])  # rows stay distinct
+        self.assertEqual([r["model"] for r in res.rows], ["QX80", "QX60", "QX65"])
+
+    def test_merged_rows_ingest_as_separate_observations_no_entities(self):
+        run = self.p.import_payload(CONTRACT, make_xlsx([HEADERS] + self.MERGED, merges=["A2:A4"]),
+                                    chash=content_hash(make_xlsx([HEADERS] + self.MERGED, merges=["A2:A4"])))
+        obs = self._obs(run["import_batch_id"])
+        self.assertEqual(len(obs), 3)                                   # all three retained
+        self.assertTrue(all(o[1] == "unresolved" for o in obs))        # observation-only, no rejects
+        self.assertEqual(sum(1 for o in obs if o[2].get("stock_number") == "75"), 3)  # 75 on every row
+        self.assertTrue(all(o[0] != "duplicate" for o in obs))         # non-identity 75 -> no collapse
+        self.assertEqual(sorted(set(o[2].get("serial_semantic") for o in obs)), ["unknown"])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) c FROM vehicle_unit").fetchone()["c"], 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) c FROM production_order").fetchone()["c"], 0)
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) c FROM business_fact WHERE store_scope=?", (SCOPE,)).fetchone()["c"], 0)
+
+    def test_horizontal_and_malformed_merge_are_safe(self):
+        # A malformed/garbage merge ref is ignored; a valid vertical merge in the same list still applies.
+        res = run_adapter(get_contract(CONTRACT),
+                          make_xlsx([HEADERS] + self.MERGED, merges=["ZZZ", "A2:A4"]))
+        self.assertEqual([r["stock_number"] for r in res.rows], ["75", "75", "75"])
 
 
 if __name__ == "__main__":

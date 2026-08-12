@@ -208,6 +208,12 @@ def _xl_col_index(ref):
     return idx - 1 if idx else 0
 
 
+def _xl_rc(ref):
+    """Cell ref 'B3' -> (row=3 [1-based], col=1 [0-based]). Row 0 signals an unparseable/malformed ref."""
+    digits = "".join(c for c in (ref or "") if c.isdigit())
+    return (int(digits) if digits else 0), _xl_col_index(ref)
+
+
 def _xl_num_text(v):
     """Deterministic text for a numeric cell: integral -> no decimal; else shortest round-trippable float."""
     if v is None:
@@ -271,11 +277,16 @@ def parse_xlsx(payload, contract: SourceContract, *, sheet=None):
                               technical_detail="no_worksheet_found")
 
     sroot = ET.fromstring(zf.read(path))
-    grid = []
+    cellmap = {}          # (rownum, colidx) -> value
+    rownums, seen_rows, maxcol, seq = [], set(), -1, 0
     for row in sroot.iter():
         if _xl_local(row.tag) != "row":
             continue
-        cells, maxc = {}, -1
+        seq += 1
+        rattr = row.get("r")
+        rnum = int(rattr) if (rattr and rattr.isdigit()) else seq
+        if rnum not in seen_rows:
+            seen_rows.add(rnum); rownums.append(rnum)
         for ci_default, c in enumerate(list(row)):
             if _xl_local(c.tag) != "c":
                 continue
@@ -302,9 +313,30 @@ def parse_xlsx(payload, contract: SourceContract, *, sheet=None):
                 val = "TRUE" if vtext == "1" else "FALSE"
             else:
                 val = _xl_num_text(vtext) if vtext is not None else ""
-            cells[ci] = val
-            maxc = max(maxc, ci)
-        grid.append([cells.get(i, "") for i in range(maxc + 1)])
+            cellmap[(rnum, ci)] = val
+            maxcol = max(maxcol, ci)
+    # Honor merged ranges: Excel stores a merged value only in the top-left anchor cell; every other cell
+    # in the range is empty in the XML (though displayed as the anchor value). Propagate the anchor value
+    # into the EMPTY covered cells so merged source data (e.g. a Stock# spanning a block of rows) is
+    # retained verbatim on every row. A physically non-empty cell inside a range is never overwritten.
+    for el in sroot.iter():
+        if _xl_local(el.tag) != "mergeCell":
+            continue
+        ref = el.get("ref") or ""
+        if ":" not in ref:
+            continue                                       # not a range: ignore safely
+        (r0, c0), (r1, c1) = _xl_rc(ref.split(":", 1)[0]), _xl_rc(ref.split(":", 1)[1])
+        if not (r0 and r1):
+            continue                                       # malformed/unparseable ref: ignore safely
+        anchor = cellmap.get((min(r0, r1), min(c0, c1)), "")
+        if anchor == "":
+            continue
+        for rr in range(min(r0, r1), max(r0, r1) + 1):
+            for cc in range(min(c0, c1), max(c0, c1) + 1):
+                if cellmap.get((rr, cc), "") == "":        # never overwrite a physical value
+                    cellmap[(rr, cc)] = anchor
+                    maxcol = max(maxcol, cc)
+    grid = [[cellmap.get((rn, c), "") for c in range(maxcol + 1)] for rn in rownums]
 
     if not grid or not any(any(str(c).strip() for c in r) for r in grid):
         raise ValidationError(message="The workbook is empty.", technical_detail="empty_workbook")
