@@ -42,6 +42,10 @@ class SourceContract:
     domain: str = ""
     fact_type: str = ""
     entity_kind: str = "vehicle"
+    header_aliases: dict = field(default_factory=dict)   # real source header -> canonical field name
+    sheet: str = ""                                      # worksheet name for workbook sources ("" = first sheet)
+    stock_number_is_identity: bool = True                # False: stock_number is NOT an identity/dedup key
+    serial_lifecycle: bool = False                       # True: Serial is lifecycle-dependent; classify UNKNOWN
 
 
 # The minimum source families required for the controlled pilot.
@@ -138,6 +142,32 @@ SOURCE_CONTRACTS = {
         required_fields=("vin", "value"), optional_fields=("residual", "source"),
         raw_retention="raw preserved; optional + only where authorized", domain="new_inventory",
         fact_type="market_value", entity_kind="vehicle"),
+    # A real DMS inventory/pipeline SUMMARY export (workbook). This captures incoming + current inventory
+    # rows as retained Source Observations only: it is deliberately NOT authoritative vehicle_present data
+    # and asserts NO physical (VIN) identity. Serial is lifecycle-dependent (order number before
+    # serialization; VIN last-six after) and cannot be classified from this file alone, so every row is
+    # preserved with serial_semantic left UNRESOLVED. stock_number is NOT an identity key here (real exports
+    # reuse placeholders such as "75" across many distinct vehicles), so rows never collapse on Stock#.
+    # entity_kind is a non-vehicle/non-order label whose no-VIN rows always resolve UNRESOLVED, so ingestion
+    # creates neither ProductionOrder nor VehicleUnit — pure observation capture pending later enrichment.
+    "new_inventory_pipeline_summary": SourceContract(
+        key="new_inventory_pipeline_summary", owner="Inventory Manager", source_system="DMS",
+        access="operator_upload", file_kind="xlsx", cadence="daily", snapshot_capability="partial",
+        identity_keys=(), effective_time="production/ETA columns (not import date)",
+        update_time="export date", schema_version=1,
+        required_fields=("stock_number", "model"),
+        optional_fields=("serial", "serial_semantic", "status", "model_year", "model_code", "description",
+                         "trans", "ext", "int", "msrp", "inv", "location", "dis", "eta", "production_month"),
+        serial_lifecycle=True,
+        blocking_validation=("missing_required_field", "malformed_row"),
+        nonblocking_validation=("extra_unknown_column",),
+        header_aliases={"Stock#": "stock_number", "Serial": "serial", "Status": "status", "MY": "model_year",
+                        "Model Line": "model", "Model Code": "model_code", "Description": "description",
+                        "Trans": "trans", "Ext": "ext", "Int": "int", "MSRP": "msrp", "Inv": "inv",
+                        "Location": "location", "DIS": "dis", "ETA": "eta", "Production Month": "production_month"},
+        sheet="vehicleInventorySummary0", stock_number_is_identity=False,
+        raw_retention="original workbook retained via FileIntake; rows retained as Source Observations",
+        domain="new_inventory", fact_type="", entity_kind="inventory_pipeline_record"),
 }
 
 

@@ -24,7 +24,7 @@ def checksum(raw_text: str) -> str:
     return "sha256:" + hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
 
 
-def _record_identity(entity_kind, row, normalized):
+def _record_identity(entity_kind, row, normalized, stock_identity=True):
     if entity_kind == "order":
         moid = normalized.get("manufacturer_order_id")
         if isinstance(moid, str) and moid:
@@ -32,9 +32,13 @@ def _record_identity(entity_kind, row, normalized):
     vin = normalized.get("vin")
     if isinstance(vin, str) and vin_status(vin) == "valid":
         return "vin:" + vin
-    for k in ("stock_number", "stock", "id"):
-        if isinstance(row.get(k), str) and row.get(k).strip():
-            return f"{k}:" + row[k].strip()
+    # stock_number is an identity/dedup fallback ONLY where the source contract declares it identity-bearing.
+    # A source that reuses placeholder stock numbers (e.g. "75" across many distinct vehicles) passes
+    # stock_identity=False so those rows never collapse to a single stock:<value> key.
+    if stock_identity:
+        for k in ("stock_number", "stock", "id"):
+            if isinstance(row.get(k), str) and row.get(k).strip():
+                return f"{k}:" + row[k].strip()
     return None
 
 
@@ -44,7 +48,7 @@ class IngestionService:
 
     def ingest(self, *, source_id, profile_version, rows, raw_text, scope,
                entity_kind="vehicle", fact_type=None, claimed_snapshot="partial",
-               correlation_id=None, effective_time=None, correction_of=None):
+               correlation_id=None, effective_time=None, correction_of=None, stock_identity=True):
         source = self.store.get_source(source_id)
         if source is None:
             raise ValidationError(technical_detail=f"unknown source {source_id}")
@@ -75,12 +79,13 @@ class IngestionService:
             obs = self.store.add_observation(SourceObservation(
                 id=new_id("obs"), import_batch_id=batch.id, raw_values=row, normalized_values=normalized,
                 recorded_time=to_utc_iso(self.clock.now()), validation_status=vstatus, acceptance_status="pending",
-                source_scope=scope, source_record_identity=_record_identity(entity_kind, row, normalized),
+                source_scope=scope,
+                source_record_identity=_record_identity(entity_kind, row, normalized, stock_identity),
                 provenance={"source": source_id, "batch": batch.id, "row": i}))
 
             outcome, acceptance, fact_refs, candidates = self._reconcile_row(
                 source, profile, entity_kind, fact_type, scope, row, normalized, vstatus, obs, seen,
-                observed_subjects, effective_time)
+                observed_subjects, effective_time, stock_identity)
 
             obs.acceptance_status = acceptance
             self.store.conn.execute("UPDATE source_observation SET acceptance_status=?, identity_status=? WHERE id=?",
@@ -114,10 +119,10 @@ class IngestionService:
         return self.store.get_batch(batch.id)
 
     def _reconcile_row(self, source, profile, entity_kind, fact_type, scope, row, normalized,
-                       vstatus, obs, seen, observed_subjects, effective_time):
+                       vstatus, obs, seen, observed_subjects, effective_time, stock_identity=True):
         if vstatus == "rejected":
             return "rejected", "rejected", [], []
-        key = _record_identity(entity_kind, row, normalized)
+        key = _record_identity(entity_kind, row, normalized, stock_identity)
         if key is not None and key in seen:
             return ("duplicate", "duplicate", [], []) if seen[key] == normalized \
                 else ("conflicting", "conflicting", [], [])

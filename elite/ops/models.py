@@ -60,6 +60,6 @@ CAPS = {
 }
 
 # ---- controlled file intake policy defaults -----------------------------------
-ALLOWED_EXTENSIONS = {".csv", ".tsv", ".txt", ".json"}      # spreadsheet exports arrive as CSV/TSV
+ALLOWED_EXTENSIONS = {".csv", ".tsv", ".txt", ".json", ".xlsx"}   # incl. native DMS workbook exports
 DISALLOWED_EXTENSIONS = {".exe", ".sh", ".bat", ".dll", ".so", ".bin", ".py", ".js", ".php"}
 DEFAULT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024                 # 25 MiB
