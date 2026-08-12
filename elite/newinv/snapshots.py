@@ -23,20 +23,15 @@ from dataclasses import dataclass, field, replace
 from statistics import mean, median
 
 from ..clock import local_business_date
-from .dms_cohort import dms_cohort_key, dms_cohort_label
+from .dms_cohort import (classify_inventory_state, dms_cohort_key, dms_cohort_label,
+                         dms_inventory_state)
 
 DEFAULT_TZ = "America/Chicago"
 _VALID_STATES = ("COMPLETED", "COMPLETED_WITH_WARNINGS")
 
-
-def status_bucket(status):
-    """Bucket a source status into ONS (incoming) / DLR-INV (arrived) / OTHER. Case/space-insensitive."""
-    s = (status or "").strip().upper()
-    if s == "ONS":
-        return "ONS"
-    if s == "DLR-INV":
-        return "DLR-INV"
-    return "OTHER"
+# Backward-compatible generic value classifier. The inventory pipeline state (ONS / DLR-INV) for
+# vehicleInventorySummary is derived from the Location field via dms_inventory_state(row) — NOT Status.
+status_bucket = classify_inventory_state
 
 
 def _as_int(v):
@@ -107,7 +102,7 @@ class SnapshotReader:
         """DIS (days-in-stock) distribution for the snapshot's DLR-INV rows. Authoritative source data;
         needs no order->VIN lineage to describe current physical aging."""
         vals = [d for r in self.snapshot_rows(snapshot)
-                if status_bucket(r.get("status")) == "DLR-INV"
+                if dms_inventory_state(r) == "DLR-INV"
                 for d in [_as_int(r.get("dis"))] if d is not None]
         return _summary(vals)
 
@@ -168,9 +163,11 @@ def _aggregate(rows):
         b = agg.get(k)
         if b is None:
             b = agg[k] = {"label": dms_cohort_label(r), "ONS": 0, "DLR-INV": 0, "OTHER": 0,
-                          "pmonth": Counter(), "eta": Counter(), "dis": []}
-        bucket = status_bucket(r.get("status"))
+                          "pmonth": Counter(), "eta": Counter(), "dis": [], "status": Counter()}
+        bucket = dms_inventory_state(r)              # pipeline state from Location, NOT Status
         b[bucket] += 1
+        if r.get("status"):                          # Status preserved as evidence (never drives bucketing)
+            b["status"][str(r["status"]).strip()] += 1
         if r.get("production_month"):
             b["pmonth"][str(r["production_month"]).strip()] += 1
         if r.get("eta"):

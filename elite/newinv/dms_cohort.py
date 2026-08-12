@@ -34,6 +34,31 @@ def _norm(v):
     return s.upper() if s else "∅"
 
 
+# For vehicleInventorySummary the inventory PIPELINE STATE (incoming vs arrived) is carried by the
+# Location column (aliased to `location`), NOT by Status. Status holds an operational deal state such as
+# "Deal Opened" and must never be substituted for the pipeline state. This is a source-specific rule; other
+# contracts are unaffected (this classifier is only applied to vehicleInventorySummary snapshots).
+INVENTORY_STATE_FIELD = "location"
+
+
+def classify_inventory_state(value):
+    """Classify a raw pipeline-state value into ONS (incoming) / DLR-INV (arrived dealer inventory) / OTHER.
+    Case/space-insensitive; unknown/blank -> OTHER."""
+    if isinstance(value, Special):
+        return "OTHER"
+    s = (str(value).strip().upper() if value is not None else "")
+    if s == "ONS":
+        return "ONS"
+    if s == "DLR-INV":
+        return "DLR-INV"
+    return "OTHER"
+
+
+def dms_inventory_state(row):
+    """Inventory pipeline state for a vehicleInventorySummary row — read from Location, never Status."""
+    return classify_inventory_state(row.get(INVENTORY_STATE_FIELD))
+
+
 def dms_cohort_key(row):
     """Return the canonical DMS cohort key tuple for a source row (raw_values or normalized dict)."""
     return tuple(_norm(row.get(d)) for d in COHORT_DIMS)

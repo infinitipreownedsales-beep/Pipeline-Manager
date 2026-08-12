@@ -24,7 +24,8 @@ from elite.clock import local_business_date
 from elite.db import current_version
 from elite.ops.fixtures import Phase11, SCOPE, INV_VALID
 from elite.ops.intake import content_hash
-from elite.newinv.dms_cohort import dms_cohort_key, COHORT_DIMS
+from elite.newinv.dms_cohort import (dms_cohort_key, COHORT_DIMS, classify_inventory_state,
+                                     dms_inventory_state, INVENTORY_STATE_FIELD)
 from elite.newinv.snapshots import (SnapshotReader, SnapshotDelta, movement_signals, status_bucket)
 from elite.tests.test_phase12_dms_xlsx_adapter import make_xlsx, HEADERS
 
@@ -45,13 +46,16 @@ def R(stock="", serial="", status="ONS", my="2026", model="QX60", code="60111", 
     return [vals[k] for k in _ORDER]
 
 
-def A(status, serial, dis=""):
-    return R(stock="", serial=serial, status=status, model="QX60", code="60111", ext="BLK", inte="GRY",
-             dis=dis)
+# REAL DMS semantics: the ONS / DLR-INV pipeline state is carried by LOCATION; Status holds an unrelated
+# operational value ("Deal Opened"). The helpers put the pipeline state in Location on purpose.
+def A(state, serial, dis=""):
+    return R(stock="", serial=serial, status="Deal Opened", model="QX60", code="60111", ext="BLK",
+             inte="GRY", location=state, dis=dis)
 
 
-def B(status, serial):
-    return R(stock="", serial=serial, status=status, model="QX80", code="83816", ext="WHT", inte="BLK")
+def B(state, serial):
+    return R(stock="", serial=serial, status="Deal Opened", model="QX80", code="83816", ext="WHT",
+             inte="BLK", location=state)
 
 
 # T0: 5x A/ONS, 2x A/DLR-INV, 3x B/ONS
@@ -290,11 +294,32 @@ class TestDisAndSafety(_Base):
         self.assertEqual(cur["min"], 1)
         self.assertEqual(cur["max"], 41)
 
-    def test_status_bucketing(self):
-        self.assertEqual(status_bucket("ONS"), "ONS")
-        self.assertEqual(status_bucket(" dlr-inv "), "DLR-INV")
-        self.assertEqual(status_bucket("Deal Opened"), "OTHER")
-        self.assertEqual(status_bucket(""), "OTHER")
+    def test_inventory_state_from_location_not_status(self):
+        # the pipeline-state field is Location, and the value classifier is case/space-insensitive
+        self.assertEqual(INVENTORY_STATE_FIELD, "location")
+        self.assertEqual(classify_inventory_state("ONS"), "ONS")
+        self.assertEqual(classify_inventory_state(" dlr-inv "), "DLR-INV")
+        self.assertEqual(classify_inventory_state("Deal Opened"), "OTHER")
+        self.assertEqual(classify_inventory_state(""), "OTHER")
+        # DLR-INV in Location classifies DLR-INV even when Status is a non-DLR operational value
+        self.assertEqual(dms_inventory_state(
+            {"location": "DLR-INV", "status": "Deal Opened"}), "DLR-INV")
+        self.assertEqual(dms_inventory_state(
+            {"location": "ONS", "status": "Deal Opened"}), "ONS")
+        # Status must NOT override Location: DLR-INV in Status but ONS in Location -> ONS
+        self.assertEqual(dms_inventory_state(
+            {"location": "ONS", "status": "DLR-INV"}), "ONS")
+        # blank Location -> OTHER regardless of Status
+        self.assertEqual(dms_inventory_state(
+            {"location": "", "status": "DLR-INV"}), "OTHER")
+
+    def test_status_field_preserved_as_evidence(self):
+        # importing does not discard Status; it is retained verbatim in the observation row
+        self.imp([A("DLR-INV", "s1", 7)], effective_time=DAY0)
+        rows = self.reader.snapshot_rows(self.reader.latest_snapshot(self.sid, SCOPE))
+        self.assertEqual(rows[0]["status"], "Deal Opened")       # preserved
+        self.assertEqual(rows[0]["location"], "DLR-INV")         # drives the bucket
+        self.assertEqual(dms_inventory_state(rows[0]), "DLR-INV")
 
     # N. observation-only: no ProductionOrder / VehicleUnit / business fact created.
     def test_no_business_entities_created(self):
