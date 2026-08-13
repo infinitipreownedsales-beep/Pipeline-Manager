@@ -98,6 +98,36 @@ class TestInventoryUiBridge(unittest.TestCase):
         for t in ("vehicle_unit", "production_order", "business_fact"):
             self.assertEqual(self.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0], 0)
 
+    def _item_for(self, code, ext, inte):
+        self.full.get("/")   # ensure materialised
+        combo = self.conn.execute(
+            "SELECT id FROM sellable_combination WHERE canonical_identity LIKE ?",
+            (f"%model_code={code}|exterior={ext}|interior={inte}",)).fetchone()
+        plan = self.conn.execute("SELECT id FROM inventory_plan_result WHERE combination_id=?",
+                                 (combo["id"],)).fetchone()
+        it = next(i for i in self.p.app.store.all_items(scope=SCOPE)
+                  if i["recommendation_ref"] == plan["id"])
+        return it["id"], plan["id"]
+
+    # detail page resolves recommendation_ref -> plan + evidence.decision, with readable identity + audit id
+    def test_detail_acquire_cohort(self):
+        iid, plan_id = self._item_for("8501", "QBE", "G")
+        body = self.full.get(f"/item/{iid}").body
+        self.assertIn("ACQUIRE 2", body)
+        self.assertIn("QX65 8501 QBE/G", body)          # readable identity, not opaque comb id
+        self.assertIn(plan_id, body)                    # persisted plan id retained as audit proof
+        self.assertNotIn("Additional reasoning: <em>unknown</em>", body)
+        self.assertIn("Target (60-day level)", body)
+        self.assertIn("2026-10", body)                  # monitor months rendered
+
+    def test_detail_excess_cohort(self):
+        iid, plan_id = self._item_for("8481", "XKJ", "K")
+        body = self.full.get(f"/item/{iid}").body
+        self.assertIn("EXCESS 3 arrived (disposition)", body)
+        self.assertIn("QX60 8481 XKJ/K", body)
+        self.assertIn(plan_id, body)
+        self.assertIn("feasibility", body.lower())      # rejected-removal evidence surfaced
+
     # 10. the rest of the normal UI still loads
     def test_full_ui_still_usable(self):
         for path in ("/", "/new-inventory", "/production", "/service-loaner"):

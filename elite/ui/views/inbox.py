@@ -7,8 +7,62 @@ distinguishable.
 """
 from __future__ import annotations
 
+import json
+
 from ..render import badge, esc, empty, page, safe, table, kv
 from ..http import Response
+
+
+def _newinv_detail(app, it):
+    """Resolve a new_inventory workspace item's recommendation_ref back to the persisted issued plan and its
+    evidence.decision, and build the human-facing Call / Why / Proof + a readable subject. Pure read of
+    persisted records (no recompute). Returns (subject_label, call_html, why_html, proof_html) or None."""
+    if it["owning_domain"] != "new_inventory" or not it["recommendation_ref"]:
+        return None
+    conn = app.stack.db.conn
+    r = conn.execute("SELECT * FROM inventory_plan_result WHERE id=? AND store_scope=?",
+                     (it["recommendation_ref"], it["store_scope"])).fetchone()
+    if r is None:
+        return None
+    try:
+        dec = (json.loads(r["evidence"]) if r["evidence"] else {}).get("decision") or {}
+    except Exception:   # noqa: BLE001
+        dec = {}
+    if not dec:
+        return None                 # legacy (non-discrete) plan -> keep the generic recommendation detail
+    from .domains import _readable
+    from ...newinv.publish import plan_call
+    ci = conn.execute("SELECT canonical_identity FROM sellable_combination WHERE id=?",
+                      (r["combination_id"],)).fetchone()
+    subject = _readable(ci["canonical_identity"]) if ci and ci["canonical_identity"] else (r["combination_id"] or "combination")
+    _kind, _qty, label = plan_call(dec)
+
+    mons = ", ".join(mm.get("month", "") for mm in (dec.get("monitor_months") or [])) or "—"
+    cred = dec.get("credibility") if isinstance(dec.get("credibility"), dict) else {}
+    why_rows = [("Target (60-day level)", dec.get("target_level", "—")),
+                ("Arrived on-ground", r["current_supply"]),
+                ("Incoming (in horizon)", dec.get("incoming_in_horizon", r["future_supply"])),
+                ("Incoming (pending ETA)", dec.get("pending_timing", 0)),
+                ("MONITOR months (deferred replenishment)", mons),
+                ("Historical DTS burden", dec.get("dts_burden", "—")),
+                ("Evidence level / credibility Z", f'{dec.get("evidence_level", "—")} / '
+                 f'{round(cred.get("credibility_z", 0) or 0, 4)}'),
+                ("Breadth", dec.get("breadth", "—"))]
+    why = ("<p>" + esc(label) + " — read from the certified issued plan (not recomputed).</p>" + kv(why_rows))
+    # feasibility / rejection evidence when a disposition removal was blocked
+    rejected = [t for t in (dec.get("excess_trace") or []) if t.get("rejected")]
+    if rejected:
+        rr = rejected[0]
+        why += ('<p class="muted">Disposition feasibility: one further removal was rejected '
+                f'(Δ_remove={esc(rr.get("delta_remove"))}) — {esc(rr.get("reason", ""))}.</p>')
+    call_html = f'<p>{esc(label)}</p>'
+    proof = kv([("Combination", subject),
+                ("Issued plan (audit)", r["id"]),
+                ("Recommendation ref", it["recommendation_ref"]),
+                ("Demand result", r["demand_result_id"] or "—"),
+                ("Reproducibility package", r["reproducibility_package"] or "—"),
+                ("Calculation version", r["calculation_version"] or "—")])
+    return subject, call_html, why, proof
 
 ATTENTION_STATES = {"READY_FOR_REVIEW", "UNDER_REVIEW", "AWAITING_INFORMATION", "UNRESOLVED",
                     "DECISION_PENDING", "DECIDED", "AWAITING_EXECUTION", "IN_EXECUTION", "FAILED", "STALE"}
@@ -86,25 +140,32 @@ def register(app):
         official = "Scenario (hypothetical)" if it["scenario_id"] else "Official"
         decisions = app.store.decisions_for_item(it["id"])
         history = _raw_history(app, it, decisions)
-        proof = kv([("Recommendation", it["recommendation_ref"] or "—"),
-                    ("Economic Call", it["economic_call_ref"] or "—"),
-                    ("Execution Status", it["execution_status_ref"] or "—"),
-                    ("Accepted facts", ", ".join(review["applicable_facts"]) or "—"),
-                    ("Applicable versions", ", ".join(f"{k}={v}" for k, v in review["applicable_versions"].items()) or "—")])
-        why = "<p>" + esc(_call_text(it["workspace_state"])) + ".</p>"
-        if not review["explanation_present"]:
-            why += '<p class="muted">Additional reasoning: <em>unknown</em> (not recorded).</p>'
+        # New-Inventory items resolve their persisted plan into a human-facing Call/Why/Proof + readable subject.
+        enriched = _newinv_detail(app, it)
+        if enriched is not None:
+            subject_label, call_body, why, proof = enriched
+        else:
+            subject_label = it["subject_entity_id"] or "item"
+            call_body = f'<p>{esc(_call_text(it["workspace_state"]))}</p>'
+            proof = kv([("Recommendation", it["recommendation_ref"] or "—"),
+                        ("Economic Call", it["economic_call_ref"] or "—"),
+                        ("Execution Status", it["execution_status_ref"] or "—"),
+                        ("Accepted facts", ", ".join(review["applicable_facts"]) or "—"),
+                        ("Applicable versions", ", ".join(f"{k}={v}" for k, v in review["applicable_versions"].items()) or "—")])
+            why = "<p>" + esc(_call_text(it["workspace_state"])) + ".</p>"
+            if not review["explanation_present"]:
+                why += '<p class="muted">Additional reasoning: <em>unknown</em> (not recorded).</p>'
         badges = badge("scenario", "Scenario") if it["scenario_id"] else badge("attention", official)
         if it["stale"]:
             badges += " " + badge("stale", "Stale — renew review")
         actions = (f'<a href="/item/{esc(it["id"])}/decide"><button class=secondary>Issue a Decision</button></a>'
                    if it["workspace_state"] in ("READY_FOR_REVIEW", "STALE", "AWAITING_INFORMATION") else "")
-        body = (f'<div class="card"><h2>Call</h2>{badges}<p>{esc(_call_text(it["workspace_state"]))}</p>{actions}</div>'
+        body = (f'<div class="card"><h2>Call</h2>{badges}{call_body}{actions}</div>'
                 f'<div class="card"><h2>Why</h2>{why}</div>'
                 f'<div class="card"><h2>Proof</h2>{proof}</div>'
                 f'<div class="card"><h2>Raw History</h2><p class="muted">Evidence trail ({official}).</p>{history}</div>')
         flash, s.flash = s.flash, None
-        return Response(page(f"{it['owning_domain']} — {it['subject_entity_id'] or 'item'}", body,
+        return Response(page(f"{it['owning_domain']} — {esc(subject_label)}", body,
                              ctx=app.ctx(s), active_path="/", flash=flash))
 
 
