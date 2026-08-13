@@ -113,7 +113,9 @@ class ActionPlan:
     excess_slot_months: list = field(default_factory=list)
     analytical_deficit: float = 0.0
     analytical_excess: float = 0.0
-    marginal_trace: list = field(default_factory=list)    # per-unit Delta improvements (evidence)
+    marginal_trace: list = field(default_factory=list)    # acquire checkpoint objective (evidence)
+    trajectory: list = field(default_factory=list)        # [{m, P, T}] final projected trajectory (evidence)
+    excess_trace: list = field(default_factory=list)      # per-removal Delta_remove trace (evidence)
     loss_before: float = 0.0
     loss_after: float = 0.0
 
@@ -135,30 +137,46 @@ def allocate(*, arrived, confirmed_avail, monthly_expected, action_horizon, curr
     base_cps = cps([])
     plan = ActionPlan(action_availability=action_avail_month,
                       loss_before=trajectory_loss(base_cps, cu=cu, co=co))
-    # ---- ACQUIRE: greedy whole units, judged on the actionable protection window only ----
-    actions = []
-    while True:
-        before = trajectory_loss(cps(actions), cu=cu, co=co, actionable_only=True)
-        after = trajectory_loss(cps(actions + [action_avail_month]), cu=cu, co=co, actionable_only=True)
-        delta = round(before - after, 6)
-        if delta > 0:
-            actions.append(action_avail_month)
-            plan.marginal_trace.append({"unit": len(actions), "delta": delta})
-        else:
-            break
-    plan.acquire_units = len(actions)
-    final_cps = cps(actions)
+    # ---- ACQUIRE: order-up-to at the CURRENT PROTECTION checkpoint only (now + lead) ----
+    # Today's commitment can first affect coverage at month now+lead; earlier months are unrepairable-now and
+    # LATER months are protected by future normal reviews. So the quantity is a discrete newsvendor order-up-to
+    # at that single protected checkpoint's PROJECTED position (demand-through-checkpoint already consumed) --
+    # NOT a sum over Sep+Oct, which front-loaded October's re-order into today. Future months remain MONITOR.
+    lead_i = next((i for i, c in enumerate(base_cps) if _idx(c.month) >= _idx(action_avail_month)), None)
+    q = 0
+    if lead_i is not None:
+        p0 = base_cps[lead_i].position                 # projected position at the protected checkpoint, no action
+        tl = base_cps[lead_i].target
+
+        def _cl(qq):                                    # discrete checkpoint loss for qq whole units
+            pos = p0 + qq
+            return cu * max(0.0, tl - pos) + co * max(0.0, pos - tl)
+        best = _cl(0)
+        while _cl(q + 1) < best - 1e-12:                # convex -> advance while it strictly improves
+            q += 1
+            best = _cl(q)
+        plan.marginal_trace.append({"protection_checkpoint": base_cps[lead_i].month, "p0": round(p0, 6),
+                                    "target": round(tl, 6), "chosen_q": q,
+                                    "loss_by_q": {qq: round(_cl(qq), 6) for qq in range(0, q + 3)}})
+    plan.acquire_units = q
+    final_cps = cps([action_avail_month] * q)
     plan.loss_after = trajectory_loss(final_cps, cu=cu, co=co)
-    # ---- MONITOR: residual coverage gaps not resolved by the now-commitment (future / unactionable) ----
+    # ---- MONITOR: FUTURE coverage gaps whose replenishment is deferred to a later normal review. The
+    # protected checkpoint itself has already been ordered up-to (any residual there is whole-vehicle
+    # granularity, not a monitor); only checkpoints AFTER it are future-review risk. ----
+    protected = base_cps[lead_i].month if lead_i is not None else action_avail_month
     for c in final_cps:
-        if c.target - c.position > 1e-9:
+        if _idx(c.month) > _idx(protected) and c.target - c.position > 1e-9:
             plan.monitor_months.append({"month": c.month, "shortfall": round(c.target - c.position, 6),
                                         "actionable": c.actionable})
     plan.analytical_deficit = round(sum(max(0.0, c.target - c.position) for c in final_cps), 6)
+    plan.trajectory = [{"m": c.month, "P": round(c.position, 4), "T": round(c.target, 4)} for c in final_cps]
     # ---- EXCESS mirror: remove confirmed slots (arrived / timed incoming) while it improves the trajectory ----
-    arrived_rem, incoming_rem, ex_months = _excess(arrived, confirmed_avail, monthly_expected, action_horizon,
-                                                   current_month, burden, cu, co, lead_months, review_months)
-    plan.arrived_excess, plan.incoming_excess, plan.excess_slot_months = arrived_rem, incoming_rem, ex_months
+    arrived_rem, incoming_rem, ex_months, ex_trace = _excess(
+        arrived, confirmed_avail, monthly_expected, action_horizon, current_month, burden, cu, co,
+        lead_months, review_months)
+    plan.arrived_excess, plan.incoming_excess = arrived_rem, incoming_rem
+    plan.excess_slot_months, plan.excess_trace = ex_months, ex_trace
     plan.analytical_excess = round(sum(max(0.0, c.position - c.target) for c in final_cps), 6)
     return plan
 
@@ -172,9 +190,14 @@ def _excess(arrived, confirmed_avail, monthly_expected, action_horizon, current_
             arrived=a, confirmed_avail=conf, action_avail=[], monthly_expected=monthly_expected,
             action_horizon=action_horizon, current_month=current_month, burden=burden,
             lead_months=lead_months, review_months=review_months), cu=cu, co=co)
+    def traj(a, conf):
+        cp = build_checkpoints(arrived=a, confirmed_avail=conf, action_avail=[], monthly_expected=monthly_expected,
+                               action_horizon=action_horizon, current_month=current_month, burden=burden,
+                               lead_months=lead_months, review_months=review_months)
+        return [{"m": c.month, "P": round(c.position, 4), "T": round(c.target, 4)} for c in cp]
     a, conf = arrived, list(confirmed_avail)
     arrived_rem = incoming_rem = 0
-    removed_months = []
+    removed_months, trace = [], []
     while True:
         cur = loss_of(a, conf)
         best, kind, slot = 0.0, None, None
@@ -189,8 +212,11 @@ def _excess(arrived, confirmed_avail, monthly_expected, action_horizon, current_
                 best, kind, slot = d, "incoming", s
         if best <= 0 or kind is None:
             break
+        before = traj(a, conf)
         if kind == "arrived":
             a -= 1; arrived_rem += 1; removed_months.append("arrived")
         else:
             conf.remove(slot); incoming_rem += 1; removed_months.append(slot)
-    return arrived_rem, incoming_rem, removed_months
+        trace.append({"removed": kind, "slot_month": (slot or "now/arrived"), "delta_remove": best,
+                      "before": before, "after": traj(a, conf)})
+    return arrived_rem, incoming_rem, removed_months, trace

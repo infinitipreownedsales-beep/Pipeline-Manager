@@ -234,7 +234,9 @@ def run_planning(ctx, supply_by_key, demand_by_key, exceptions, *, target_days_s
                          "acquire_units": ap.acquire_units, "arrived_excess": ap.arrived_excess,
                          "incoming_excess": ap.incoming_excess, "pending_timing": pending,
                          "monitor_months": ap.monitor_months, "action_availability": ap.action_availability,
-                         "analytical_deficit": ap.analytical_deficit, "analytical_excess": ap.analytical_excess})
+                         "analytical_deficit": ap.analytical_deficit, "analytical_excess": ap.analytical_excess,
+                         "acquire_trace": ap.marginal_trace, "trajectory": ap.trajectory,
+                         "excess_trace": ap.excess_trace})
         # persist the continuous plan (time-phased position) with the discrete action bundled as evidence
         plan = ctx.planning.issue_position(demand_result, horizon=horizon, qualifying=qslots,
                                            target_level=target, counts={"current": cur, "future": fut, "committed": 0},

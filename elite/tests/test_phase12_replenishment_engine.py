@@ -104,6 +104,55 @@ class TestExcessMirror(unittest.TestCase):
         self.assertEqual(plan.acquire_units, 0)
 
 
+class TestActionabilityTiming(unittest.TestCase):
+    # A. lead-period demand is included: today's quantity uses END-of-lead-checkpoint projected position
+    # (arrived + incoming by lead - demand through lead), NOT static arrived+incoming.
+    def test_lead_period_demand_included(self):
+        r = 0.812
+        mx = flat(EXT, r)
+        base = R.build_checkpoints(arrived=0, confirmed_avail=[], action_avail=[], monthly_expected=mx,
+                                   action_horizon=ACTION, current_month=NOW)
+        # protection checkpoint = 2026-09 (now+lead); its position already consumed September demand
+        self.assertAlmostEqual(base[0].position, 0 - r)          # NOT static 0; demand depletes it
+        plan = R.allocate(arrived=0, confirmed_avail=[], monthly_expected=mx, action_horizon=ACTION,
+                          current_month=NOW)
+        self.assertEqual(plan.marginal_trace[0]["protection_checkpoint"], "2026-09")
+
+    # B + C. QX65 real-failure regression: unit #3 was justified ONLY by October -> now ACQUIRE 2, Oct/Nov MONITOR
+    def test_qx65_no_october_frontload(self):
+        r = 0.812                                                # T = 2r = 1.624 (real T=1.62386)
+        mx = flat(EXT, r)
+        plan = R.allocate(arrived=0, confirmed_avail=[], monthly_expected=mx, action_horizon=ACTION,
+                          current_month=NOW)
+        self.assertEqual(plan.acquire_units, 2)                  # was 3 (October front-loaded); now 2
+        mon = {m["month"] for m in plan.monitor_months}
+        self.assertIn("2026-10", mon)                            # October deferred to a future review
+        self.assertIn("2026-11", mon)
+        self.assertNotIn("2026-09", mon)                         # the acted-on checkpoint is not a monitor
+        # the checkpoint objective picked the loss-minimizing whole quantity at September
+        lbq = plan.marginal_trace[0]["loss_by_q"]
+        self.assertEqual(min(lbq, key=lbq.get), 2)
+
+    # D. next-review transition: at the SEPTEMBER review, an October gap that was MONITOR becomes ACQUIRE
+    def test_next_review_transition(self):
+        r = 0.812
+        sept_now = "2026-09"                                     # advance the review to September
+        horizon = ["2026-10", "2026-11", "2026-12"]
+        mx = flat(R.extended_months(horizon), r)
+        plan = R.allocate(arrived=0, confirmed_avail=[], monthly_expected=mx, action_horizon=horizon,
+                          current_month=sept_now)
+        self.assertGreaterEqual(plan.acquire_units, 1)          # October is now the protected checkpoint -> ACQUIRE
+        self.assertEqual(plan.marginal_trace[0]["protection_checkpoint"], "2026-10")
+
+    # E. no 150-day regression: the future horizon stays VISIBLE (MONITOR) but is not purchased today
+    def test_future_visible_not_purchased(self):
+        mx = flat(EXT, 1.0)                                      # T=2, demand 1/mo, arrived 2, no incoming
+        plan = R.allocate(arrived=2, confirmed_avail=[], monthly_expected=mx, action_horizon=ACTION,
+                          current_month=NOW)
+        self.assertLessEqual(plan.acquire_units, 1)             # bounded to the protected checkpoint
+        self.assertTrue(plan.monitor_months)                    # later months remain visible as future risk
+
+
 class TestDiscreteCrossing(unittest.TestCase):
     # G. a fractional deficit can round to a whole acquisition (crossing the continuous target)
     def test_crossing_add(self):
