@@ -24,8 +24,9 @@ from elite.clock import local_business_date
 from elite.db import current_version
 from elite.ops.fixtures import Phase11, SCOPE, INV_VALID
 from elite.ops.intake import content_hash
-from elite.newinv.dms_cohort import (dms_cohort_key, COHORT_DIMS, classify_inventory_state,
-                                     dms_inventory_state, INVENTORY_STATE_FIELD)
+from elite.newinv.dms_cohort import (dms_cohort_key, COHORT_DIMS, INVENTORY_STATE_FIELD, SOURCE_STAGES,
+                                     classify_source_stage, dms_source_stage, dms_planning_state,
+                                     planning_state_of)
 from elite.newinv.snapshots import (SnapshotReader, SnapshotDelta, movement_signals, status_bucket)
 from elite.tests.test_phase12_dms_xlsx_adapter import make_xlsx, HEADERS
 
@@ -255,28 +256,52 @@ class TestCohortAndDelta(_Base):
 
 
 class TestMovementInference(_Base):
-    # K(cont). clean net movement -> APPARENT_COHORT_ARRIVAL, provisional, never same-unit.
+    # K(cont). clean INCOMING->ARRIVED movement -> APPARENT_COHORT_ARRIVAL, provisional, never same-unit.
     def test_clean_apparent_arrival(self):
         self.imp(T0, effective_time=DAY0)
         self.imp(T1, effective_time=DAY1)
         sigs = movement_signals(self.delta.latest_delta(self.sid, SCOPE))
-        self.assertEqual(len(sigs), 1)
-        s = sigs[0]
-        self.assertEqual(s.signal, "APPARENT_COHORT_ARRIVAL")
+        arr = [s for s in sigs if s.signal == "APPARENT_COHORT_ARRIVAL"]
+        self.assertEqual(len(arr), 1)
+        s = arr[0]
+        self.assertEqual((s.from_stage, s.to_stage), ("INCOMING", "ARRIVED"))
         self.assertEqual(s.inferred_net_movement, 2)
         self.assertEqual(s.confidence, "provisional")
         self.assertEqual(s.ambiguity_reasons, [])
+        # every emitted signal is cohort-level and never "proven"
+        self.assertTrue(all(x.confidence in ("provisional", "ambiguous") for x in sigs))
 
     # L. confounded movement stays AMBIGUOUS and never becomes a proven / same-unit claim.
     def test_ambiguous_movement_not_proven(self):
         self.imp(T0, effective_time=DAY0)
         self.imp(T1B, effective_time=DAY1)
         sigs = movement_signals(self.delta.latest_delta(self.sid, SCOPE))
-        s = next(x for x in sigs if x.label.startswith("QX60"))
-        self.assertEqual(s.signal, "APPARENT_COHORT_ARRIVAL")
-        self.assertEqual(s.confidence, "ambiguous")
-        self.assertTrue(s.ambiguity_reasons)
-        self.assertNotIn(s.confidence, ("proven", "certain"))
+        arr = next(x for x in sigs if x.signal == "APPARENT_COHORT_ARRIVAL")
+        self.assertEqual(arr.confidence, "ambiguous")
+        self.assertTrue(arr.ambiguity_reasons)
+        self.assertNotIn(arr.confidence, ("proven", "certain"))
+
+    # stage-progression signals are distinct and cohort-level. Cohort A shows SIT->NNA-INV; cohort B
+    # (different model) shows NNA-INV->DLR-INV. A single cohort's net NNA delta cannot show both.
+    def test_stage_progression_signals(self):
+        t0 = ([A("SIT", f"sA-{i}") for i in range(4)] + [A("NNA-INV", f"nA-{i}") for i in range(2)]
+              + [B("NNA-INV", f"nB-{i}") for i in range(3)] + [B("DLR-INV", f"dB-{i}") for i in range(1)])
+        t1 = ([A("SIT", f"sA-{i}") for i in range(2)] + [A("NNA-INV", f"nA-{i}") for i in range(4)]
+              + [B("NNA-INV", f"nB-{i}") for i in range(1)] + [B("DLR-INV", f"dB-{i}") for i in range(3)])
+        self.imp(t0, effective_time=DAY0)
+        self.imp(t1, effective_time=DAY1)
+        sigs = movement_signals(self.delta.latest_delta(self.sid, SCOPE))
+        kinds = {s.signal for s in sigs}
+        self.assertIn("APPARENT_SEA_TO_US_INVENTORY", kinds)             # cohort A: SIT down + NNA-INV up
+        self.assertIn("APPARENT_US_INVENTORY_TO_DEALER_ARRIVAL", kinds)  # cohort B: NNA-INV down + DLR-INV up
+        sea = next(s for s in sigs if s.signal == "APPARENT_SEA_TO_US_INVENTORY")
+        self.assertEqual((sea.from_stage, sea.to_stage), ("SIT", "NNA-INV"))
+        self.assertEqual(sea.inferred_net_movement, 2)
+        self.assertEqual(sea.confidence, "provisional")
+        us = next(s for s in sigs if s.signal == "APPARENT_US_INVENTORY_TO_DEALER_ARRIVAL")
+        self.assertEqual((us.from_stage, us.to_stage), ("NNA-INV", "DLR-INV"))
+        # never a same-unit claim: every signal is cohort-level with a provisional/ambiguous confidence
+        self.assertTrue(all(s.confidence in ("provisional", "ambiguous") for s in sigs))
 
 
 class TestDisAndSafety(_Base):
@@ -294,32 +319,34 @@ class TestDisAndSafety(_Base):
         self.assertEqual(cur["min"], 1)
         self.assertEqual(cur["max"], 41)
 
-    def test_inventory_state_from_location_not_status(self):
-        # the pipeline-state field is Location, and the value classifier is case/space-insensitive
+    def test_source_stage_and_planning_state(self):
+        # exact source stage comes from Location (case/space-insensitive); planning state is derived.
         self.assertEqual(INVENTORY_STATE_FIELD, "location")
-        self.assertEqual(classify_inventory_state("ONS"), "ONS")
-        self.assertEqual(classify_inventory_state(" dlr-inv "), "DLR-INV")
-        self.assertEqual(classify_inventory_state("Deal Opened"), "OTHER")
-        self.assertEqual(classify_inventory_state(""), "OTHER")
-        # DLR-INV in Location classifies DLR-INV even when Status is a non-DLR operational value
-        self.assertEqual(dms_inventory_state(
-            {"location": "DLR-INV", "status": "Deal Opened"}), "DLR-INV")
-        self.assertEqual(dms_inventory_state(
-            {"location": "ONS", "status": "Deal Opened"}), "ONS")
-        # Status must NOT override Location: DLR-INV in Status but ONS in Location -> ONS
-        self.assertEqual(dms_inventory_state(
-            {"location": "ONS", "status": "DLR-INV"}), "ONS")
-        # blank Location -> OTHER regardless of Status
-        self.assertEqual(dms_inventory_state(
-            {"location": "", "status": "DLR-INV"}), "OTHER")
+        self.assertEqual(SOURCE_STAGES, ("ONS", "SIT", "NNA-INV", "DLR-INV", "OTHER"))
+        for raw, stage, plan in [
+            ("ONS", "ONS", "INCOMING"),
+            (" sit ", "SIT", "INCOMING"),
+            ("nna-inv", "NNA-INV", "INCOMING"),
+            ("DLR-INV", "DLR-INV", "ARRIVED"),
+            ("Deal Opened", "OTHER", "OTHER"),
+            ("", "OTHER", "OTHER"),
+        ]:
+            self.assertEqual(classify_source_stage(raw), stage)
+            self.assertEqual(planning_state_of(classify_source_stage(raw)), plan)
+            self.assertEqual(dms_source_stage({"location": raw, "status": "Deal Opened"}), stage)
+            self.assertEqual(dms_planning_state({"location": raw, "status": "Deal Opened"}), plan)
+        # Status must NEVER override Location: DLR-INV in Status but SIT in Location -> SIT / INCOMING
+        self.assertEqual(dms_source_stage({"location": "SIT", "status": "DLR-INV"}), "SIT")
+        self.assertEqual(dms_planning_state({"location": "SIT", "status": "DLR-INV"}), "INCOMING")
 
     def test_status_field_preserved_as_evidence(self):
         # importing does not discard Status; it is retained verbatim in the observation row
-        self.imp([A("DLR-INV", "s1", 7)], effective_time=DAY0)
+        self.imp([A("NNA-INV", "s1")], effective_time=DAY0)
         rows = self.reader.snapshot_rows(self.reader.latest_snapshot(self.sid, SCOPE))
         self.assertEqual(rows[0]["status"], "Deal Opened")       # preserved
-        self.assertEqual(rows[0]["location"], "DLR-INV")         # drives the bucket
-        self.assertEqual(dms_inventory_state(rows[0]), "DLR-INV")
+        self.assertEqual(rows[0]["location"], "NNA-INV")         # drives the stage
+        self.assertEqual(dms_source_stage(rows[0]), "NNA-INV")
+        self.assertEqual(dms_planning_state(rows[0]), "INCOMING")
 
     # N. observation-only: no ProductionOrder / VehicleUnit / business fact created.
     def test_no_business_entities_created(self):
@@ -337,6 +364,53 @@ class TestDisAndSafety(_Base):
     def test_schema_stays_v12(self):
         self.imp(T0, effective_time=DAY0)
         self.assertEqual(current_version(self.conn), 12)
+
+
+class TestPipelineStages(_Base):
+    # A cohort observed across all four defined stages, then progressed one snapshot later.
+    def _four_stage(self, ons, sit, nna, dlr_dis):
+        rows = [A("ONS", f"o-{i}") for i in range(ons)]
+        rows += [A("SIT", f"s-{i}") for i in range(sit)]
+        rows += [A("NNA-INV", f"n-{i}") for i in range(nna)]
+        rows += [A("DLR-INV", f"d-{i}", dlr_dis[i]) for i in range(len(dlr_dis))]
+        return rows
+
+    def test_exact_source_stage_and_planning_state_deltas(self):
+        # T0: ONS=5, SIT=4, NNA-INV=2, DLR-INV=2 ; T1: ONS=3, SIT=2, NNA-INV=3, DLR-INV=4
+        self.imp(self._four_stage(5, 4, 2, [10, 20]), effective_time=DAY0)
+        self.imp(self._four_stage(3, 2, 3, [10, 20, 1, 2]), effective_time=DAY1)
+        rep = self.delta.latest_delta(self.sid, SCOPE)
+        c = next(x for x in rep.cohorts if x.label.startswith("QX60"))
+        # A. exact source-stage deltas
+        self.assertEqual((c.ons_prev, c.ons_curr, c.ons_delta), (5, 3, -2))
+        self.assertEqual((c.sit_prev, c.sit_curr, c.sit_delta), (4, 2, -2))
+        self.assertEqual((c.nna_prev, c.nna_curr, c.nna_delta), (2, 3, 1))
+        self.assertEqual((c.dlr_prev, c.dlr_curr, c.dlr_delta), (2, 4, 2))
+        self.assertEqual(c.other_delta, 0)
+        # B. broader planning-state deltas  (INCOMING = ONS+SIT+NNA-INV ; ARRIVED = DLR-INV)
+        self.assertEqual((c.incoming_prev, c.incoming_curr, c.incoming_delta), (11, 8, -3))
+        self.assertEqual((c.arrived_prev, c.arrived_curr, c.arrived_delta), (2, 4, 2))
+        self.assertEqual(c.total_delta, -1)
+
+    def test_dis_aging_only_dlr_inv(self):
+        # SIT / NNA-INV / ONS rows carry DIS-like values but must NEVER contribute to dealer DIS aging.
+        rows = ([R(serial="o1", location="ONS", dis=999)]
+                + [R(serial="s1", location="SIT", dis=888)]
+                + [R(serial="n1", location="NNA-INV", dis=777)]
+                + [R(serial="d1", location="DLR-INV", dis=0),
+                   R(serial="d2", location="DLR-INV", dis=40),
+                   R(serial="d3", location="DLR-INV", dis=187)])
+        self.imp(rows, effective_time=DAY0)
+        aging = self.reader.current_aging(self.sid, SCOPE)
+        self.assertEqual(aging["count"], 3)                       # only the 3 DLR-INV rows
+        self.assertEqual(sorted(aging["values"]), [0, 40, 187])   # 999/888/777 excluded
+        self.assertEqual((aging["min"], aging["max"]), (0, 187))
+
+    def test_incoming_stages_have_no_dis(self):
+        self.imp([R(serial="s1", location="SIT", dis=500),
+                  R(serial="n1", location="NNA-INV", dis=400)], effective_time=DAY0)
+        aging = self.reader.current_aging(self.sid, SCOPE)
+        self.assertEqual(aging["count"], 0)                       # no arrived rows -> no aging
 
 
 if __name__ == "__main__":

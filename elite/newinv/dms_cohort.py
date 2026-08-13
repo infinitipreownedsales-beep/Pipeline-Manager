@@ -34,29 +34,58 @@ def _norm(v):
     return s.upper() if s else "∅"
 
 
-# For vehicleInventorySummary the inventory PIPELINE STATE (incoming vs arrived) is carried by the
-# Location column (aliased to `location`), NOT by Status. Status holds an operational deal state such as
-# "Deal Opened" and must never be substituted for the pipeline state. This is a source-specific rule; other
-# contracts are unaffected (this classifier is only applied to vehicleInventorySummary snapshots).
+# For vehicleInventorySummary the inventory PIPELINE STAGE is carried by the Location column (aliased to
+# `location`), NOT by Status. Status holds an operational deal state such as "Deal Opened" and must never be
+# substituted for the pipeline stage. This is a source-specific rule; other contracts are unaffected.
+#
+# Two ratified levels are modelled (the exact source stage is always preserved verbatim; the planning state
+# is a SEPARATE, coarser derivation):
+#   SOURCE STAGE  (exact, distinct supply-stage evidence):
+#     ONS      = on-order pipeline
+#     SIT      = Sea In Transit (overseas / on the water)
+#     NNA-INV  = in INFINITI/NNA U.S. inventory, awaiting shipment to dealer (already stateside)
+#     DLR-INV  = arrived at the dealership
+#     OTHER    = any Location not yet authoritatively defined
+#   PLANNING STATE (derived planning bucket):
+#     INCOMING = ONS + SIT + NNA-INV
+#     ARRIVED  = DLR-INV
+#     OTHER    = undefined stages only
+# The distinction matters: SIT is a materially earlier supply signal than NNA-INV (still overseas vs already
+# in the U.S.), and only DLR-INV is physically arrived (the sole bucket that drives dealer DIS aging).
 INVENTORY_STATE_FIELD = "location"
 
+SOURCE_STAGES = ("ONS", "SIT", "NNA-INV", "DLR-INV", "OTHER")
+INCOMING_STAGES = ("ONS", "SIT", "NNA-INV")
+ARRIVED_STAGES = ("DLR-INV",)
+_DEFINED = ("ONS", "SIT", "NNA-INV", "DLR-INV")
 
-def classify_inventory_state(value):
-    """Classify a raw pipeline-state value into ONS (incoming) / DLR-INV (arrived dealer inventory) / OTHER.
-    Case/space-insensitive; unknown/blank -> OTHER."""
+
+def classify_source_stage(value):
+    """Classify a raw Location value into its EXACT source stage (ONS / SIT / NNA-INV / DLR-INV / OTHER).
+    Case/space-insensitive; unknown/blank/undefined -> OTHER. The exact stage is never collapsed."""
     if isinstance(value, Special):
         return "OTHER"
     s = (str(value).strip().upper() if value is not None else "")
-    if s == "ONS":
-        return "ONS"
-    if s == "DLR-INV":
-        return "DLR-INV"
+    return s if s in _DEFINED else "OTHER"
+
+
+def planning_state_of(stage):
+    """Derive the coarser planning bucket from an exact source stage."""
+    if stage in ARRIVED_STAGES:
+        return "ARRIVED"
+    if stage in INCOMING_STAGES:
+        return "INCOMING"
     return "OTHER"
 
 
-def dms_inventory_state(row):
-    """Inventory pipeline state for a vehicleInventorySummary row — read from Location, never Status."""
-    return classify_inventory_state(row.get(INVENTORY_STATE_FIELD))
+def dms_source_stage(row):
+    """Exact preserved source stage for a vehicleInventorySummary row — read from Location, never Status."""
+    return classify_source_stage(row.get(INVENTORY_STATE_FIELD))
+
+
+def dms_planning_state(row):
+    """Derived planning bucket (INCOMING / ARRIVED / OTHER) for a vehicleInventorySummary row."""
+    return planning_state_of(dms_source_stage(row))
 
 
 def dms_cohort_key(row):
