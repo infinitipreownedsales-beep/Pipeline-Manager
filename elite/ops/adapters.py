@@ -342,12 +342,18 @@ def parse_xlsx(payload, contract: SourceContract, *, sheet=None):
 
     if not grid or not any(any(str(c).strip() for c in r) for r in grid):
         raise ValidationError(message="The workbook is empty.", technical_detail="empty_workbook")
-    header = _apply_header_aliases([h.strip() if isinstance(h, str) else h for h in grid[0]], contract)
+    # Some real DMS exports carry an operator running-tab note above the header; contract.header_row (1-based)
+    # names the real header row so those metadata rows are skipped without redesigning them.
+    hr = max(1, getattr(contract, "header_row", 1) or 1)
+    if hr > len(grid):
+        raise ValidationError(message="The workbook has no header row.",
+                              technical_detail=f"header_row {hr} beyond {len(grid)} rows")
+    header = _apply_header_aliases([h.strip() if isinstance(h, str) else h for h in grid[hr - 1]], contract)
     detected = _detect_and_check(header, contract)
     numeric_fields = set(contract.units.keys())
     width = len(header)
     rows, locations, malformed = [], {}, 0
-    for line_no, raw in enumerate(grid[1:], start=2):
+    for line_no, raw in enumerate(grid[hr:], start=hr + 1):
         if not any(str(c).strip() for c in raw):
             continue                                      # skip fully-blank trailing rows
         if len(raw) < width:
@@ -362,7 +368,7 @@ def parse_xlsx(payload, contract: SourceContract, *, sheet=None):
         idx = len(rows)
         rows[idx:idx] = [rec]
         locations[idx] = {"line": line_no}
-    data_lines = sum(1 for r in grid[1:] if any(str(c).strip() for c in r))
+    data_lines = sum(1 for r in grid[hr:] if any(str(c).strip() for c in r))
     if data_lines > 0 and malformed == data_lines:
         raise ValidationError(message="The workbook rows do not match the header.",
                               technical_detail="malformed_workbook: all rows mismatched header width")
@@ -400,4 +406,25 @@ def run_adapter(contract: SourceContract, payload, *, file_kind=None):
             rec["serial_semantic"] = "unknown"
         if "serial_semantic" not in result.transforms:
             result.transforms.append("serial_semantic=unknown(deferred classification)")
+    # DAYS TO SELL is numeric OR a preserved business code (DT/DNQ). Classify without coercion so the demand
+    # layer can count the sale (demand-positive) while excluding non-numeric codes from DTS averages.
+    if "days_to_sell_semantic" in getattr(contract, "optional_fields", ()):
+        for rec in result.rows:
+            raw = rec.get("days_to_sell")
+            rec["days_to_sell_semantic"] = "numeric" if _is_number(raw) else "business_code"
+        if "days_to_sell_semantic" not in result.transforms:
+            result.transforms.append("days_to_sell_semantic(numeric|business_code; value preserved verbatim)")
     return result
+
+
+def _is_number(v):
+    if v is None:
+        return False
+    s = str(v).strip().replace(",", "")
+    if s == "":
+        return False
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False

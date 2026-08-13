@@ -44,6 +44,8 @@ class SourceContract:
     entity_kind: str = "vehicle"
     header_aliases: dict = field(default_factory=dict)   # real source header -> canonical field name
     sheet: str = ""                                      # worksheet name for workbook sources ("" = first sheet)
+    header_row: int = 1                                  # 1-based row that holds the header (rows before it are skipped
+                                                         # metadata, e.g. a running-tab note above a DMS export header)
     stock_number_is_identity: bool = True                # False: stock_number is NOT an identity/dedup key
     serial_lifecycle: bool = False                       # True: Serial is lifecycle-dependent; classify UNKNOWN
     # Snapshot idempotency policy. "content_hash" (default): a prior COMPLETED run with the same content is a
@@ -182,6 +184,30 @@ SOURCE_CONTRACTS = {
         snapshot_idempotency="content_hash_per_business_date",
         raw_retention="original workbook retained via FileIntake; rows retained as Source Observations",
         domain="new_inventory", fact_type="", entity_kind="inventory_pipeline_record"),
+    # Real DMS "Speed-to-Sell" retail sales-history export (workbook). OBSERVATION-ONLY dealership demand
+    # evidence: every row is retained as a Source Observation asserting NO physical (VIN) identity — no
+    # VehicleUnit / ProductionOrder / business fact is created. Row 1 is an operator running-tab note; the
+    # real header is row 2 (header_row=2). Sales Month is MONTHLY evidence (YYYYMM), never an exact sold date.
+    # DAYS TO SELL is numeric OR a business code (DT/DNQ) preserved verbatim (never coerced to a number).
+    # Stock Number is legitimately blank on many rows (not identity). Duplicate-VIN reconciliation is a
+    # DERIVED demand-layer concern (elite/newinv/demand_bridge.py), never an ingestion-time destruction.
+    "speed_to_sell": SourceContract(
+        key="speed_to_sell", owner="Sales Manager", source_system="DMS Speed-to-Sell",
+        access="operator_upload", file_kind="xlsx", cadence="monthly", snapshot_capability="partial",
+        identity_keys=(), effective_time="Sales Month (YYYYMM, month granularity; never an exact sold date)",
+        update_time="export date", schema_version=1,
+        required_fields=("sales_month", "model", "vin", "model_code", "exterior", "interior"),
+        optional_fields=("stock_number", "days_to_sell", "days_to_sell_semantic"),
+        blocking_validation=("missing_required_field", "malformed_row"),
+        nonblocking_validation=("extra_unknown_column",),
+        header_aliases={"Sales Month": "sales_month", "Stock Number": "stock_number", "Model": "model",
+                        "VIN": "vin", "DAYS TO SELL": "days_to_sell", "MODEL CODE": "model_code",
+                        "EXTERIOR CODE": "exterior", "INTERIOR CODE": "interior"},
+        sheet="SPEED TO SELL REPORT", header_row=2, stock_number_is_identity=False,
+        # recurring monthly export: dedup by (source, scope, local business date, content hash)
+        snapshot_idempotency="content_hash_per_business_date",
+        raw_retention="original workbook retained via FileIntake; rows retained as Source Observations",
+        domain="new_inventory", fact_type="", entity_kind="retail_sale_observation"),
 }
 
 
