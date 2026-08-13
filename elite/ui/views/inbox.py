@@ -50,6 +50,7 @@ def register(app):
     def inbox(app, req):
         s = req.session
         app.require(s, "workspace.view")
+        app.ensure_inventory_published(s.scope)   # surface certified issued plans as reviewable items
         items = app.store.all_items(scope=s.scope)
         f_domain, f_status, f_priority = req.q("domain"), req.q("status"), req.q("priority")
         shown = [it for it in items

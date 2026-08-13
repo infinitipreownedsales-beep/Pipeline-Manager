@@ -21,14 +21,75 @@ def _conn(app):
     return app.stack.db.conn
 
 
+def _readable(canonical):
+    """Render a planning identity 'dms_planning|model=QX65|model_code=8501|exterior=QBE|interior=G' as
+    'QX65 8501 QBE/G'. Falls back to the raw string for any other identity form."""
+    if not isinstance(canonical, str) or not canonical.startswith("dms_planning|"):
+        return canonical
+    kv_ = dict(p.split("=", 1) for p in canonical.split("|")[1:] if "=" in p)
+    model = kv_.get("model", "").strip()
+    code = kv_.get("model_code", "").strip()
+    ext, inte = kv_.get("exterior", "").strip(), kv_.get("interior", "").strip()
+    return f"{model} {code} {ext}/{inte}".strip()
+
+
 def register(app):
     @app.get("/new-inventory")
     def new_inventory(app, req):
         s = req.session
         app.require(s, "workspace.view")
-        rows = _conn(app).execute(
-            "SELECT * FROM inventory_plan_result WHERE store_scope=? AND status='issued' ORDER BY issued_time",
+        app.ensure_inventory_published(s.scope)     # keep the review workflow in sync with the issued board
+        conn = _conn(app)
+        rows = conn.execute(
+            "SELECT * FROM inventory_plan_result WHERE store_scope=? AND status='issued' ORDER BY issued_time,id",
             (s.scope,)).fetchall()
+        ident = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
+            "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (s.scope,)).fetchall()}
+
+        from ...newinv.publish import plan_call
+        _rank = {"ACQUIRE": 0, "EXCESS": 1, "MONITOR": 2, "NO_ACTION": 3}
+        int_need = arr_excess = inc_excess = acquiring = 0
+        board = []
+        for r in rows:
+            try:
+                dec = (json.loads(r["evidence"]) if r["evidence"] else {}).get("decision") or {}
+            except Exception:
+                dec = {}
+            if not dec:
+                continue                            # legacy (non-discrete) plan -> only the portfolio table below
+            kind, _qty, label = plan_call(dec)
+            acq = int(dec.get("acquire_units", 0) or 0)
+            ax, ix = int(dec.get("arrived_excess", 0) or 0), int(dec.get("incoming_excess", 0) or 0)
+            int_need += acq; arr_excess += ax; inc_excess += ix
+            acquiring += 1 if acq > 0 else 0
+            mon = ", ".join(mm.get("month", "") for mm in (dec.get("monitor_months") or [])) or "—"
+            tone = {"ACQUIRE": "attention", "EXCESS": "pending", "MONITOR": "healthy"}.get(kind, "healthy")
+            cred = dec.get("credibility") if isinstance(dec.get("credibility"), dict) else {}
+            board.append((_rank.get(kind, 3), [
+                safe(badge(tone, label)), esc(_readable(ident.get(r["combination_id"], r["combination_id"]))),
+                esc(round(dec.get("target_level", 0) or 0, 2)), esc(r["current_supply"]),
+                esc(dec.get("incoming_in_horizon", r["future_supply"])), esc(dec.get("pending_timing", 0)),
+                esc(mon), esc(dec.get("dts_burden", "—")),
+                esc(f'{dec.get("evidence_level", "—")}/Z{round(cred.get("credibility_z", 0) or 0, 3)}')]))
+        board.sort(key=lambda t: t[0])
+
+        parts = []
+        if board:                                   # discrete whole-vehicle operating board (certified plan)
+            summary = kv([("INTEGER TOTAL NEED (vehicles to ACQUIRE now)", int_need),
+                          ("Acquiring combinations", acquiring),
+                          ("ARRIVED EXCESS (disposition)", arr_excess),
+                          ("INCOMING EXCESS (redirect)", inc_excess),
+                          ("Target Days Supply", 60)])
+            parts.append(
+                f'<div class="card"><h2>Inventory board (issued)</h2>{summary}'
+                '<p class="muted">Whole-vehicle actions are read from the certified issued plan — not recomputed '
+                'here. ACQUIRE = commit now; MONITOR = future coverage risk (no commitment due yet); EXCESS = '
+                'arrived disposition / incoming redirect. Autonomous external execution is not enabled.</p></div>'
+                + '<h2>Combination actions</h2>'
+                + table(["Call", "Combination", "Target(60d)", "Arrived", "Incoming (in-horizon)",
+                         "Pending ETA", "Monitor", "DTS burden", "Evidence"], [b[1] for b in board]))
+
+        # legacy portfolio view (retained; also serves plans issued without a discrete decision) --------------
         total_need = sum(r["need"] for r in rows)
         total_excess = sum(r["excess"] for r in rows)
         trows = []
@@ -38,12 +99,13 @@ def register(app):
                           esc(r["current_supply"]), esc(r["future_supply"]), esc(r["committed_supply"]),
                           esc(round(r["need"], 2)), esc(round(r["excess"], 2)),
                           safe(badge("healthy" if st == "balanced" else "attention", st))])
-        body = (f'<div class="card"><h2>Portfolio</h2>{kv([("Combinations planned", len(rows)), ("Total Need", round(total_need,2)), ("Total Excess", round(total_excess,2))])}'
-                '<p class="muted">Totals and Need/Excess are read from the issued Phase 4 plan — not recomputed here. '
-                'Current / Future / Committed Supply are shown separately; one unit is counted once.</p></div>'
-                + '<h2>Combination plans (issued)</h2>'
-                + table(["Combination", "Demand", "Current", "Future", "Committed", "Need", "Excess", "State"], trows))
-        return _resp(app, s, "New Inventory", body, "/new-inventory")
+        parts.append(
+            f'<div class="card"><h2>Portfolio</h2>{kv([("Combinations planned", len(rows)), ("Total Need", round(total_need,2)), ("Total Excess", round(total_excess,2))])}'
+            '<p class="muted">Analytical totals and Need/Excess are read from the issued Phase 4 plan — not '
+            'recomputed here. Current / Future / Committed Supply are shown separately; one unit is counted once.</p></div>'
+            + '<h2>Combination plans (issued)</h2>'
+            + table(["Combination", "Demand", "Current", "Future", "Committed", "Need", "Excess", "State"], trows))
+        return _resp(app, s, "New Inventory", "".join(parts), "/new-inventory")
 
     @app.get("/production")
     def production(app, req):

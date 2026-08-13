@@ -47,8 +47,22 @@ class App:
         self.prefs = PrefsService(self.stack.db.conn, self.stack.clock)
         self.router = Router()
         self.sessions = {}               # token -> Session
+        self._published_scopes = set()   # scopes whose issued inventory plans have been materialised this run
         from . import views              # noqa: register all routes
         views.register(self)
+
+    def ensure_inventory_published(self, scope):
+        """Idempotently materialise the certified issued New-Inventory plans into Phase 9 workspace items so
+        Today / Decision Inbox and the review workflow surface them. Reads only persisted plans (no reimport,
+        no recompute); the publisher itself skips any plan already published. Cached per scope per process."""
+        if not scope or scope in self._published_scopes:
+            return
+        try:
+            from ..newinv.publish import publish_issued_inventory
+            publish_issued_inventory(self.stack.db.conn, self.p9.workspace, scope)
+        except Exception:   # noqa: BLE001 - never let materialisation break a page load
+            pass
+        self._published_scopes.add(scope)
 
     # ---- routing decorators ------------------------------------------------
     def get(self, pattern):
