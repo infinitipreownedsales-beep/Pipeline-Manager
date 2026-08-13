@@ -1,0 +1,288 @@
+"""Phase 12 real-demand + planning bridge — governed DATA_ONLY New Inventory recommendations from real DMS
+snapshots + real Speed-to-Sell history. Uses a SANITIZED fixture shaped exactly like the real workbook
+(row-1 running-tab metadata, row-2 header, DT, DNQ, duplicate-VIN conflicts, partial current month). No real
+dealership workbook is committed. Covers the 30 ratified behaviors."""
+import os
+import tempfile
+import unittest
+
+from elite.db import current_version
+from elite.ops.fixtures import Phase11, SCOPE as OPS_SCOPE
+from elite.ops.intake import content_hash
+from elite.newinv.fixtures import Phase4, SCOPE
+from elite.newinv.dms_identity import dms_planning_identity, resolve_or_create_planning_combination
+from elite.newinv import demand_bridge as DB
+from elite.newinv import supply_bridge as SB
+from elite.newinv import data_quality as DQ
+from elite.newinv.planning_runner import PlanningContext, run_planning, derive_horizon
+from elite.tests.test_phase12_dms_xlsx_adapter import make_xlsx
+
+STS = "speed_to_sell"
+HEADERS = ["Sales Month", "Stock Number", "Model", "VIN", "DAYS TO SELL", "MODEL CODE",
+           "EXTERIOR CODE", "INTERIOR CODE"]
+META = ["LAST ENTERED 2026-08-13 running tab / reference", "", "", "", "", "", "", ""]
+
+
+def _row(month, vin, dts, code, ext, inte, model="QX60 SPORT", stock=""):
+    return [month, stock, model, vin, dts, code, ext, inte]
+
+
+def sts_workbook(data_rows, *, meta=True):
+    grid = ([META] if meta else []) + [HEADERS] + data_rows
+    return make_xlsx(grid, sheet_name="SPEED TO SELL REPORT")
+
+
+def _sem(dts):
+    return "business_code" if str(dts) in ("DT", "DNQ") else "numeric"
+
+
+def D(month, vin, dts, code, ext, inte, model="QX60 SPORT"):
+    return {"sales_month": month, "vin": vin, "days_to_sell": dts, "days_to_sell_semantic": _sem(dts),
+            "model_code": code, "exterior": ext, "interior": inte, "model": model}
+
+
+def S(loc, code, ext, inte, dis="", pm="", model="QX60"):
+    return {"location": loc, "model_code": code, "ext": ext, "int": inte, "dis": dis,
+            "production_month": pm, "model": model}
+
+
+# ============================ ingestion (real adapter path through Phase 11) ============================
+class TestSpeedToSellIngestion(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.p = Phase11(os.path.join(self.tmp, "e.db"))
+        self.conn = self.p.stack.db.conn
+        self.sid = self.p.source_id(STS)
+        rows = [
+            _row("202409", "N1", "43", "8331", "QBE", "P", "QX80 LUXE 2WD"),   # numeric, stock present
+            _row("202409", "", "DT", "8441", "GAT", "D"),                       # DT, blank stock
+            _row("202410", "N3", "DNQ", "8441", "GAT", "D"),                    # DNQ
+            _row("202411", "N4", "22", "8441", "GAT", "D"),
+            _row("202411", "N5", "18", "5N1AL1FRXS340552", "BW5", "G"),         # malformed-VIN-like model code? no: VIN col
+        ]
+        # a genuinely malformed VIN in the VIN column, retained as evidence
+        rows.append(_row("202412", "N6", "31", "8481", "GAQ", "G"))
+        rows[4] = ["202411", "N5", "QX60 SPORT", "5N1AL1FRXS340552", "18", "8441", "BW5", "G"]
+        self.rows = rows
+        xlsx = sts_workbook(rows)
+        self.run = self.p.import_payload(STS, xlsx, chash=content_hash(xlsx))
+
+    def _obs(self):
+        import json
+        return [json.loads(r["raw_values"]) for r in self.conn.execute(
+            "SELECT raw_values FROM source_observation WHERE import_batch_id=?",
+            (self.run["import_batch_id"],)).fetchall()]
+
+    def test_01_metadata_row_skipped_header_row2(self):
+        self.assertEqual(len(self._obs()), len(self.rows))          # 6 data rows; row-1 metadata skipped
+
+    def test_02_03_all_rows_retained_blank_stock_ok(self):
+        obs = self._obs()
+        self.assertEqual(len(obs), 6)
+        self.assertTrue(any(o.get("stock_number", "") == "" for o in obs))   # blank Stock# accepted/retained
+
+    def test_04_05_dt_dnq_preserved_business_code(self):
+        obs = self._obs()
+        dt = [o for o in obs if o.get("days_to_sell") == "DT"]
+        dnq = [o for o in obs if o.get("days_to_sell") == "DNQ"]
+        self.assertEqual(len(dt), 1)
+        self.assertEqual(len(dnq), 1)
+        self.assertEqual(dt[0]["days_to_sell_semantic"], "business_code")
+        self.assertEqual(dnq[0]["days_to_sell_semantic"], "business_code")
+
+    def test_06_malformed_vin_retained_as_evidence(self):
+        obs = self._obs()
+        self.assertTrue(any(o.get("vin") == "5N1AL1FRXS340552" for o in obs))   # kept verbatim, not fixed
+
+    def test_19_20_21_no_units_orders_facts(self):
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM vehicle_unit").fetchone()[0], 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM production_order").fetchone()[0], 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM business_fact").fetchone()[0], 0)
+
+    def test_29_schema_v12(self):
+        self.assertEqual(current_version(self.conn), 12)
+
+
+# ============================ planning identity (pure) ============================
+class TestPlanningIdentity(unittest.TestCase):
+    def test_11_model_code_never_collapses(self):
+        a = dms_planning_identity({"model_code": "8331", "exterior": "QBE", "interior": "P"})
+        b = dms_planning_identity({"model_code": "8481", "exterior": "QBE", "interior": "P"})
+        self.assertNotEqual(a, b)
+
+    def test_13_year_agnostic_join(self):
+        supply = dms_planning_identity({"model_code": "84416", "ext": "GAT", "int": "D"})   # 5-digit + MY
+        demand = dms_planning_identity({"model_code": "8441", "exterior": "GAT", "interior": "D"})
+        self.assertEqual(supply, demand)
+
+    def test_12_trim_drivetrain_unknown(self):
+        p4 = Phase4(os.path.join(tempfile.mkdtemp(), "e.db"))
+        comb = resolve_or_create_planning_combination(
+            p4.store, p4.clock, {"model_code": "8441", "exterior": "GAT", "interior": "D"}, SCOPE)
+        self.assertIsNone(comb.trim)
+        self.assertIsNone(comb.drivetrain)
+        self.assertIsNone(comb.model_year)                          # year-agnostic
+        self.assertEqual(comb.lineage_metadata["model_code"], "8441")
+
+
+# ============================ demand bridge (pure) ============================
+class TestDemandBridge(unittest.TestCase):
+    def _build(self, rows, part_frac=1.0):
+        return DB.build_demand(rows, latest_midx=DB.midx_of("202608"),
+                               current_midx=DB.midx_of("202608"), part_frac=part_frac)
+
+    def test_07_duplicate_identical_counts_once(self):
+        rows = [D("202602", "VDUP", "DT", "8331", "QBE", "P", "QX80 LUXE 2WD"),
+                D("202602", "VDUP", "DT", "8331", "QBE", "P", "QX80 LUXE 2WD")]
+        res = self._build(rows)
+        self.assertEqual(res["counted_sales"], 1)
+        self.assertEqual([e.kind for e in res["exceptions"]], ["duplicate_identical"])
+
+    def test_08_duplicate_conflicting_counts_once_and_flags(self):
+        rows = [D("202602", "VCON", "22", "8441", "GAT", "D", "QX60 SPORT"),
+                D("202602", "VCON", "25", "8441", "GAT", "D", "QX60 SPORT AWD")]
+        res = self._build(rows)
+        self.assertEqual(res["counted_sales"], 1)
+        self.assertEqual(res["exceptions"][0].kind, "duplicate_conflicting")
+        self.assertEqual(res["exceptions"][0].severity, "warning")
+
+    def test_04_05_dt_dnq_demand_positive_dts_neutral(self):
+        rows = [D("202601", "V1", "DT", "8441", "GAT", "D"),
+                D("202602", "V2", "DNQ", "8441", "GAT", "D"),
+                D("202603", "V3", "20", "8441", "GAT", "D")]
+        res = self._build(rows)
+        c = next(iter(res["cohorts"].values()))
+        self.assertEqual(c.sales_total, 3)                          # all three count as demand
+        self.assertEqual(c.business_code_count, 2)                  # DT + DNQ
+        self.assertEqual(c.dts_values, [20.0])                      # only the numeric contributes to DTS
+        self.assertEqual(c.dts_average, 20.0)
+
+    def test_14_partial_current_month_exposure(self):
+        rows = [D("202608", "V1", "20", "8441", "GAT", "D")]        # single sale in the partial month
+        res = self._build(rows, part_frac=0.2)
+        c = next(iter(res["cohorts"].values()))
+        self.assertEqual(c.exposure_months, 0.2)                    # not a full month
+
+    def test_24_legacy_prate_computed(self):
+        rows = [D("202606", "V1", "20", "8441", "GAT", "D"), D("202607", "V2", "20", "8441", "GAT", "D")]
+        res = self._build(rows, part_frac=1.0)
+        c = next(iter(res["cohorts"].values()))
+        self.assertGreater(c.legacy_prate, 0.0)
+
+
+# ============================ data-quality acknowledgement (pure) ============================
+class _Meta:
+    def __init__(self):
+        self.d = {}
+
+    def get(self, k):
+        return self.d.get(k)
+
+    def put_if_absent(self, k, v):
+        self.d.setdefault(k, v)
+
+
+class TestDataQualityAck(unittest.TestCase):
+    def _dup(self, dts2):
+        rows = [D("202602", "VX", "22", "8441", "GAT", "D", "QX60 SPORT"),
+                D("202602", "VX", dts2, "8441", "GAT", "D", "QX60 SPORT AWD")]
+        return DB.build_demand(rows, latest_midx=DB.midx_of("202602"),
+                               current_midx=DB.midx_of("202608"), part_frac=1.0)["exceptions"]
+
+    def test_09_10_ack_unchanged_suppressed_changed_resurfaces(self):
+        meta = _Meta()
+        exc = self._dup("25")
+        fp = exc[0].fingerprint
+        DQ.acknowledge(meta, fp)
+        is_ack = DQ.metadata_ack_lookup(meta)
+        self.assertEqual(DQ.filter_unacknowledged(exc, is_ack), [])          # acknowledged unchanged -> silent
+        exc2 = self._dup("30")                                              # materially changed DTS
+        self.assertNotEqual(exc2[0].fingerprint, fp)                        # new fingerprint
+        self.assertEqual(len(DQ.filter_unacknowledged(exc2, is_ack)), 1)    # resurfaces
+
+
+# ============================ supply bridge (pure) ============================
+class TestSupplyBridge(unittest.TestCase):
+    def test_15_16_17_18_counts_stages_dis(self):
+        rows = [S("DLR-INV", "84416", "GAT", "D", dis=40), S("DLR-INV", "84416", "GAT", "D", dis=12),
+                S("ONS", "84416", "GAT", "D", pm="2026-10"), S("SIT", "84416", "GAT", "D", pm="2026-11"),
+                S("NNA-INV", "84416", "GAT", "D", pm="2026-09")]
+        sup = SB.build_supply(rows, current_month="2026-08")
+        c = next(iter(sup.values()))
+        self.assertEqual(c.current, 2)                              # ARRIVED (DLR-INV)
+        self.assertEqual(c.future, 3)                               # INCOMING (ONS+SIT+NNA-INV)
+        self.assertEqual(c.stages, {"DLR-INV": 2, "ONS": 1, "SIT": 1, "NNA-INV": 1})   # exact stages preserved
+        self.assertEqual(sorted(c.dis_values), [12, 40])           # DIS aging preserved
+
+
+# ============================ governed DATA_ONLY runner (against real Phase 4 services) ============================
+class TestPlanningRunner(unittest.TestCase):
+    def setUp(self):
+        self.p4 = Phase4(os.path.join(tempfile.mkdtemp(), "e.db"))
+        self.ctx = PlanningContext(scope=SCOPE, store=self.p4.store, clock=self.p4.clock,
+                                   demand=self.p4.demand, forecast=self.p4.forecasts,
+                                   planning=self.p4.planning, demand_cv=self.p4.demand_cv,
+                                   plan_cv=self.p4.plan_cv, metadata=self.p4.stack.metadata)
+        self.conn = self.p4.store.conn
+
+    def _demand(self, months=range(1, 9)):
+        rows = [D(f"2026{m:02d}", f"V{m}", "20", "8441", "GAT", "D") for m in months]
+        return DB.build_demand(rows, latest_midx=DB.midx_of("202608"),
+                               current_midx=DB.midx_of("202608"), part_frac=0.2)
+
+    def test_22_23_26_28_issue_with_real_demand(self):
+        built = self._demand()
+        sup = SB.build_supply([S("DLR-INV", "84416", "GAT", "D", dis=30),
+                               S("ONS", "84416", "GAT", "D", pm="2026-10")], current_month="2026-08")
+        res = run_planning(self.ctx, sup, built["cohorts"], built["exceptions"],
+                           target_days_supply=60, current_month="2026-08")
+        self.assertEqual(res["issued_count"], 1)
+        self.assertEqual(res["target_days_supply"], 60)            # Target Days Supply passed as objective
+        o = res["outcomes"][0]
+        self.assertTrue(o.issued)
+        self.assertEqual(o.evidence_tier, "exact")                # Elite DemandService authoritative
+        self.assertEqual(o.coverage_evidence["target_days_supply"], 60)
+        # existing UI reads the issued plan
+        rows = self.conn.execute("SELECT COUNT(*) FROM inventory_plan_result WHERE store_scope=? "
+                                 "AND status='issued'", (SCOPE,)).fetchone()[0]
+        self.assertEqual(rows, 1)
+
+    def test_25_insufficient_demand_refuses(self):
+        # cohort with supply but NO demand history -> refuse, never fabricate need/excess
+        sup = SB.build_supply([S("DLR-INV", "83316", "QBE", "P", dis=10)], current_month="2026-08")
+        res = run_planning(self.ctx, sup, {}, [], target_days_supply=60, current_month="2026-08")
+        self.assertEqual(res["issued_count"], 0)
+        self.assertEqual(res["refused_count"], 1)
+        self.assertEqual(res["outcomes"][0].refused_reason, "no_accepted_demand_history")
+        self.assertEqual(res["total_need"], 0.0)                   # no fabricated need
+
+    def test_24_legacy_prate_cannot_override(self):
+        built = self._demand()
+        sup = SB.build_supply([S("DLR-INV", "84416", "GAT", "D", dis=30)], current_month="2026-08")
+        res = run_planning(self.ctx, sup, built["cohorts"], built["exceptions"],
+                           target_days_supply=60, current_month="2026-08")
+        o = res["outcomes"][0]
+        self.assertIsNotNone(o.legacy_prate)                      # PRATE reported as comparison
+        # authoritative demand/need comes from Elite (evidence_tier exact), not PRATE
+        self.assertEqual(o.evidence_tier, "exact")
+
+    def test_19_20_21_no_units_orders_facts_or_execution(self):
+        built = self._demand()
+        sup = SB.build_supply([S("DLR-INV", "84416", "GAT", "D", dis=30)], current_month="2026-08")
+        run_planning(self.ctx, sup, built["cohorts"], built["exceptions"],
+                     target_days_supply=60, current_month="2026-08")
+        for t in ("vehicle_unit", "production_order", "business_fact"):
+            self.assertEqual(self.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0], 0)
+
+    def test_29_schema_v12(self):
+        self.assertEqual(current_version(self.conn), 12)
+
+    def test_horizon_derived_not_configured(self):
+        sup = SB.build_supply([S("ONS", "84416", "GAT", "D", pm="2026-11")], current_month="2026-08")
+        hz = derive_horizon("2026-08", sup)
+        self.assertEqual(hz[0], "2026-09")                        # derived from now + incoming window
+        self.assertIn("2026-11", hz)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
