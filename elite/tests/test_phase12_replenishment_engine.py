@@ -153,6 +153,69 @@ class TestActionabilityTiming(unittest.TestCase):
         self.assertTrue(plan.monitor_months)                    # later months remain visible as future risk
 
 
+class TestExcessFeasibility(unittest.TestCase):
+    # 1 + 2. QX60 8481 XKJ/K regression: a positive summed Delta cannot override a future coverage violation.
+    # With aged arrived inventory (Co=1.5) the 4th removal has +Delta but creates a below-target/stockout
+    # trajectory, so feasibility stops removal at 3 (not 4). Not hardcoded to 3 -- driven by the constraint.
+    def test_qx60_8481_stops_at_three(self):
+        r = 0.3802                                            # T = 2r = 0.7604 (real target)
+        mx = flat(EXT, r)
+        plan = R.allocate(arrived=5, confirmed_avail=[], monthly_expected=mx, action_horizon=ACTION,
+                          current_month=NOW, co=1.5)          # aged -> overstock cost raises 4th Delta positive
+        self.assertEqual(plan.arrived_excess, 3)
+        rejected = [s for s in plan.excess_trace if s.get("rejected")]
+        self.assertTrue(rejected)                             # the +Delta 4th removal is explicitly rejected
+        self.assertGreater(rejected[0]["delta_remove"], 0)    # positive Delta ...
+        self.assertIn("infeasible", rejected[0]["reason"])    # ... blocked by feasibility
+        # the rejected trajectory would have gone below target / negative
+        after = {x["m"]: x["P"] for x in rejected[0]["after"]}
+        self.assertLess(after["2026-11"], 0)
+
+    # 3. an arrived removal that would create a stockout is rejected
+    def test_arrived_removal_creating_stockout_rejected(self):
+        mx = flat(EXT, 1.0)                                   # T=2, demand 1/mo
+        plan = R.allocate(arrived=3, confirmed_avail=[], monthly_expected=mx, action_horizon=ACTION,
+                          current_month=NOW, co=2.0)          # strong overstock incentive to over-remove
+        # arrived just barely covers; feasibility must not strip below target/stockout
+        for step in [s for s in plan.excess_trace if s.get("feasible")]:
+            self.assertGreaterEqual(min(x["P"] - x["T"] for x in step["after"]), -1e-6)
+
+    # 4. an arrived removal that stays >= T at every checkpoint is allowed
+    def test_arrived_removal_above_target_allowed(self):
+        mx = flat(EXT, 0.2)                                   # T=0.4, light demand
+        plan = R.allocate(arrived=6, confirmed_avail=[], monthly_expected=mx, action_horizon=ACTION,
+                          current_month=NOW)
+        self.assertGreaterEqual(plan.arrived_excess, 1)       # genuine surplus removable
+        for step in [s for s in plan.excess_trace if s.get("feasible")]:
+            self.assertGreaterEqual(min(x["P"] - x["T"] for x in step["after"]), -1e-6)
+
+    # 5. a timed incoming redirect is allowed when later coverage stays protected
+    def test_incoming_redirect_allowed_when_protected(self):
+        mx = flat(EXT, 0.2)                                   # low demand; Nov arrivals are true surplus
+        plan = R.allocate(arrived=1, confirmed_avail=["2026-11", "2026-11"], monthly_expected=mx,
+                          action_horizon=ACTION, current_month=NOW)
+        self.assertGreaterEqual(plan.incoming_excess, 1)
+        self.assertEqual(plan.arrived_excess, 0)              # arrived guards early coverage
+
+    # 6. a timed incoming redirect is rejected when removing it creates an unrepairable future shortage
+    def test_incoming_redirect_rejected_when_needed(self):
+        # arrived covers Sep/Oct but Nov demand needs the Nov arrival; removing it stocks out November
+        mx = {"2026-09": 0.4, "2026-10": 0.4, "2026-11": 2.0, "2026-12": 0.4, "2027-01": 0.4}
+        plan = R.allocate(arrived=1, confirmed_avail=["2026-11"], monthly_expected=mx, action_horizon=ACTION,
+                          current_month=NOW)
+        self.assertEqual(plan.incoming_excess, 0)             # Nov arrival is needed -> not redirected
+
+    # 7. feasibility is recomputed after every removal (sequential)
+    def test_sequential_feasibility_recompute(self):
+        mx = flat(EXT, 0.3802)
+        plan = R.allocate(arrived=5, confirmed_avail=[], monthly_expected=mx, action_horizon=ACTION,
+                          current_month=NOW, co=1.5)
+        applied = [s for s in plan.excess_trace if s.get("feasible")]
+        # every APPLIED removal left a feasible (>= target) trajectory at the moment it was applied
+        for step in applied:
+            self.assertGreaterEqual(min(x["P"] - x["T"] for x in step["after"]), -1e-6)
+
+
 class TestDiscreteCrossing(unittest.TestCase):
     # G. a fractional deficit can round to a whole acquisition (crossing the continuous target)
     def test_crossing_add(self):

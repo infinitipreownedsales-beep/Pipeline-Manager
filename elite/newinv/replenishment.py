@@ -181,42 +181,68 @@ def allocate(*, arrived, confirmed_avail, monthly_expected, action_horizon, curr
     return plan
 
 
+_FEAS_EPS = 1e-9
+
+
 def _excess(arrived, confirmed_avail, monthly_expected, action_horizon, current_month, burden, cu, co,
             lead_months, review_months):
-    """Greedy whole-unit removal on the SAME trajectory. An arrived slot removal changes every checkpoint (may
-    open an early gap -> rejected); a timed-incoming removal changes only checkpoints at/after its month."""
-    def loss_of(a, conf):
-        return trajectory_loss(build_checkpoints(
-            arrived=a, confirmed_avail=conf, action_avail=[], monthly_expected=monthly_expected,
-            action_horizon=action_horizon, current_month=current_month, burden=burden,
-            lead_months=lead_months, review_months=review_months), cu=cu, co=co)
+    """Greedy whole-unit removal with a FEASIBILITY constraint. A positive summed Delta_remove is NOT
+    sufficient: early-month overstock savings can outweigh a shortage the removal creates in a later month.
+    A removal is applied only if FEASIBLE(s) AND Delta_remove(s) > 0, where FEASIBLE means the resulting
+    trajectory keeps P(m) >= T(m) at every checkpoint the removal affects -- i.e. the retained inventory (plus
+    only CONFIRMED/timed arrivals already in the trajectory) never drops below the 60-day target at a
+    checkpoint it must protect. A later hypothetical replenishment is never used to justify disposing an
+    arrived unit. For an arrived removal, every checkpoint is affected; for a timed-incoming removal, only
+    checkpoints at/after its availability month are affected (earlier months are unchanged)."""
+    def cps(a, conf):
+        return build_checkpoints(arrived=a, confirmed_avail=conf, action_avail=[],
+                                 monthly_expected=monthly_expected, action_horizon=action_horizon,
+                                 current_month=current_month, burden=burden, lead_months=lead_months,
+                                 review_months=review_months)
+
     def traj(a, conf):
-        cp = build_checkpoints(arrived=a, confirmed_avail=conf, action_avail=[], monthly_expected=monthly_expected,
-                               action_horizon=action_horizon, current_month=current_month, burden=burden,
-                               lead_months=lead_months, review_months=review_months)
-        return [{"m": c.month, "P": round(c.position, 4), "T": round(c.target, 4)} for c in cp]
+        return [{"m": c.month, "P": round(c.position, 4), "T": round(c.target, 4)} for c in cps(a, conf)]
+
+    def min_slack(a, conf, from_month=None):
+        """Smallest P(m)-T(m) over the affected checkpoints (all, or only those at/after from_month)."""
+        vals = [c.position - c.target for c in cps(a, conf)
+                if from_month is None or _idx(c.month) >= _idx(from_month)]
+        return min(vals) if vals else 0.0
+
     a, conf = arrived, list(confirmed_avail)
     arrived_rem = incoming_rem = 0
     removed_months, trace = [], []
     while True:
-        cur = loss_of(a, conf)
-        best, kind, slot = 0.0, None, None
-        if a > 0:                                  # try removing one arrived unit
-            d = round(cur - loss_of(a - 1, conf), 6)
-            if d > best:
-                best, kind, slot = d, "arrived", None
-        for s in sorted(set(conf), key=_idx):      # try removing one incoming slot (latest-affecting first)
+        cur = trajectory_loss(cps(a, conf), cu=cu, co=co)
+        candidates = []                            # (delta, kind, slot, feasible, slack)
+        if a > 0:
+            d = round(cur - trajectory_loss(cps(a - 1, conf), cu=cu, co=co), 6)
+            slack = round(min_slack(a - 1, conf), 6)          # arrived removal affects ALL checkpoints
+            candidates.append((d, "arrived", None, slack >= -_FEAS_EPS, slack))
+        for s in sorted(set(conf), key=_idx):
             trial = list(conf); trial.remove(s)
-            d = round(cur - loss_of(a, trial), 6)
-            if d > best:
-                best, kind, slot = d, "incoming", s
-        if best <= 0 or kind is None:
+            d = round(cur - trajectory_loss(cps(a, trial), cu=cu, co=co), 6)
+            slack = round(min_slack(a, trial, from_month=s), 6)   # incoming affects only checkpoints >= its month
+            candidates.append((d, "incoming", s, slack >= -_FEAS_EPS, slack))
+        feasible = [c for c in candidates if c[0] > 0 and c[3]]
+        if not feasible:
+            # record any positive-Delta removal that FEASIBILITY blocked (evidence: why removal stopped)
+            for d, kind, slot, feas, slack in candidates:
+                if d > 0 and not feas:
+                    trace.append({"removed": kind, "slot_month": (slot or "now/arrived"), "delta_remove": d,
+                                  "rejected": True,
+                                  "reason": f"infeasible: would leave min P(m)-T(m)={slack} < 0 at a protected checkpoint",
+                                  "before": traj(a, conf),
+                                  "after": traj(a - 1, conf) if kind == "arrived"
+                                  else traj(a, [x for x in conf if x != slot])})
             break
+        best = max(feasible, key=lambda c: c[0])
+        d, kind, slot, _feas, slack = best
         before = traj(a, conf)
         if kind == "arrived":
             a -= 1; arrived_rem += 1; removed_months.append("arrived")
         else:
             conf.remove(slot); incoming_rem += 1; removed_months.append(slot)
-        trace.append({"removed": kind, "slot_month": (slot or "now/arrived"), "delta_remove": best,
-                      "before": before, "after": traj(a, conf)})
+        trace.append({"removed": kind, "slot_month": (slot or "now/arrived"), "delta_remove": d,
+                      "feasible": True, "min_slack_after": slack, "before": before, "after": traj(a, conf)})
     return arrived_rem, incoming_rem, removed_months, trace
