@@ -284,6 +284,133 @@ class TestPlanningRunner(unittest.TestCase):
         self.assertIn("2026-11", hz)
 
 
+# ============ decision-engine correction: credibility + time-phased order-up-to + breadth/depth ============
+# Uses the REAL disposable-validation failure shapes (sanitized numbers; no dealer file committed): the
+# 1-partial-month-sale -> Need 5 explosion, 180-day slow movers, isolated vs recurrent DT/DNQ, post-horizon
+# and unknown-ETA incoming, and the gross-vs-net distinction.
+def _panel(extra=()):
+    """A modest, mostly-sparse cohort panel (so calibration has real cross-cohort context) plus `extra`."""
+    rows = []
+    # 10 QX60 model-code cohorts (codes 83x1, distinct from the special codes tested below), 2-4 sales
+    # each spread over 2025-2026 (typical thin dealer history) so calibration has cross-cohort context.
+    for i in range(10):
+        for j in range((i % 3) + 2):
+            rows.append(D(f"20{25 + (j % 2)}{((i + j) % 12) + 1:02d}", f"P{i:02d}{j:02d}00000000{i}",
+                          "45", f"83{i}1", "GAT", "D", model="QX60 SPORT"))
+    return rows + list(extra)
+
+
+def _run(rows, supply_rows, *, tds=60, latest="202608", pf=1.0):
+    p4 = Phase4(os.path.join(tempfile.mkdtemp(), "e.db"))
+    ctx = PlanningContext(scope=SCOPE, store=p4.store, clock=p4.clock, demand=p4.demand,
+                          forecast=p4.forecasts, planning=p4.planning, demand_cv=p4.demand_cv,
+                          plan_cv=p4.plan_cv, metadata=p4.stack.metadata)
+    built = DB.build_demand(rows, latest_midx=DB.midx_of(latest), current_midx=DB.midx_of("202608"),
+                            part_frac=pf)
+    sup = SB.build_supply(supply_rows, current_month="2026-08")
+    res = run_planning(ctx, sup, built["cohorts"], built["exceptions"], target_days_supply=tds,
+                       current_month="2026-08", latest_midx=DB.midx_of(latest), part_frac=pf)
+    return p4, res
+
+
+def _by_code(res, code):
+    return next((o for o in res["outcomes"] if o.key[1] == code), None)
+
+
+class TestDecisionEngineCorrection(unittest.TestCase):
+    # (2/3) sparse explosion killed: a single partial-month sale no longer yields ~Need 5
+    def test_sparse_single_sale_does_not_explode(self):
+        rows = _panel(extra=[D("202608", "SPARSE0000000001", "5", "8599", "QBE", "G", model="QX65 SPORT")])
+        _p, res = _run(rows, [], pf=0.4194)
+        o = _by_code(res, "8599")
+        self.assertIsNotNone(o)
+        self.assertLess(o.need, 2.0)                       # was 5.0 under the old model
+        self.assertLess(o.credibility_z, 0.5)              # heavily shrunk (n=1)
+        self.assertIn(o.evidence_level, ("model", "model_code", "portfolio"))
+
+    # (5/8) historical DTS is risk evidence: a persistent 180-day mover is dampened, not stocked deep
+    def test_slow_mover_dts_burden_suppresses_depth(self):
+        slow = [D(f"2025{(j % 12) + 1:02d}", f"SLOW{j:02d}00000000X", "180", "8131", "QBE", "W",
+                  model="QX65") for j in range(8)]
+        _p, res = _run(_panel(extra=slow), [])
+        o = _by_code(res, "8131")
+        self.assertIsNotNone(o)
+        self.assertLess(o.dts_burden, 0.5)                 # 180-day DTS materially raises the burden
+        self.assertLessEqual(o.need, 1.0)                  # not stocked deep despite 8 sales
+
+    # (9) DT/DNQ affects BREADTH not DEPTH: isolated event weak; recurrence represents but does not scale
+    def test_dtdnq_isolated_weak_recurrent_breadth_only(self):
+        iso = [D("202607", "DTISO00000000001", "DT", "8961", "KAD", "G", model="QX60 SPORT")]
+        recur = [D(f"2026{m:02d}", f"DNQ{m:02d}0000000Q", "DNQ", "8971", "KAD", "K", model="QX60 SPORT")
+                 for m in (3, 5, 7)]
+        _p, res = _run(_panel(extra=iso + recur), [])
+        iso_o, rec_o = _by_code(res, "8961"), _by_code(res, "8971")
+        self.assertLess(iso_o.dtdnq_strength, 0.5)         # one isolated DT is weak evidence
+        self.assertGreaterEqual(rec_o.dtdnq_strength, 0.5)  # recurrence is stronger
+        # recurrence may justify carrying ONE (breadth); it never scales depth to many
+        if rec_o.breadth == "represented_by_recurrence":
+            self.assertLessEqual(rec_o.target_level, 1.0)
+
+    # (1/4) time-phased order-up-to: incoming credited only when it arrives; post-horizon not netted now
+    def test_supply_timing_order_up_to(self):
+        base = [D(f"2026{m:02d}", f"TIM{m:02d}0000000001", "30", "8481", "XB3", "P", model="QX60") for m in range(1, 9)]
+        # arrived 1 + incoming within horizon 1 -> position 2
+        _p, r_in = _run(_panel(base), [S("DLR-INV", "84811", "XB3", "P", dis=20),
+                                       S("ONS", "84811", "XB3", "P", pm="2026-10")])
+        # arrived 1 + incoming FAR future (2027, beyond horizon) -> only arrived counts now
+        _p, r_post = _run(_panel(base), [S("DLR-INV", "84811", "XB3", "P", dis=20),
+                                         S("ONS", "84811", "XB3", "P", pm="2027-06")])
+        a, b = _by_code(r_in, "8481"), _by_code(r_post, "8481")
+        self.assertEqual(a.incoming_in_horizon, 1)
+        self.assertEqual(b.incoming_post_horizon, 1)
+        self.assertGreaterEqual(b.need, a.need)            # crediting later supply now would be wrong
+        self.assertGreaterEqual(a.current_supply, 1)
+
+    # (4/5) unknown-ETA incoming stays uncertain: never counted as immediately available
+    def test_unknown_eta_is_pending_not_credited(self):
+        base = [D(f"2026{m:02d}", f"UNK{m:02d}0000000001", "30", "8491", "GAT", "D", model="QX60") for m in range(1, 9)]
+        _p, res = _run(_panel(base), [S("ONS", "84911", "GAT", "D", pm="")])   # blank production/ETA
+        o = _by_code(res, "8491")
+        self.assertEqual(o.pending_timing, 1)              # surfaced as pending, not available
+        self.assertEqual(o.incoming_in_horizon, 0)
+
+    # (item 11/12) totals are NET: Total Need sums only actionable acquisition; gross target kept separately
+    def test_total_need_is_net_and_gross_is_separate(self):
+        _p, res = _run(_panel(), [])
+        self.assertAlmostEqual(res["total_need"],
+                               round(sum(max(0.0, o.need) for o in res["outcomes"] if o.issued), 4), places=4)
+        # every issued plan keeps a gross target coverage that is NOT the acquisition number
+        p4b, res2 = _run(_panel(), [])
+        issued = [o for o in res2["outcomes"] if o.issued and o.plan_id]
+        self.assertTrue(issued)
+        plan = p4b.store.get_plan(issued[0].plan_id)
+        self.assertIn("target_units", plan.desired_ending_coverage)
+        self.assertEqual(plan.evidence["model"], "time_phased_order_up_to")
+
+    # (calibration) a credibility model is calibrated from the panel and recorded with stability + sample
+    def test_credibility_model_calibrated_and_recorded(self):
+        _p, res = _run(_panel(), [])
+        cm = res["credibility_model"]
+        self.assertIn(cm["method"], ("buhlmann_stable", "fallback_median_sample", "degenerate"))
+        self.assertGreater(cm["calibration_sample"], 0)
+        self.assertIsInstance(cm["stable"], bool)
+
+    # (Phase 4 invariant preserved) adding qualifying supply never RAISES net Need
+    def test_added_qualifying_never_raises_need(self):
+        base = [D(f"2026{m:02d}", f"INV{m:02d}0000000001", "30", "8451", "GAT", "D", model="QX60") for m in range(1, 9)]
+        _p, r0 = _run(_panel(base), [])
+        _p, r1 = _run(_panel(base), [S("DLR-INV", "84511", "GAT", "D", dis=15)])
+        n0, n1 = _by_code(r0, "8451").need, _by_code(r1, "8451").need
+        self.assertLessEqual(n1, n0)
+
+    # (governance) no physical entities / facts from the planning run; schema stays v12
+    def test_planning_creates_no_entities_v12(self):
+        p4, res = _run(_panel(), [S("DLR-INV", "84011", "GAT", "D", dis=20)])
+        for t in ("vehicle_unit", "production_order", "business_fact"):
+            self.assertEqual(p4.store.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0], 0)
+        self.assertEqual(current_version(p4.store.conn), 12)
+
+
 # ===================== regression: Speed-to-Sell physical-identity leak (REAL 17-char VINs) =====================
 # Blind-spot fix. The original TestSpeedToSellIngestion used non-VIN-shaped synthetic ids ("N1"...), so
 # resolve_vehicle always returned UNRESOLVED and no unit was ever created -- masking that a VIN-bearing

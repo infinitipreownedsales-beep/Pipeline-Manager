@@ -47,13 +47,31 @@ def derive_seasonality(retail_by_month):
     return idx, "derived_bounded"
 
 
+def _baseline_rate(inputs: dict) -> float:
+    """Baseline monthly rate. Legacy (no credibility block): sales / exposure with exposure floored at 1
+    month — unchanged for every existing caller. Credibility path: the exact rate (sales / real exposure,
+    NOT floored) is shrunk toward a higher-level prior by Buhlmann weight Z, so a thin partial-month cohort
+    can no longer masquerade as a full monthly velocity. All inputs live in `inputs` so replay reproduces."""
+    rbm = inputs["retail_by_month"]
+    cred = inputs.get("credibility")
+    if not cred:
+        return sum(rbm.values()) / max(float(inputs["exposure_months"]), 1.0)
+    exact_exposure = max(float(inputs["exposure_months"]), float(cred.get("min_exposure", 1.0)))
+    exact_rate = sum(rbm.values()) / exact_exposure if rbm else 0.0
+    n = float(cred.get("exact_n", 0))
+    k = cred.get("k")
+    z = (n / (n + k)) if (k and k > 0) else 1.0
+    z = max(0.0, min(z, float(cred.get("z_cap", 1.0))))
+    prior = cred.get("prior_rate")
+    prior = float(prior) if prior is not None else exact_rate
+    return z * exact_rate + (1.0 - z) * prior
+
+
 def _demand_math(inputs: dict) -> dict:
     """Pure, deterministic Demand computation used by both issue() and replay()."""
-    rbm = inputs["retail_by_month"]
-    exposure = max(float(inputs["exposure_months"]), 1.0)
     trend = float(inputs["trend"])
     season = inputs["seasonality"]
-    baseline_rate = sum(rbm.values()) / exposure
+    baseline_rate = _baseline_rate(inputs)
     out = {}
     for m in inputs["horizon"]:
         s = _clamp_season(float(season.get(str(_month_no(m)), 1.0)))
@@ -79,7 +97,7 @@ class DemandService:
     def issue(self, combination, scope, horizon, *, retail_by_month=None, exposure_months=0.0,
               sample_size=0, trend=1.0, trend_method="stable", seasonality=None, inherited=None,
               inherit_allowed=False, gaps=False, policy_versions=None, calculation_version,
-              scenario_id=None, source_refs=None, fact_refs=None):
+              scenario_id=None, source_refs=None, fact_refs=None, credibility=None):
         retail_by_month = retail_by_month or {}
         exact = sum(retail_by_month.values()) > 0
         if exact:
@@ -100,8 +118,17 @@ class DemandService:
                                if seasonality else derive_seasonality(rbm))
         inputs = {"horizon": list(horizon), "retail_by_month": dict(rbm), "exposure_months": exp,
                   "seasonality": season, "trend": float(trend)}
+        # Credibility (evidence-maturity) shrinkage — only when the caller supplies a governed block; the
+        # exact rate is blended toward a higher-level prior so thin exact cohorts do not over-call. The block
+        # is embedded in `inputs` so replay reproduces the same monthly output.
+        if credibility is not None:
+            inputs["credibility"] = dict(credibility)
         monthly = _demand_math(inputs)
         conf = _confidence(tier, samp, gaps)
+        if credibility is not None and credibility.get("evidence_level"):
+            # confidence reflects corroboration: an uncorroborated thin exact cohort is never "high"
+            if credibility.get("evidence_level") in ("portfolio", "none") and samp < LOW_SAMPLE:
+                conf = "low"
 
         checksum = output_checksum(monthly)
         pkg = self.policy.add_reproducibility(ReproducibilityPackage(
@@ -118,7 +145,8 @@ class DemandService:
             evidence_tier=tier, direct_evidence=direct, availability_adjustment="retail_per_available_month",
             seasonality_ref={"index": season, "note": season_note},
             trend_ref={"factor": trend, "method": trend_method}, confidence=conf,
-            uncertainty={"sample_size": samp, "gaps": bool(gaps), "tier": tier},
+            uncertainty={"sample_size": samp, "gaps": bool(gaps), "tier": tier,
+                         "credibility": (dict(credibility) if credibility is not None else None)},
             policy_versions=list(policy_versions or []), calculation_version=calculation_version,
             source_refs=list(source_refs or []), fact_refs=list(fact_refs or []),
             reproducibility_package=pkg.id, scenario_id=scenario_id)

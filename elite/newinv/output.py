@@ -10,13 +10,20 @@ from __future__ import annotations
 
 
 def _call(plan):
+    """Dealer-facing call. For time-phased plans, `need` is NET actionable acquisition (units to commit
+    now) and `excess` is NET surplus vs the 60-day objective — never a gross buffered requirement."""
+    cov = plan.desired_ending_coverage or {}
     if plan.planning_state == "unresolved":
         return "REVIEW — required coverage policy unresolved; no target set."
     if plan.planning_state == "need":
-        return f"ORDER — short {plan.need:g} unit(s) against target."
+        return f"ACQUIRE — commit {plan.need:g} additional unit(s) to reach the 60-day objective."
     if plan.planning_state == "excess":
-        return f"HOLD/REDUCE — {plan.excess:g} unit(s) beyond target."
-    return "LEAVE ALONE — supply meets the approved target."
+        return f"HOLD/REDUCE — {plan.excess:g} unit(s) beyond the 60-day objective."
+    trough = cov.get("near_term_trough")
+    if trough is not None and trough < 0:
+        return ("MONITOR — position meets the 60-day objective but a near-term shortage is projected "
+                "before inbound arrives; no acquisition required now.")
+    return "LEAVE ALONE — position meets the approved 60-day objective; no acquisition needed."
 
 
 def build_slice(store, plan_id):
