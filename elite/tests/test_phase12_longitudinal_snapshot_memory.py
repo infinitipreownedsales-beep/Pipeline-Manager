@@ -356,8 +356,10 @@ class TestDisAndSafety(_Base):
         self.assertEqual(self._count("production_order"), 0)
         self.assertEqual(self._count("vehicle_unit"), 0)
         self.assertGreater(self._count("source_observation"), 0)
+        # observation-only source: every row is retained as immutable evidence with NO physical-identity
+        # resolution (hence no unit/order/fact), recorded as the explicit "observation" outcome.
         self.assertTrue(all(
-            r["identity_status"] == "unresolved" for r in self.conn.execute(
+            r["identity_status"] == "observation" for r in self.conn.execute(
                 "SELECT identity_status FROM source_observation").fetchall()))
 
     # schema must remain v12 throughout.

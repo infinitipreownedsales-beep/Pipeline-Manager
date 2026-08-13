@@ -284,5 +284,103 @@ class TestPlanningRunner(unittest.TestCase):
         self.assertIn("2026-11", hz)
 
 
+# ===================== regression: Speed-to-Sell physical-identity leak (REAL 17-char VINs) =====================
+# Blind-spot fix. The original TestSpeedToSellIngestion used non-VIN-shaped synthetic ids ("N1"...), so
+# resolve_vehicle always returned UNRESOLVED and no unit was ever created -- masking that a VIN-bearing
+# observation-only source WOULD create a physical VehicleUnit. The REAL Speed-to-Sell workbook carries valid
+# 17-char VINs and leaked 400 VehicleUnits at ingestion. These tests use REAL-shaped VALID VINs and prove
+# ingestion creates zero physical entities while retaining each VIN verbatim for the DERIVED demand bridge,
+# that duplicate reconciliation still works on that derived layer, that planning still functions from the
+# observation-derived demand, and that a genuine PHYSICAL (vehicle) source still resolves a unit normally.
+V1 = "5N1AL0MN9NC300001"
+V2 = "5N1AL0MN9NC300002"
+V3 = "5N1AL0MN9NC300004"
+
+
+class TestSpeedToSellPhysicalIdentityLeakRegression(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.p = Phase11(os.path.join(self.tmp, "e.db"))
+        self.conn = self.p.stack.db.conn
+        self.sid = self.p.source_id(STS)
+        # real-shaped rows: distinct valid VINs across months, an IDENTICAL-duplicate VIN, and a
+        # materially-CONFLICTING-duplicate VIN (same VIN, different days-to-sell) -- the real shapes.
+        self.rows = [
+            _row("202603", V1, "20", "8441", "GAT", "D"),
+            _row("202604", V2, "35", "8441", "GAT", "D"),
+            _row("202605", V3, "18", "8441", "GAT", "D"),
+            _row("202603", V1, "20", "8441", "GAT", "D"),   # identical duplicate of V1
+            _row("202605", V2, "99", "8441", "GAT", "D"),   # conflicting duplicate of V2 (different DTS/month)
+        ]
+        xlsx = sts_workbook(self.rows)
+        self.run = self.p.import_payload(STS, xlsx, chash=content_hash(xlsx))
+
+    def _obs_rows(self):
+        return DB.read_accepted_speed_to_sell_rows(self.conn, self.sid, SCOPE)
+
+    def _count(self, table):
+        return self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+
+    # (1)+(2) every real-VIN row retained as a Source Observation, VIN verbatim, duplicate NOT collapsed
+    def test_rows_retained_and_vin_verbatim(self):
+        obs = self._obs_rows()
+        self.assertEqual(len(obs), len(self.rows))                  # all rows retained
+        vins = [o.get("vin") for o in obs]
+        for v in (V1, V2, V3):
+            self.assertIn(v, vins)                                  # valid 17-char VIN kept verbatim
+        self.assertEqual(vins.count(V1), 2)                         # duplicate preserved, not destroyed
+
+    # (4)+(5)+(6) ingestion of VIN-bearing observation-only rows creates NO physical entity / fact
+    def test_zero_units_orders_facts(self):
+        self.assertEqual(self._count("vehicle_unit"), 0)            # <-- the leak: was 400 on real data
+        self.assertEqual(self._count("production_order"), 0)
+        self.assertEqual(self._count("business_fact"), 0)
+        outs = {r[0] for r in self.conn.execute(
+            "SELECT DISTINCT identity_status FROM source_observation").fetchall()}
+        self.assertEqual(outs, {"observation"})                    # explicit observation-only outcome
+
+    # (3) duplicate-VIN reconciliation still works on the DERIVED demand layer, using the retained VIN
+    def test_duplicate_reconciliation_uses_vin(self):
+        counted, exceptions = DB.reconcile(self._obs_rows())
+        by_vin = {}
+        for c in counted:
+            by_vin[c.vin] = by_vin.get(c.vin, 0) + 1
+        self.assertEqual(by_vin.get(V1), 1)                         # identical duplicate counted once
+        self.assertEqual(by_vin.get(V2), 1)                         # conflicting duplicate counted once
+        kinds = {e.kind for e in exceptions}
+        self.assertIn("duplicate_identical", kinds)                 # benign duplicate surfaced
+        self.assertIn("duplicate_conflicting", kinds)               # material conflict surfaced
+
+    # (7) planning still functions from the observation-derived demand (issues, creates no physical entity)
+    def test_planning_functions_from_observation_demand(self):
+        rows = self._obs_rows()
+        built = DB.build_demand(rows, latest_midx=DB.midx_of("202605"),
+                                current_midx=DB.midx_of("202608"), part_frac=1.0)
+        self.assertGreaterEqual(built["counted_sales"], 3)         # demand derived from ingested observations
+        p4 = Phase4(os.path.join(self.tmp, "p4.db"))
+        ctx = PlanningContext(scope=SCOPE, store=p4.store, clock=p4.clock, demand=p4.demand,
+                              forecast=p4.forecasts, planning=p4.planning, demand_cv=p4.demand_cv,
+                              plan_cv=p4.plan_cv, metadata=p4.stack.metadata)
+        sup = SB.build_supply([S("DLR-INV", "84416", "GAT", "D", dis=30)], current_month="2026-08")
+        res = run_planning(ctx, sup, built["cohorts"], built["exceptions"],
+                           target_days_supply=60, current_month="2026-08")
+        self.assertGreaterEqual(res["issued_count"], 1)            # planning still functions
+        for t in ("vehicle_unit", "production_order", "business_fact"):
+            self.assertEqual(p4.store.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0], 0)
+
+    # (8) a genuine PHYSICAL (vehicle) source with the SAME valid VIN still resolves + creates a VehicleUnit
+    def test_physical_vehicle_source_still_resolves(self):
+        from elite.data.fixtures import Phase2
+        p2 = Phase2(os.path.join(self.tmp, "p2.db"))
+        batch = p2.ingest_dms([{"stock_number": "N1", "vin": V1, "model": "qx60",
+                                "production_month": "2026-03", "mileage": "5"}])
+        self.assertEqual(batch.accepted_count, 1)
+        units = p2.store.conn.execute("SELECT COUNT(*) FROM vehicle_unit").fetchone()[0]
+        self.assertEqual(units, 1)                                  # physical resolution intact (not broken)
+
+    def test_schema_v12(self):
+        self.assertEqual(current_version(self.conn), 12)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -14,6 +14,8 @@ _MAP = {
     "created": ("NEW", ""),
     "distinct": ("NEW", ""),
     "accepted": ("MATCHED", ""),
+    # observation-only evidence retained without physical-identity resolution (no unit/order/fact created)
+    "observation": ("OBSERVATION", ""),
     "duplicate": ("DUPLICATE", "data"),
     "conflicting": ("CONFLICTING", "identity_or_data"),
     "unresolved": ("IDENTITY_UNRESOLVED", "identity"),

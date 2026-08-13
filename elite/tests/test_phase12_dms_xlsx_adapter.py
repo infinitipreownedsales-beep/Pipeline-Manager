@@ -162,7 +162,7 @@ class TestDmsXlsxAdapter(unittest.TestCase):
         stock75 = [o for o in obs if o[2].get("stock_number") == "75"]
         self.assertEqual(len(stock75), 3)                    # three distinct observations retained
         self.assertTrue(all(o[0] != "duplicate" for o in stock75))   # none collapsed as duplicate
-        self.assertTrue(all(o[1] == "unresolved" for o in obs))      # all identity UNRESOLVED
+        self.assertTrue(all(o[1] == "observation" for o in obs))     # observation-only: no physical identity
 
     # --- CASE B: same-file replay is idempotent ---------------------------------
     def test_replay_idempotent(self):
@@ -241,7 +241,7 @@ class TestDmsXlsxAdapter(unittest.TestCase):
                                     chash=content_hash(make_xlsx([HEADERS] + self.MERGED, merges=["A2:A4"])))
         obs = self._obs(run["import_batch_id"])
         self.assertEqual(len(obs), 3)                                   # all three retained
-        self.assertTrue(all(o[1] == "unresolved" for o in obs))        # observation-only, no rejects
+        self.assertTrue(all(o[1] == "observation" for o in obs))       # observation-only, no rejects
         self.assertEqual(sum(1 for o in obs if o[2].get("stock_number") == "75"), 3)  # 75 on every row
         self.assertTrue(all(o[0] != "duplicate" for o in obs))         # non-identity 75 -> no collapse
         self.assertEqual(sorted(set(o[2].get("serial_semantic") for o in obs)), ["unknown"])
@@ -274,7 +274,7 @@ class TestDmsXlsxAdapter(unittest.TestCase):
         run = self.p.import_payload(CONTRACT, wbx, chash=content_hash(wbx))
         obs = self._obs(run["import_batch_id"])
         self.assertEqual(len(obs), 4)                                  # all retained, none rejected
-        self.assertTrue(all(o[1] == "unresolved" for o in obs))       # observation-only, no identity
+        self.assertTrue(all(o[1] == "observation" for o in obs))      # observation-only, no identity
         self.assertTrue(all(o[0] != "rejected" for o in obs))         # blank Stock# is NOT a rejection
         stocks = [o[2].get("stock_number") for o in obs]
         self.assertEqual(stocks.count(""), 2)                         # two legitimate blank-stock rows retained

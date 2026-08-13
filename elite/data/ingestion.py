@@ -24,6 +24,16 @@ def checksum(raw_text: str) -> str:
     return "sha256:" + hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
 
 
+# Entity kinds that assert a PHYSICAL identity — a real unit/order that ingestion resolves (and, when new,
+# creates) via VIN / manufacturer-order-id. Every OTHER entity_kind is observation-only: its rows are
+# retained verbatim as immutable Source Observations and NEVER cause a VehicleUnit / ProductionOrder /
+# business fact to be created, even when a VIN is present. Physical-identity assertion (and duplicate-VIN
+# collapse) is reserved for sources that genuinely describe physical inventory; observation-only demand /
+# pipeline evidence (e.g. Speed-to-Sell, DMS pipeline summaries) is reconciled downstream in the derived
+# demand/supply bridges, never destroyed at ingestion.
+_PHYSICAL_ENTITY_KINDS = frozenset({"vehicle", "order"})
+
+
 def _record_identity(entity_kind, row, normalized, stock_identity=True):
     if entity_kind == "order":
         moid = normalized.get("manufacturer_order_id")
@@ -103,7 +113,7 @@ class IngestionService:
                 recorded_at=to_utc_iso(self.clock.now()), candidate_entities=candidates,
                 resulting_fact_refs=fact_refs, reason=vstatus if vstatus != "valid" else ""))
             bucket = {"matched": "accepted", "created": "accepted", "distinct": "accepted",
-                      "accepted": "accepted"}.get(outcome, outcome)
+                      "accepted": "accepted", "observation": "accepted"}.get(outcome, outcome)
             counts[bucket] = counts.get(bucket, 0) + 1
 
         # Full Snapshot absence: only a scoped reconciliation SIGNAL, never a removal.
@@ -130,6 +140,12 @@ class IngestionService:
                        vstatus, obs, seen, observed_subjects, effective_time, stock_identity=True):
         if vstatus == "rejected":
             return "rejected", "rejected", [], []
+        # Observation-only source (non-physical entity_kind): retain the row as immutable evidence with NO
+        # physical-identity resolution. This creates no VehicleUnit / ProductionOrder / business fact even
+        # when the row carries a VIN (the VIN stays verbatim in the stored observation for the derived
+        # demand/supply bridges). Duplicate-VIN reconciliation is a derived concern, never collapsed here.
+        if entity_kind not in _PHYSICAL_ENTITY_KINDS:
+            return "observation", "accepted", [], []
         key = _record_identity(entity_kind, row, normalized, stock_identity)
         if key is not None and key in seen:
             return ("duplicate", "duplicate", [], []) if seen[key] == normalized \
