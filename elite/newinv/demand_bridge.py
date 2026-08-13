@@ -158,6 +158,7 @@ class CohortDemand:
     business_code_count: int       # DT/DNQ (externally satisfied)
     business_code_months: int      # distinct months with a DT/DNQ (recurrence)
     business_code_midxs: tuple      # sorted distinct month-indices with a DT/DNQ (recency/clustering)
+    organic_sales_total: int        # ORGANIC stocked-retail sales (numeric DTS) — the breadth-by-velocity stream
     first_midx: int
     exposure_months: float
     legacy_prate: float            # comparison-only
@@ -192,6 +193,7 @@ def cohort_demand(counted, *, latest_midx, current_midx, part_frac=1.0):
             dts_average=(round(sum(dts_values) / len(dts_values), 2) if dts_values else None),
             business_code_count=len(bc), business_code_months=len({s.midx for s in bc}),
             business_code_midxs=tuple(sorted({s.midx for s in bc})),
+            organic_sales_total=len(sales) - len(bc),
             first_midx=first_midx, exposure_months=exposure, legacy_prate=prate,
             legacy_r90=r90, legacy_r180=r180)
     return out

@@ -10,19 +10,33 @@ from __future__ import annotations
 
 
 def _call(plan):
-    """Dealer-facing call. For time-phased plans, `need` is NET actionable acquisition (units to commit
-    now) and `excess` is NET surplus vs the 60-day objective — never a gross buffered requirement."""
-    cov = plan.desired_ending_coverage or {}
+    """Dealer-facing call — WHOLE vehicles only. When a discrete replenishment decision is attached
+    (evidence.decision), the call is the integer action: ACQUIRE n / EXCESS n / MONITOR / NO ACTION.
+    Continuous `need`/`excess` are analytical evidence, never presented as a vehicle count."""
+    dec = (plan.evidence or {}).get("decision") or {}
     if plan.planning_state == "unresolved":
         return "REVIEW — required coverage policy unresolved; no target set."
+    if dec:
+        acquire = int(dec.get("acquire_units", 0) or 0)
+        arr_ex = int(dec.get("arrived_excess", 0) or 0)
+        inc_ex = int(dec.get("incoming_excess", 0) or 0)
+        if acquire > 0:
+            return f"ACQUIRE {acquire} — commit {acquire} whole vehicle(s) now toward the 60-day objective."
+        if arr_ex > 0 or inc_ex > 0:
+            parts = []
+            if arr_ex:
+                parts.append(f"{arr_ex} arrived (disposition)")
+            if inc_ex:
+                parts.append(f"{inc_ex} incoming (redirect)")
+            return "EXCESS " + " + ".join(parts) + " — beyond the 60-day objective."
+        if dec.get("monitor_months"):
+            return "MONITOR — future coverage gap projected; no commitment required now."
+        return "NO ACTION — position meets the approved 60-day objective."
+    # legacy plans (no discrete decision attached)
     if plan.planning_state == "need":
         return f"ACQUIRE — commit {plan.need:g} additional unit(s) to reach the 60-day objective."
     if plan.planning_state == "excess":
         return f"HOLD/REDUCE — {plan.excess:g} unit(s) beyond the 60-day objective."
-    trough = cov.get("near_term_trough")
-    if trough is not None and trough < 0:
-        return ("MONITOR — position meets the 60-day objective but a near-term shortage is projected "
-                "before inbound arrives; no acquisition required now.")
     return "LEAVE ALONE — position meets the approved 60-day objective; no acquisition needed."
 
 

@@ -20,6 +20,7 @@ from statistics import median
 from . import credibility as cr
 from . import data_quality as dq
 from . import demand_bridge as db_
+from . import replenishment as rep
 from . import supply_bridge as sb_
 from .dms_identity import resolve_or_create_planning_combination
 from .planning_settings import resolve_target_days_supply
@@ -93,6 +94,14 @@ class CohortPlanOutcome:
     incoming_post_horizon: int = 0
     pending_timing: int = 0
     near_term_trough: float = None
+    # discrete whole-vehicle action (dealer-facing)
+    acquire_units: int = 0             # whole vehicles to ACQUIRE / commit now
+    arrived_excess: int = 0            # whole ARRIVED units that are disposition candidates
+    incoming_excess: int = 0           # whole INCOMING commitments to redirect/reduce
+    monitor_months: list = field(default_factory=list)   # future coverage gaps not yet requiring a commitment
+    action_availability: str = None    # when a now-commitment would contribute (now + lead)
+    analytical_deficit: float = 0.0    # continuous evidence only (never a buy count)
+    analytical_excess: float = 0.0
 
 
 # ---- calibration + per-cohort decision --------------------------------------------------------------
@@ -114,33 +123,49 @@ def cohort_credibility(cohort, index, model):
             "calibration_sample": model.calibration_sample, "fallback_reason": model.fallback_reason}
 
 
-def decide_target_level(demand_result, cohort, supply, dtdnq, target_days_supply):
-    """Two-stage decision. DEPTH: 60-day velocity coverage from the credibility-shrunk rate, dampened by
-    historical-DTS risk (evidence-weighted, never a hard cutoff). BREADTH: should the cohort be represented
-    at all? Strong DT/DNQ recurrence justifies carrying ONE unit (representation), but never scales depth."""
+def _overstock_cost(supply):
+    """Co: overstock cost per unit. Raised by CURRENT DIS aging and current arrived depth (supply-side
+    holding risk) — distinct from the historical-DTS burden in T and the demand shrinkage in the rate."""
+    if supply is None:
+        return 1.0
+    dis = supply.dis_values or []
+    dis_med = median(dis) if dis else None
+    co = 1.0
+    if dis_med is not None and dis_med > 120:
+        co *= 1.5                                   # aged arrived inventory is costlier to add to
+    if supply.current >= 4:
+        co *= 1.25                                  # already-deep arrived depth raises marginal holding risk
+    return round(co, 4)
+
+
+def decide_breadth(demand_result, cohort, supply, dtdnq, target_days_supply, action_horizon):
+    """BREADTH gate (represent?) + the forward 60-day target level and the DTS burden that shape DEPTH.
+
+    Representation-by-velocity requires ORGANIC (stocked-retail) evidence — an isolated externally-satisfied
+    DT/DNQ can never masquerade as ordinary velocity. Strong DT/DNQ recurrence justifies carrying ONE unit
+    (breadth) but never scales depth. `target_level` = forward 60-day demand at the first checkpoint, dampened
+    by the historical-DTS risk burden."""
     monthly = demand_result.monthly_expected
-    avg_monthly = (sum(monthly.values()) / len(monthly)) if monthly else 0.0
-    daily = avg_monthly / 30.0
     dis = supply.dis_values if supply else []
     dis_med = median(dis) if dis else None
     burden = cr.dts_burden(cohort.dts_average, len(cohort.dts_values), dis_med)
-    velocity_depth = round(daily * float(target_days_supply) * burden, 6)
+    target_level = rep.forward_target(monthly, action_horizon[0], burden=burden)
 
-    by_velocity = velocity_depth >= _REPRESENT_VELOCITY_FLOOR
+    by_velocity = cohort.organic_sales_total >= 1 and target_level >= _REPRESENT_VELOCITY_FLOOR
     by_recurrence = dtdnq >= _REPRESENT_RECURRENCE
     if not (by_velocity or by_recurrence):
-        target, breadth, represented = 0.0, "not_represented", False
+        breadth, represented = "not_represented", False
     elif by_velocity:
-        target, breadth, represented = velocity_depth, "represented_by_velocity", True
-    else:  # represented only by recurrent externally-satisfied demand -> carry ONE, do not scale depth
-        target, breadth, represented = max(velocity_depth, 1.0), "represented_by_recurrence", True
-    decision = {"target_level": round(target, 6), "breadth": breadth, "represented": represented,
-                "velocity_depth": velocity_depth, "avg_monthly_demand": round(avg_monthly, 4),
-                "daily_rate": round(daily, 5), "target_days_supply": target_days_supply,
-                "dts_average": cohort.dts_average, "dts_sample": len(cohort.dts_values),
-                "dts_burden": burden, "aging_median_dis": dis_med, "dtdnq_strength": dtdnq,
-                "business_code_months": cohort.business_code_months}
-    return target, decision
+        breadth, represented = "represented_by_velocity", True
+    else:
+        breadth, represented = "represented_by_recurrence", True
+    avg_monthly = (sum(monthly.values()) / len(monthly)) if monthly else 0.0
+    decision = {"target_level": round(target_level, 6), "breadth": breadth, "represented": represented,
+                "avg_monthly_demand": round(avg_monthly, 4), "target_days_supply": target_days_supply,
+                "organic_sales": cohort.organic_sales_total, "dts_average": cohort.dts_average,
+                "dts_sample": len(cohort.dts_values), "dts_burden": burden, "aging_median_dis": dis_med,
+                "dtdnq_strength": dtdnq, "business_code_months": cohort.business_code_months}
+    return target_level, burden, decision
 
 
 def run_planning(ctx, supply_by_key, demand_by_key, exceptions, *, target_days_supply, current_month,
@@ -149,7 +174,8 @@ def run_planning(ctx, supply_by_key, demand_by_key, exceptions, *, target_days_s
     higher-level prior by calibrated credibility; decide BREADTH (represent?) then DEPTH (how many, velocity
     + DTS-risk); then compute NET actionable acquisition via the time-phased order-up-to model. Refuse only
     when there is no accepted demand history at all. Totals sum NET (actionable) Need/Excess — never gross."""
-    horizon = horizon or derive_horizon(current_month, supply_by_key)
+    horizon = horizon or derive_horizon(current_month, supply_by_key)   # ACTION horizon (the clock)
+    ext = rep.extended_months(horizon)                                  # + forecast tail (only to compute T)
     if latest_midx is None:
         latest_midx = db_.midx_of(current_month.replace("-", ""))
     cohorts = list(demand_by_key.values())
@@ -159,12 +185,12 @@ def run_planning(ctx, supply_by_key, demand_by_key, exceptions, *, target_days_s
     for key in keys:
         sup = supply_by_key.get(key)
         dem = demand_by_key.get(key)
-        rep = (dem.representative if dem else sup.representative)
-        comb = resolve_or_create_planning_combination(ctx.store, ctx.clock, rep, ctx.scope,
+        rep_row = (dem.representative if dem else sup.representative)
+        comb = resolve_or_create_planning_combination(ctx.store, ctx.clock, rep_row, ctx.scope,
                                                        source_ref="dms_planning_runner")
         cur = sup.current if sup else 0
         fut = sup.future if sup else 0
-        # ---- low-evidence safety: refuse Need/Excess without any accepted demand history ----
+        # ---- low-evidence safety: refuse without any accepted demand history ----
         if dem is None or not dem.retail_by_month:
             outcomes.append(CohortPlanOutcome(
                 key=key, identity=(dem.identity if dem else sup.identity), issued=False,
@@ -172,8 +198,9 @@ def run_planning(ctx, supply_by_key, demand_by_key, exceptions, *, target_days_s
                 legacy_prate=(dem.legacy_prate if dem else None)))
             continue
         credibility = cohort_credibility(dem, prior_index, cred_model)
+        # demand is issued over the EXTENDED horizon so the forward-60-day target T(m) has its tail months
         demand_result = ctx.demand.issue(
-            comb, ctx.scope, horizon, retail_by_month=dem.retail_by_month,
+            comb, ctx.scope, ext, retail_by_month=dem.retail_by_month,
             exposure_months=dem.exposure_months, sample_size=dem.sales_total,
             calculation_version=ctx.demand_cv, source_refs=[comb.id], credibility=credibility)
         if demand_result.evidence_tier != "exact":       # defence-in-depth; should be exact given rbm
@@ -183,37 +210,65 @@ def run_planning(ctx, supply_by_key, demand_by_key, exceptions, *, target_days_s
                 legacy_prate=dem.legacy_prate))
             continue
         ctx.forecast.issue(demand_result, calculation_version=ctx.demand_cv)
+        monthly = demand_result.monthly_expected
         dtdnq = cr.dtdnq_strength(dem.business_code_midxs, latest_midx=latest_midx)
-        target, decision = decide_target_level(demand_result, dem, sup, dtdnq, target_days_supply)
+        target, burden, decision = decide_breadth(demand_result, dem, sup, dtdnq, target_days_supply, horizon)
+
+        # ---- discrete whole-vehicle actions on the time-phased replenishment trajectory ----
+        qslots = list(sup.qualifying) if sup else []
+        confirmed_avail = [q["available_month"] for q in qslots
+                           if q["stage"] != "DLR-INV" and q.get("available_month")]
+        pending = sum(1 for q in qslots if q["stage"] != "DLR-INV" and not q.get("available_month"))
+        co = _overstock_cost(sup)
+        ap = rep.allocate(arrived=cur, confirmed_avail=confirmed_avail, monthly_expected=monthly,
+                          action_horizon=horizon, current_month=current_month, burden=burden, co=co)
+        # BREADTH gate: an unrepresented cohort never acquires; recurrence-only represents with exactly one
+        if not decision["represented"]:
+            ap.acquire_units = 0
+        elif decision["breadth"] == "represented_by_recurrence" and ap.acquire_units == 0 \
+                and cur == 0 and not confirmed_avail:
+            ap.acquire_units = 1
+
         decision.update({"credibility": credibility, "evidence_level": credibility["evidence_level"],
-                         "legacy_prate": dem.legacy_prate})
-        counts = {"current": cur, "future": fut, "committed": 0}
-        qualifying = list(sup.qualifying) if sup else []
-        plan = ctx.planning.issue_position(demand_result, horizon=horizon, qualifying=qualifying,
-                                           target_level=target, counts=counts,
+                         "legacy_prate": dem.legacy_prate, "overstock_cost": co,
+                         "acquire_units": ap.acquire_units, "arrived_excess": ap.arrived_excess,
+                         "incoming_excess": ap.incoming_excess, "pending_timing": pending,
+                         "monitor_months": ap.monitor_months, "action_availability": ap.action_availability,
+                         "analytical_deficit": ap.analytical_deficit, "analytical_excess": ap.analytical_excess})
+        # persist the continuous plan (time-phased position) with the discrete action bundled as evidence
+        plan = ctx.planning.issue_position(demand_result, horizon=horizon, qualifying=qslots,
+                                           target_level=target, counts={"current": cur, "future": fut, "committed": 0},
                                            calculation_version=ctx.plan_cv, decision=decision)
         cov = plan.desired_ending_coverage
         outcomes.append(CohortPlanOutcome(
             key=key, identity=dem.identity, issued=True, plan_id=plan.id, planning_state=plan.planning_state,
-            need=plan.need, excess=plan.excess, current_supply=cur, future_supply=fut,
+            need=ap.analytical_deficit, excess=ap.analytical_excess, current_supply=cur, future_supply=fut,
             evidence_tier=demand_result.evidence_tier, legacy_prate=dem.legacy_prate, coverage_evidence=decision,
             target_level=decision["target_level"], breadth=decision["breadth"],
             represented=decision["represented"], evidence_level=credibility["evidence_level"],
-            credibility_z=credibility["credibility_z"], dts_burden=decision["dts_burden"],
-            dtdnq_strength=dtdnq, incoming_in_horizon=cov.get("incoming_in_horizon", 0),
-            incoming_post_horizon=cov.get("incoming_post_horizon", 0),
-            pending_timing=cov.get("pending_timing", 0), near_term_trough=cov.get("near_term_trough")))
+            credibility_z=credibility["credibility_z"], dts_burden=burden, dtdnq_strength=dtdnq,
+            incoming_in_horizon=cov.get("incoming_in_horizon", 0),
+            incoming_post_horizon=cov.get("incoming_post_horizon", 0), pending_timing=pending,
+            near_term_trough=cov.get("near_term_trough"), acquire_units=ap.acquire_units,
+            arrived_excess=ap.arrived_excess, incoming_excess=ap.incoming_excess,
+            monitor_months=ap.monitor_months, action_availability=ap.action_availability,
+            analytical_deficit=ap.analytical_deficit, analytical_excess=ap.analytical_excess))
     # data-quality exceptions, filtered by acknowledgement (unchanged acks suppressed; changed ones resurface)
     is_ack = dq.metadata_ack_lookup(ctx.metadata) if ctx.metadata is not None else (lambda fp: False)
     active_exceptions = dq.filter_unacknowledged(exceptions, is_ack)
     issued = [o for o in outcomes if o.issued]
-    acquire = [o for o in issued if (o.need or 0) > 0]
+    acquire = [o for o in issued if o.acquire_units > 0]
     return {"horizon": horizon, "target_days_supply": target_days_supply, "outcomes": outcomes,
             "issued_count": len(issued), "refused_count": len(outcomes) - len(issued),
             "represented_count": sum(1 for o in issued if o.represented),
             "acquire_count": len(acquire),
-            "total_need": round(sum(o.need for o in issued), 4),          # NET actionable acquisition
-            "total_excess": round(sum(o.excess for o in issued), 4),      # NET surplus (time-aware)
+            # dealer-facing whole-vehicle totals (emergent; not bound to the continuous analytical totals)
+            "integer_total_need": sum(o.acquire_units for o in issued),
+            "integer_total_excess_arrived": sum(o.arrived_excess for o in issued),
+            "integer_total_excess_incoming": sum(o.incoming_excess for o in issued),
+            # continuous analytical evidence only (never presented as a vehicle count)
+            "total_need": round(sum(o.analytical_deficit for o in issued), 4),
+            "total_excess": round(sum(o.analytical_excess for o in issued), 4),
             "credibility_model": {"k": cred_model.k, "method": cred_model.method,
                                   "stable": cred_model.stable, "n_cohorts": cred_model.n_cohorts,
                                   "calibration_sample": cred_model.calibration_sample,

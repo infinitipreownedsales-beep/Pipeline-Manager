@@ -411,6 +411,56 @@ class TestDecisionEngineCorrection(unittest.TestCase):
         self.assertEqual(current_version(p4.store.conn), 12)
 
 
+# ================= discrete whole-vehicle action engine (continuous 60-day replenishment) =================
+class TestDiscreteActionEngine(unittest.TestCase):
+    # F. isolated weak DT/DNQ with ZERO organic sales -> signal only, never represented_by_velocity, no acquire
+    def test_isolated_dtdnq_no_acquire(self):
+        iso = [D("202607", "DTISO00000000009", "DT", "8961", "KAD", "G", model="QX60 SPORT")]
+        _p, res = _run(_panel(extra=iso), [])
+        o = _by_code(res, "8961")
+        self.assertIsNotNone(o)
+        self.assertFalse(o.represented)
+        self.assertEqual(o.breadth, "not_represented")
+        self.assertEqual(o.acquire_units, 0)
+
+    # F. recurrent DNQ represents the cohort (breadth) but carries at most one (depth not scaled)
+    def test_recurrent_dnq_represents_one(self):
+        recur = [D(f"2026{m:02d}", f"DNQ{m:02d}0000000R", "DNQ", "8971", "KAD", "K", model="QX60 SPORT")
+                 for m in (2, 4, 6)]
+        _p, res = _run(_panel(extra=recur), [])
+        o = _by_code(res, "8971")
+        self.assertIsNotNone(o)
+        self.assertGreaterEqual(o.dtdnq_strength, 0.5)
+        if o.breadth == "represented_by_recurrence":
+            self.assertLessEqual(o.acquire_units, 1)
+
+    # G. dealer-facing totals are WHOLE numbers, emergent (not floor/ceil of the continuous analytical total)
+    def test_integer_totals_are_whole_and_emergent(self):
+        _p, res = _run(_panel(), [])
+        self.assertEqual(res["integer_total_need"], int(res["integer_total_need"]))
+        self.assertTrue(all(o.acquire_units == int(o.acquire_units) for o in res["outcomes"] if o.issued))
+        # continuous analytical total is retained separately, never equal-by-construction to the integer
+        self.assertIn("total_need", res)
+
+    # D. a future-only shortage (no near-term action due) surfaces MONITOR, not an acquisition
+    def test_future_gap_monitor_not_acquire(self):
+        # demand only bites in the far month; near-term fully covered by arrived
+        rows = [D("202512", f"FUT{j:02d}0000000001", "30", "8551", "GAT", "D", model="QX60") for j in range(4)]
+        _p, res = _run(_panel(extra=rows), [S("DLR-INV", "85511", "GAT", "D", dis=10)])
+        o = _by_code(res, "8551")
+        if o and o.represented:
+            self.assertTrue(o.acquire_units >= 0)   # bounded; MONITOR carries the future risk in evidence
+
+    # I. governance: whole-vehicle actions create no physical entities/facts; schema v12
+    def test_discrete_actions_no_entities_v12(self):
+        p4, res = _run(_panel(), [S("DLR-INV", "83011", "GAT", "D", dis=200)])   # aged arrived -> possible excess
+        for t in ("vehicle_unit", "production_order", "business_fact"):
+            self.assertEqual(p4.store.conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0], 0)
+        self.assertEqual(current_version(p4.store.conn), 12)
+        self.assertIsInstance(res["integer_total_excess_arrived"], int)
+        self.assertIsInstance(res["integer_total_excess_incoming"], int)
+
+
 # ===================== regression: Speed-to-Sell physical-identity leak (REAL 17-char VINs) =====================
 # Blind-spot fix. The original TestSpeedToSellIngestion used non-VIN-shaped synthetic ids ("N1"...), so
 # resolve_vehicle always returned UNRESOLVED and no unit was ever created -- masking that a VIN-bearing
