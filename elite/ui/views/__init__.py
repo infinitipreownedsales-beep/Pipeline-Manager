@@ -3,6 +3,6 @@ from __future__ import annotations
 
 
 def register(app):
-    from . import auth, decision, domains, govern, inbox, queues, search
-    for module in (auth, inbox, decision, queues, domains, govern, search):
+    from . import auth, decision, domains, govern, inbox, operator, queues, search
+    for module in (auth, operator, inbox, decision, queues, domains, govern, search):
         module.register(app)

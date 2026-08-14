@@ -15,13 +15,22 @@ STATUS_GLYPH = {
     "failed": "✕", "unresolved": "?", "scenario": "◇", "completed": "✓", "pending": "…",
 }
 
+# Daily OPERATOR navigation — the dealership-facing product. Governance / engineering surfaces are NOT
+# here; they live behind the secondary Admin index so normal operation never hits a permission wall.
 NAV = [
-    ("/", "Today / Decision Inbox"), ("/new-inventory", "New Inventory"),
-    ("/production", "Production & Supply"), ("/service-loaner", "Service Loaners"),
-    ("/executive-demo", "Executive Demos"), ("/scenarios", "Scenarios"),
-    ("/calibration", "Learning & Calibration"), ("/approvals", "Approvals"),
-    ("/execution", "Execution"), ("/exceptions", "Exceptions"), ("/audit", "Audit"),
-    ("/authority", "Authority"), ("/readiness", "Readiness"),
+    ("/", "Pipeline"), ("/ordering", "Ordering"), ("/dealer-trade", "Dealer Trade"),
+    ("/wholesale", "Wholesale"), ("/service-loaner", "Service Loaners"), ("/demos", "Demos"),
+    ("/ctp", "CTP"),
+]
+NAV_END = [("/data", "Data")]
+
+# Internal governance / engineering screens — reachable only from the Admin index (/admin), never primary.
+ADMIN_NAV = [
+    ("/inbox", "Decision Inbox"), ("/new-inventory", "New Inventory (engine board)"),
+    ("/production", "Production & Supply"), ("/executive-demo", "Executive Demo (backend)"),
+    ("/scenarios", "Scenarios"), ("/calibration", "Learning & Calibration"),
+    ("/approvals", "Approvals"), ("/execution", "Execution"), ("/exceptions", "Exceptions"),
+    ("/audit", "Audit"), ("/authority", "Authority"), ("/readiness", "Readiness"),
 ]
 
 _CSS = """
@@ -30,10 +39,19 @@ _CSS = """
 a{color:var(--accent)}header.shell{display:flex;align-items:center;gap:16px;padding:10px 18px;background:var(--card);border-bottom:2px solid var(--line);flex-wrap:wrap}
 header.shell .brand{font-weight:700}header.shell .ctx{color:var(--muted);font-size:13px}
 header.shell .spacer{flex:1}.attention{font-weight:700}
-nav.primary{display:flex;flex-wrap:wrap;gap:2px;padding:6px 12px;background:var(--card);border-bottom:1px solid var(--line)}
-nav.primary a{padding:6px 10px;border-radius:6px;text-decoration:none;color:var(--fg)}
+nav.primary{display:flex;flex-wrap:wrap;gap:4px;padding:8px 16px;background:var(--card);border-bottom:1px solid var(--line);align-items:center}
+nav.primary a{padding:8px 14px;border-radius:8px;text-decoration:none;color:var(--fg);font-weight:600;letter-spacing:.01em}
+nav.primary a:hover{background:var(--bg)}
 nav.primary a[aria-current=page]{background:var(--accent);color:#fff}
-main{max-width:1100px;margin:0 auto;padding:18px}
+nav.primary .navspacer{flex:1}
+nav.primary a.admin{font-weight:500;color:var(--muted);font-size:13px}
+.trust{display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:6px 16px;background:var(--card);border-bottom:1px solid var(--line);font-size:13px;color:var(--muted)}
+.trust .date{font-weight:600;color:var(--fg)}
+.trust .src{display:inline-flex;align-items:center;gap:5px}
+.trust .dot{width:9px;height:9px;border-radius:50%;display:inline-block;border:1px solid rgba(0,0,0,.15)}
+.dot.green{background:#1f9d4d}.dot.yellow{background:#e0a400}.dot.red{background:#c0392b}.dot.gray{background:#b8c0c8}
+.trust .upd{margin-left:auto}
+main{max-width:1180px;margin:0 auto;padding:22px}
 h1{font-size:22px;margin:6px 0 12px}h2{font-size:17px;margin:20px 0 8px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin:10px 0}
 table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line)}
@@ -72,24 +90,38 @@ def badge(kind, text=None):
     return f'<span class="{cls}"><span aria-hidden="true">{g}</span> {esc(label)}</span>'
 
 
+def _trust_strip(ctx):
+    """Permanent top trust strip: today's date + four source-health indicators. Freshness is honest —
+    a source with no known successful load shows NOT LOADED (gray), never a fabricated 'fresh'."""
+    date = esc(ctx.get("today", "—"))
+    srcs = ctx.get("sources") or []
+    chips = ""
+    for label, word, tone in srcs:
+        chips += (f'<span class="src" title="{esc(label)}: {esc(word)}">'
+                  f'<span class="dot {esc(tone)}" aria-hidden="true"></span>{esc(label)}: {esc(word)}</span>')
+    return (f'<div class="trust" role="contentinfo">'
+            f'<span class="date">{date}</span>{chips}'
+            f'<a class="upd" href="/data">Update Data →</a></div>')
+
+
 def page(title, body, *, ctx=None, active_path="/", flash=None):
     """Render the full operator shell around `body` (already-safe HTML)."""
     ctx = ctx or {}
     nav = "".join(
         f'<a href="{esc(p)}"{" aria-current=page" if p == active_path else ""}>{esc(label)}</a>'
         for p, label in NAV)
-    attention = ctx.get("attention", 0)
+    nav += '<span class="navspacer"></span>'
+    nav += "".join(
+        f'<a href="{esc(p)}"{" aria-current=page" if p == active_path else ""}>{esc(label)}</a>'
+        for p, label in NAV_END)
+    nav += '<a class="admin" href="/admin">Admin</a>'
     header = (
         '<header class="shell" role="banner">'
         f'<span class="brand">Elite Pipeline</span>'
-        f'<span class="badge">env: {esc(ctx.get("environment", "?"))}</span>'
-        f'<span class="ctx">Operator: <strong>{esc(ctx.get("principal_name", "—"))}</strong></span>'
+        f'<span class="ctx">{esc(ctx.get("principal_name", "—"))}</span>'
         f'<span class="ctx">Store: <strong>{esc(ctx.get("scope", "—"))}</strong></span>'
         '<span class="spacer"></span>'
-        f'<span class="ctx" title="items needing attention">{badge("attention", f"{attention} need attention")}</span>'
-        f'<span class="ctx" title="data freshness">Fresh as of {esc(ctx.get("freshness", "—"))}</span>'
-        f'<span class="ctx" title="data quality">Data: {esc(ctx.get("data_quality", "ok"))}</span>'
-        f'<span class="ctx">rev {esc(ctx.get("revision", "—"))}</span>'
+        f'<span class="badge">env: {esc(ctx.get("environment", "?"))}</span>'
         '<a class="ctx" href="/help">Help</a>'
         '<a class="ctx" href="/logout">Sign out</a>'
         '</header>')
@@ -97,7 +129,8 @@ def page(title, body, *, ctx=None, active_path="/", flash=None):
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<title>{esc(title)} — Elite Pipeline</title><style>{_CSS}</style></head>'
-            f'<body>{header}<nav class="primary" role="navigation" aria-label="Primary">{nav}</nav>'
+            f'<body>{header}{_trust_strip(ctx)}'
+            f'<nav class="primary" role="navigation" aria-label="Primary">{nav}</nav>'
             f'<main role="main"><h1>{esc(title)}</h1>{flash_html}{body}</main></body></html>')
 
 

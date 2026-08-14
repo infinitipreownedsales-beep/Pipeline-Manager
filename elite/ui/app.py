@@ -99,13 +99,13 @@ class App:
 
     # ---- shell context -----------------------------------------------------
     def ctx(self, session):
-        from .views.inbox import attention_count
         return {"environment": self.environment,
                 "principal_name": session.principal_name if session else "—",
                 "scope": session.scope if session else "—",
-                "attention": attention_count(self, session) if session else 0,
                 "freshness": _now_label(self.stack.clock),
                 "data_quality": _data_quality(self, session) if session else "—",
+                "today": _today_label(self.stack.clock),
+                "sources": source_health(self, session.scope) if session else [],
                 "revision": self.stack.db.version()}
 
     # ---- dispatch ----------------------------------------------------------
@@ -181,6 +181,55 @@ def _parse_cookies(header):
 def _now_label(clock):
     from ..clock import to_utc_iso
     return to_utc_iso(clock.now())[:16].replace("T", " ") + " UTC"
+
+
+_WEEKDAY = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+_MONTH = ["January", "February", "March", "April", "May", "June", "July", "August",
+          "September", "October", "November", "December"]
+
+# The four daily source indicators: (label, source_contract key, green_max_days, yellow_max_days).
+SOURCE_INDICATORS = [
+    ("Inventory", "new_inventory_current", 2, 5),
+    ("Speed to Sell", "speed_to_sell", 1, 2),
+    ("ICV / Service Loaner", "service_loaner_fleet", 2, 5),
+    ("Preowned Sales Historical", "retail_history", 7, 14),
+]
+
+
+def _today_label(clock):
+    d = clock.now()
+    try:
+        return f"{_WEEKDAY[d.weekday()]}, {_MONTH[d.month - 1]} {d.day}"
+    except Exception:   # noqa: BLE001
+        return _now_label(clock)
+
+
+def source_health(app, scope):
+    """Honest per-source freshness for the trust strip. Reads the most recent import_run per source
+    contract; a source with no successful load shows NOT LOADED (never a fabricated 'fresh')."""
+    import datetime as _dt
+    out = []
+    now = app.stack.clock.now()
+    conn = app.stack.db.conn
+    for label, key, green_max, yellow_max in SOURCE_INDICATORS:
+        row = None
+        try:
+            row = conn.execute(
+                "SELECT received_at FROM import_run WHERE source_contract=? AND store_scope=? "
+                "AND accepted_count>0 ORDER BY received_at DESC LIMIT 1", (key, scope)).fetchone()
+        except Exception:   # noqa: BLE001
+            row = None
+        if not row or not row["received_at"]:
+            out.append((label, "not loaded", "gray"))
+            continue
+        try:
+            age = (now - _dt.datetime.fromisoformat(row["received_at"])).days
+        except Exception:   # noqa: BLE001
+            out.append((label, "unknown", "gray"))
+            continue
+        tone = "green" if age <= green_max else ("yellow" if age <= yellow_max else "red")
+        out.append((label, f"{age}d", tone))
+    return out
 
 
 def _data_quality(app, session):

@@ -100,7 +100,7 @@ def _next_action(state):
 
 
 def register(app):
-    @app.get("/")
+    @app.get("/inbox")
     def inbox(app, req):
         s = req.session
         app.require(s, "workspace.view")
@@ -127,7 +127,7 @@ def register(app):
                 + table(["Call", "Subject", "Domain", "Status", "Priority", "Owner", "Next action"], rows))
         app.prefs.set_context(s.principal_id, last_domain="inbox", last_scope=s.scope)
         flash, s.flash = s.flash, None
-        return Response(page("Today", body, ctx=app.ctx(s), active_path="/", flash=flash))
+        return Response(page("Decision Inbox", body, ctx=app.ctx(s), active_path="/inbox", flash=flash))
 
     @app.get("/item/{id}")
     def detail(app, req):
@@ -166,7 +166,7 @@ def register(app):
                 f'<div class="card"><h2>Raw History</h2><p class="muted">Evidence trail ({official}).</p>{history}</div>')
         flash, s.flash = s.flash, None
         return Response(page(f"{it['owning_domain']} — {esc(subject_label)}", body,
-                             ctx=app.ctx(s), active_path="/", flash=flash))
+                             ctx=app.ctx(s), active_path="/inbox", flash=flash))
 
 
 def _raw_history(app, it, decisions):
