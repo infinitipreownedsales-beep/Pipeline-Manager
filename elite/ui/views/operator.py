@@ -747,14 +747,21 @@ def register(app):
                                          "current" if tone == "green" else "aging" if tone == "yellow"
                                          else "stale" if tone == "red" else "not loaded")), esc(word)]
                  for (label, word, tone) in source_health(app, s.scope)]
-        # import controls: one server file-path form per source, run through the existing orchestrator
+        # import controls: one browser file-upload per source, staged then run through the existing orchestrator
+        _fmt = {"new_inventory_current": ".csv", "speed_to_sell": ".xlsx",
+                "service_loaner_fleet": ".csv", "retail_history": ".csv"}
         imp = ""
         for label, key, _g, _y in SOURCE_INDICATORS:
-            imp += form("/data/import",
-                        f'<input type=hidden name=contract value="{esc(key)}">'
-                        f'<label>{esc(label)} — server file path (in the uploads folder)</label>'
-                        f'<input name=path placeholder="C:\\ElitePipeline\\uploads\\..." style="max-width:420px">',
-                        csrf=s.csrf_token, submit=f"Import {label}")
+            fid = "f_" + key
+            imp += (f'<form class="mut" method="post" action="/data/import" enctype="multipart/form-data">'
+                    f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+                    f'<input type=hidden name=contract value="{esc(key)}">'
+                    f'<label>Update {esc(label)} (accepts {esc(_fmt.get(key, ""))})</label>'
+                    f'<input type=file name=file id="{fid}" '
+                    f'onchange="var n=this.files[0]?this.files[0].name:&quot;&quot;;'
+                    f'document.getElementById(&quot;{fid}_n&quot;).textContent=n">'
+                    f'<div id="{fid}_n" class="muted" style="margin:4px 0"></div>'
+                    f'<div style="margin-top:6px"><button type="submit">Import {esc(label)}</button></div></form>')
         combos = [lbl for _cid, lbl in _known_combos(app, s.scope)]
         bench = _ws_get(app, s.scope, "benched", []) or []
         brows = [[esc(b), safe(_ws_btn(s, "/data/bench/restore", "combo", b, "Restore"))] for b in bench]
@@ -816,7 +823,7 @@ def register(app):
     def data_import(app, req):
         s = req.session
         app.require(s, "workspace.view")
-        s.flash = _run_import(app, s.scope, req.form.get("contract"), (req.form.get("path") or "").strip())
+        s.flash = _run_upload(app, s.scope, req.form.get("contract"), req.files.get("file"))
         return Response.redirect("/data")
 
     @app.post("/data/bench")
@@ -1080,39 +1087,74 @@ def _our_trade(app, s, short, over):
     return out
 
 
-def _run_import(app, scope, contract_key, path):
-    """Run a real import through the existing ingestion orchestrator (when the runtime provides one). Never
-    fabricates success — returns the actual outcome/error string for the operator flash."""
-    if not contract_key or not path:
-        return "Enter a file path to import."
-    orch = None
-    src_id = None
-    pilot = getattr(app, "_pilot_stack", None)
-    p11 = getattr(pilot, "p11", None)
-    if p11 is not None:
-        orch = getattr(p11, "orch", None)
-        try:
-            src_id = p11.source_id(contract_key)
-        except Exception:   # noqa: BLE001
-            src_id = None
-    if orch is None or src_id is None:
-        return ("Import service is not available in this runtime; no data was changed. "
-                "(Available in the full operational runtime.)")
+def _ops_stack(app):
+    """Locate the Phase 11 ops stack that carries the import orchestrator + source-id resolver, however the
+    operator app was built (runtime serve sets app._p11; a Phase12/Phase11 fixture nests it under
+    _pilot_stack.p11 or exposes it directly)."""
+    for cand in (getattr(app, "_p11", None),
+                 getattr(getattr(app, "_pilot_stack", None), "p11", None),
+                 getattr(app, "_pilot_stack", None)):
+        if cand is not None and hasattr(cand, "orch") and hasattr(cand, "source_id"):
+            return cand
+    return None
+
+
+def _upload_dir(app):
     import os
-    import csv
-    if not os.path.exists(path):
-        return f"No file was found at {path}; nothing was imported."
+    d = os.environ.get("ELITE_UPLOAD_DIR")
+    if not d:
+        dbp = os.environ.get("ELITE_DB_PATH")
+        if dbp:
+            d = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(dbp))), "uploads")
+        else:
+            d = os.path.join(os.getcwd(), "uploads")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _run_upload(app, scope, contract_key, upload):
+    """Stage a browser-uploaded file into the Elite uploads directory and run it through the EXISTING
+    ingestion orchestrator. Never fabricates success — freshness only changes because the orchestrator
+    records a successful import_run. The operator never sees or types a server path."""
+    import os
+    from ...errors import ValidationError
+    from ...ops.intake import sanitize_filename, content_hash
+    if not contract_key:
+        return "No source selected; nothing was imported."
+    if not upload or not upload[1]:
+        return "Choose a file to upload first; nothing was imported."
+    filename, data = upload
     try:
-        with open(path, "r", encoding="utf-8") as fh:
-            rows = list(csv.DictReader(fh.read().splitlines()))
+        safe = sanitize_filename(filename)               # strips directories, rejects traversal / null bytes
+    except ValidationError as e:
+        return f"{e.message} Nothing was imported."
+    ops = _ops_stack(app)
+    if ops is None:
+        return "The import service is not available in this runtime; no data was changed."
+    try:
+        src_id = ops.source_id(contract_key)
+    except Exception:   # noqa: BLE001
+        return f"Unknown source '{contract_key}'; nothing was imported."
+    # stage the uploaded bytes durably in the uploads folder (audit + operator never types a path)
+    try:
+        staged = os.path.join(_upload_dir(app), safe)
+        with open(staged, "wb") as fh:
+            fh.write(data)
     except Exception as e:   # noqa: BLE001
-        return f"Could not read the file: {e}. Nothing was imported."
+        return f"Could not stage the uploaded file: {e}. Nothing was imported."
+    # decode CSV-family payloads as text for the orchestrator; binary (xlsx) is passed through as bytes.
     try:
-        from ...ops.intake import content_hash
-        run = orch.run(contract_key=contract_key, rows=rows, source_id=src_id, scope=scope,
-                       initiated_by="operator", claimed_snapshot="partial",
-                       content_hash=content_hash(repr(rows).encode("utf-8")))
-        state = run["state"] if run else "UNKNOWN"
-        return f"Import {state}: {len(rows)} row(s) from {contract_key}."
+        payload = data.decode("utf-8")
+    except Exception:   # noqa: BLE001
+        payload = data
+    try:
+        run = ops.orch.run(contract_key=contract_key, payload=payload, source_id=src_id, scope=scope,
+                           initiated_by="operator", claimed_snapshot="partial",
+                           content_hash=content_hash(payload))
+        state = (run["state"] if run else "UNKNOWN")
+        if state in ("COMPLETED", "COMPLETED_WITH_WARNINGS"):
+            return f"Imported {safe} into {contract_key} — {state}."
+        return (f"Import of {safe} did not complete ({state}); previous data is unchanged and freshness "
+                "was not updated.")
     except Exception as e:   # noqa: BLE001
         return f"Import failed and nothing was changed: {e}"

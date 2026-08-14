@@ -1,0 +1,102 @@
+"""Browser file upload for the four daily sources: the operator chooses a file in the browser; Elite
+parses multipart/form-data, sanitizes the filename, stages it in the uploads folder, and runs it through
+the EXISTING ingestion orchestrator. Success updates freshness; failure never does; traversal is rejected;
+no server-path text box remains."""
+import os
+import tempfile
+import unittest
+
+from elite.ops.fixtures import Phase11, INV_VALID, RETAIL_VALID, LOANER_FULL, INV_MALFORMED_DELIM
+from elite.workflow.fixtures import SCOPE
+
+
+class TestDataUpload(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        os.environ["ELITE_UPLOAD_DIR"] = os.path.join(self.tmp, "uploads")
+        self.p = Phase11(os.path.join(self.tmp, "elite.db"))
+        self.app = self.p.app
+        self.app._p11 = self.p                       # expose the ops orchestrator to the operator app
+        self.conn = self.p.stack.db.conn
+        self.full = self.p.p10.login(self.p.p10.op_full)
+
+    def tearDown(self):
+        os.environ.pop("ELITE_UPLOAD_DIR", None)
+        self.p.close()
+
+    def _upload(self, contract, filename, content):
+        return self.full.post("/data/import", form={"contract": contract},
+                              files={"file": (filename, content)})
+
+    def _runs(self, contract):
+        return self.conn.execute("SELECT COUNT(*) FROM import_run WHERE source_contract=? AND store_scope=?",
+                                 (contract, SCOPE)).fetchone()[0]
+
+    def _accepted_runs(self, contract):
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM import_run WHERE source_contract=? AND store_scope=? AND accepted_count>0",
+            (contract, SCOPE)).fetchone()[0]
+
+    # 1-4. each source's browser upload reaches its EXISTING importer (an import_run is recorded)
+    def test_inventory_upload_reaches_importer(self):
+        self._upload("new_inventory_current", "2026-08-14 Inventory.csv", INV_VALID)
+        self.assertGreaterEqual(self._runs("new_inventory_current"), 1)
+
+    def test_retail_history_upload_reaches_importer(self):
+        self._upload("retail_history", "preowned.csv", RETAIL_VALID)
+        self.assertGreaterEqual(self._runs("retail_history"), 1)
+
+    def test_loaner_upload_reaches_importer(self):
+        self._upload("service_loaner_fleet", "icv.csv", LOANER_FULL)
+        self.assertGreaterEqual(self._runs("service_loaner_fleet"), 1)
+
+    def test_speed_to_sell_upload_reaches_importer(self):
+        self._upload("speed_to_sell", "sts.xlsx", b"PK\x03\x04 not-a-real-xlsx")
+        self.assertGreaterEqual(self._runs("speed_to_sell"), 1)    # reached the importer even if it rejects
+
+    # 5. a successful import updates freshness (source no longer "not loaded")
+    def test_success_updates_freshness(self):
+        from elite.ui.app import source_health
+        before = dict((lbl, word) for (lbl, word, _t) in source_health(self.app, SCOPE))
+        self.assertEqual(before["Inventory"], "not loaded")
+        self._upload("new_inventory_current", "inv.csv", INV_VALID)
+        self.assertGreaterEqual(self._accepted_runs("new_inventory_current"), 1)
+        after = dict((lbl, word) for (lbl, word, _t) in source_health(self.app, SCOPE))
+        self.assertNotEqual(after["Inventory"], "not loaded")       # freshness advanced on success
+
+    # 6 + 7. a malformed/unsupported file returns a useful error and does NOT update freshness
+    def test_failed_import_does_not_update_freshness(self):
+        r = self._upload("new_inventory_current", "bad.csv", INV_MALFORMED_DELIM)
+        # the flash carries an honest non-success message; freshness stays "not loaded"
+        from elite.ui.app import source_health
+        after = dict((lbl, word) for (lbl, word, _t) in source_health(self.app, SCOPE))
+        self.assertEqual(self._accepted_runs("new_inventory_current"), 0)
+        self.assertEqual(after["Inventory"], "not loaded")
+
+    # 8. path-traversal filename is rejected safely (nothing staged outside the uploads dir)
+    def test_traversal_filename_rejected(self):
+        self.full.post("/data/import", form={"contract": "new_inventory_current"},
+                       files={"file": ("../../etc/passwd", INV_VALID)})
+        # nothing was written above the uploads dir
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "passwd")))
+        self.assertFalse(os.path.exists("/etc/passwd_elite"))
+        # a legitimate name stages inside the uploads dir
+        self._upload("new_inventory_current", "clean.csv", INV_VALID)
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "uploads", "clean.csv")))
+
+    # 9. no user-facing server-path text box remains; browser file inputs are present
+    def test_no_path_textbox(self):
+        b = self.full.get("/data").body
+        self.assertNotIn("C:\\ElitePipeline\\uploads", b)
+        self.assertNotIn('name=path', b)
+        self.assertIn('type=file', b)
+        self.assertIn('enctype="multipart/form-data"', b)
+
+    # 10. missing file is handled without a false success
+    def test_missing_file_no_false_success(self):
+        r = self.full.post("/data/import", form={"contract": "new_inventory_current"})
+        self.assertEqual(self._accepted_runs("new_inventory_current"), 0)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

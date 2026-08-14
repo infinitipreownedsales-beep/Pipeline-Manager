@@ -36,11 +36,27 @@ class Client:
     def get(self, path, **query):
         return self.app.handle("GET", path, query=query or None, session_token=self.token)
 
-    def post(self, path, form=None, *, csrf=True, correlation_id=None):
+    def post(self, path, form=None, *, csrf=True, correlation_id=None, files=None):
         form = dict(form or {})
         sess = self.app.sessions.get(self.token)
         if csrf and sess is not None and "_csrf" not in form:
             form["_csrf"] = sess.csrf_token
+        if files:
+            # build a real multipart/form-data body and route it through the same parser the WSGI server uses
+            from .http import parse_multipart
+            boundary = "----elitetest0boundary"
+            parts = []
+            for k, v in form.items():
+                parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
+            for name, (filename, data) in files.items():
+                data = data if isinstance(data, bytes) else str(data).encode("utf-8")
+                parts.append((f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; '
+                              f'filename="{filename}"\r\nContent-Type: application/octet-stream\r\n\r\n').encode()
+                             + data + b"\r\n")
+            body = b"".join(parts) + f"--{boundary}--\r\n".encode()
+            pform, pfiles = parse_multipart(body, f"multipart/form-data; boundary={boundary}")
+            return self.app.handle("POST", path, form=pform, files=pfiles, session_token=self.token,
+                                   correlation_id=correlation_id)
         return self.app.handle("POST", path, form=form, session_token=self.token, correlation_id=correlation_id)
 
 

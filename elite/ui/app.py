@@ -109,10 +109,12 @@ class App:
                 "revision": self.stack.db.version()}
 
     # ---- dispatch ----------------------------------------------------------
-    def handle(self, method, path, *, query=None, form=None, session_token=None, correlation_id=None):
+    def handle(self, method, path, *, query=None, form=None, session_token=None, correlation_id=None,
+               files=None):
         session = self.sessions.get(session_token)
         correlation_id = correlation_id or new_id("corr")
-        req = Request(method, path, query=query, form=form, session=session, correlation_id=correlation_id)
+        req = Request(method, path, query=query, form=form, session=session, correlation_id=correlation_id,
+                      files=files)
         public = path in PUBLIC
         handler, params = self.router.match(method, path)
         if handler is None:
@@ -151,16 +153,22 @@ class App:
         method = environ.get("REQUEST_METHOD", "GET")
         path = environ.get("PATH_INFO", "/") or "/"
         query = _parse_qs(environ.get("QUERY_STRING", ""))
-        form = {}
+        form, files = {}, {}
         if method == "POST":
             try:
                 length = int(environ.get("CONTENT_LENGTH") or 0)
             except ValueError:
                 length = 0
-            body = environ["wsgi.input"].read(length).decode("utf-8") if length else ""
-            form = _parse_qs(body)
+            raw = environ["wsgi.input"].read(length) if length else b""
+            ctype = environ.get("CONTENT_TYPE", "")
+            if ctype.startswith("multipart/form-data"):
+                from .http import parse_multipart
+                form, files = parse_multipart(raw, ctype)
+            else:
+                form = _parse_qs(raw.decode("utf-8", "replace"))
         cookies = _parse_cookies(environ.get("HTTP_COOKIE", ""))
-        resp = self.handle(method, path, query=query, form=form, session_token=cookies.get("elite_session"))
+        resp = self.handle(method, path, query=query, form=form, files=files,
+                           session_token=cookies.get("elite_session"))
         start_response(resp.status_line, resp.wsgi_headers())
         return [resp.body.encode("utf-8")]
 

@@ -12,7 +12,7 @@ import re
 
 class Request:
     def __init__(self, method, path, *, query=None, form=None, cookies=None, params=None,
-                 session=None, correlation_id=None):
+                 session=None, correlation_id=None, files=None):
         self.method = method.upper()
         self.path = path
         self.query = query or {}
@@ -21,6 +21,7 @@ class Request:
         self.params = params or {}
         self.session = session          # Session or None
         self.correlation_id = correlation_id
+        self.files = files or {}        # name -> (filename, bytes)
 
     @property
     def principal(self):
@@ -35,6 +36,40 @@ class Request:
 
     def f(self, key, default=None):
         return self.form.get(key, default)
+
+
+def parse_multipart(body, content_type):
+    """Minimal, dependency-free multipart/form-data parser for browser file uploads. Returns
+    (form_fields: {name: str}, files: {name: (filename, bytes)}). Regular fields (including the CSRF
+    token) come back in form_fields so the existing CSRF/dispatch path is unchanged. Robust to missing
+    parts; never raises on malformed input (returns whatever it could parse)."""
+    form, files = {}, {}
+    if not body:
+        return form, files
+    m = re.search(r'boundary=("?)([^";]+)\1', content_type or "")
+    if not m:
+        return form, files
+    boundary = ("--" + m.group(2)).encode("latin-1")
+    for part in body.split(boundary):
+        if part in (b"", b"--", b"--\r\n", b"\r\n"):
+            continue
+        part = part[2:] if part.startswith(b"\r\n") else part
+        if part.endswith(b"\r\n"):
+            part = part[:-2]
+        head, sep, data = part.partition(b"\r\n\r\n")
+        if not sep:
+            continue
+        headers = head.decode("latin-1", "replace")
+        name_m = re.search(r'name="([^"]*)"', headers)
+        if not name_m:
+            continue
+        name = name_m.group(1)
+        file_m = re.search(r'filename="([^"]*)"', headers)
+        if file_m is not None:
+            files[name] = (file_m.group(1), data)
+        else:
+            form[name] = data.decode("utf-8", "replace")
+    return form, files
 
 
 class Response:

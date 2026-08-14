@@ -53,6 +53,7 @@ def build_app(db_path=None):
     app.pilot_scope = runtime.pilot_scope                   # authoritative store scope for login/authorization
     app.single_operator_pilot = _truthy(env.get("ELITE_SINGLE_OPERATOR_PILOT"))
     app._pilot_stack = pilot                               # keep the wired stack (live executor + services) referenced
+    app._p11 = getattr(pilot, "p11", None)                 # Phase 11 ops stack (import orchestrator) for Data uploads
     return app
 
 
