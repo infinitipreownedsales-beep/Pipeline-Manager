@@ -36,6 +36,80 @@ def _default_month(app):
     return to_utc_iso(app.stack.clock.now())[:7]
 
 
+_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August",
+           "September", "October", "November", "December"]
+
+
+def _month_label(ym):
+    try:
+        y, m = ym.split("-")
+        return f"{_MONTHS[int(m) - 1]} {y}"
+    except Exception:   # noqa: BLE001
+        return ym
+
+
+def _month_options(app, selected, *, back=1, fwd=12):
+    now = app.stack.clock.now()
+    y0, m0 = now.year, now.month
+    out = []
+    for off in range(-back, fwd + 1):
+        y = y0 + (m0 - 1 + off) // 12
+        m = (m0 - 1 + off) % 12 + 1
+        ym = f"{y:04d}-{m:02d}"
+        out.append(f'<option value="{esc(ym)}"{" selected" if ym == selected else ""}>{esc(_month_label(ym))}</option>')
+    return "".join(out)
+
+
+def _month_select(app, name, selected, *, onchange=False):
+    oc = ' onchange="this.form.submit()"' if onchange else ""
+    return f'<select name="{esc(name)}"{oc}>{_month_options(app, selected)}</select>'
+
+
+def _known_models(app, scope):
+    conn = app.stack.db.conn
+    ids = [c["canonical_identity"] for c in conn.execute(
+        "SELECT canonical_identity FROM sellable_combination WHERE store_scope=?", (scope,)).fetchall()
+        if c["canonical_identity"]]
+    return sorted({_model_of(_readable(i)) for i in ids}) or ["QX50", "QX55", "QX60", "QX65", "QX80"]
+
+
+def _known_combos(app, scope):
+    conn = app.stack.db.conn
+    out = [(c["id"], _readable(c["canonical_identity"] or c["id"])) for c in conn.execute(
+        "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (scope,)).fetchall()]
+    out.sort(key=lambda t: t[1])
+    return out
+
+
+def _known_vins(app, scope):
+    conn = app.stack.db.conn
+    vins = set()
+    for tbl in ("service_loaner_unit", "vehicle_unit", "executive_demo_unit"):
+        try:
+            for row in conn.execute(f"SELECT vin FROM {tbl} WHERE store_scope=?", (scope,)).fetchall():
+                if row["vin"]:
+                    vins.add(row["vin"])
+        except Exception:   # noqa: BLE001
+            pass
+    return sorted(vins)
+
+
+def _select(name, options, selected=None, *, onchange=False):
+    oc = ' onchange="this.form.submit()"' if onchange else ""
+    opts = "".join(f'<option value="{esc(v)}"{" selected" if v == selected else ""}>{esc(lbl)}</option>'
+                   for v, lbl in options)
+    return f'<select name="{esc(name)}"{oc}>{opts}</select>'
+
+
+def _datalist_input(name, list_id, values, *, value="", placeholder=""):
+    """A searchable canonical selector: a native datalist (select-or-type) so a known value is chosen from
+    the enumerated list, with free typing available only as fallback for a truly external value."""
+    opts = "".join(f'<option value="{esc(v)}">' for v in values)
+    return (f'<input name="{esc(name)}" list="{esc(list_id)}" value="{esc(value)}" '
+            f'placeholder="{esc(placeholder)}" style="max-width:360px" autocomplete="off">'
+            f'<datalist id="{esc(list_id)}">{opts}</datalist>')
+
+
 def _benched(app, scope):
     return set(app.prefs.get_pref(f"scope::{scope}", "benched", default=[]) or [])
 
@@ -201,9 +275,8 @@ def register(app):
             models.setdefault(b["model"], []).append(b)
 
         monthf = (f'<form method="get" action="/ordering/cpo" class="mut">'
-                  f'<label for=m>CPO ordering month</label>'
-                  f'<input id=m name=month value="{esc(month)}" placeholder="YYYY-MM" style="max-width:140px">'
-                  f'<button type=submit class=secondary>Select</button></form>')
+                  f'<label>CPO ordering month</label>{_month_select(app, "month", month, onchange=True)}'
+                  f'<noscript><button type=submit class=secondary>Select</button></noscript></form>')
         parts = [f'<div class="card"><h2>CPO — {esc(month)}</h2>{monthf}'
                  '<p class="muted">Allocation is a ceiling, not a command: Elite recommends only what is '
                  'economically justified and leaves the rest open. Work each line individually.</p></div>']
@@ -307,20 +380,25 @@ def register(app):
         window = req.q("window") or _ws_get(app, s.scope, "ppo_current_window", "") or ""
         offers = _ws_get(app, s.scope, f"ppo_offers::{window}", []) if window else []
         firmed = [o for o in offers if o["decision"] == "FIRM"]
-        winf = (f'<form method="get" action="/ordering/ppo" class="mut"><label for=w>PPO window</label>'
-                f'<input id=w name=window value="{esc(window)}" placeholder="e.g. August PPO" style="max-width:220px">'
-                f'<button type=submit class=secondary>Open</button></form>')
-        parts = [f'<div class="card"><h2>PPO</h2>{winf}'
+        windows = _ws_get(app, s.scope, "ppo_windows", []) or []
+        pick = (f'<form method="get" action="/ordering/ppo" class="mut"><label>Open PPO window</label>'
+                + _select("window", [(w, w) for w in windows] or [("", "— none yet —")], window, onchange=True)
+                + '<noscript><button type=submit class=secondary>Open</button></noscript></form>') if windows else ""
+        create = form("/ordering/ppo/new",
+                      '<label>Create PPO window (month)</label>' + _month_select(app, "month", _default_month(app)),
+                      csrf=s.csrf_token, submit="Create window")
+        parts = [f'<div class="card"><h2>PPO</h2>{pick}{create}'
                  '<p class="muted">Enter each manufacturer-offered unit as you receive it. Firm adds it to this '
                  'window\'s <strong>simulated</strong> future supply only — it never changes authoritative '
                  'inventory. We only know what you enter, so there is no total-offer count.</p></div>']
         if window:
             saved = _ws_get(app, s.scope, f"ppo_saved_at::{window}", None)
+            combos = [lbl for _cid, lbl in _known_combos(app, s.scope)]
             entry = form("/ordering/ppo/offer",
                          f'<input type=hidden name=window value="{esc(window)}">'
-                         f'<label for=c>Offered combination (code or description)</label>'
-                         f'<input id=c name=combo required style="max-width:320px">'
-                         '<label>Decision</label>'
+                         '<label>Offered combination (select a known combination; type only for a truly external one)</label>'
+                         + _datalist_input("combo", "ppo_combos", combos, placeholder="select or type external")
+                         + '<label>Decision</label>'
                          '<label class=mut><input type=radio name=decision value=FIRM checked> Firm</label> '
                          '<label class=mut><input type=radio name=decision value=DENY> Deny</label>',
                          csrf=s.csrf_token, submit="Record offer")
@@ -333,6 +411,19 @@ def register(app):
                          + form("/ordering/ppo/revert", f'<input type=hidden name=window value="{esc(window)}">',
                                 csrf=s.csrf_token, submit="Revert window") + '</div>')
         return _resp(app, s, "PPO Ordering", "".join(parts), "/ordering")
+
+    @app.post("/ordering/ppo/new")
+    def ppo_new(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        month = req.form.get("month") or _default_month(app)
+        name = f"{_month_label(month)} PPO"
+        windows = _ws_get(app, s.scope, "ppo_windows", []) or []
+        if name not in windows:
+            windows.append(name)
+            _ws_put(app, s.scope, "ppo_windows", windows)
+        _ws_put(app, s.scope, "ppo_current_window", name)
+        return Response.redirect(f"/ordering/ppo?window={name}")
 
     @app.post("/ordering/ppo/offer")
     def ppo_offer(app, req):
@@ -348,6 +439,10 @@ def register(app):
             _ws_put(app, s.scope, f"ppo_offers::{window}", offers)
             _ws_put(app, s.scope, f"ppo_saved_at::{window}", to_utc_iso(app.stack.clock.now())[:10])
             _ws_put(app, s.scope, "ppo_current_window", window)
+            windows = _ws_get(app, s.scope, "ppo_windows", []) or []
+            if window not in windows:
+                windows.append(window)
+                _ws_put(app, s.scope, "ppo_windows", windows)
         return Response.redirect(f"/ordering/ppo?window={window}")
 
     @app.post("/ordering/ppo/revert")
@@ -476,8 +571,9 @@ def register(app):
         add = form("/demos/user",
                    '<label>Name</label><input name=name required style="max-width:260px">'
                    '<label>Role / title</label><input name=role style="max-width:260px">'
-                   '<label>Model preference (e.g. QX60)</label><input name=model_pref style="max-width:160px">'
-                   '<label>Trim preference</label><input name=trim_pref style="max-width:200px">',
+                   '<label>Model preference</label>'
+                   + _select("model_pref", [("", "— any —")] + [(m, m) for m in _known_models(app, s.scope)])
+                   + '<label>Trim preference</label><input name=trim_pref style="max-width:200px">',
                    csrf=s.csrf_token, submit="Add user")
         callup = _callup_board(short)
         body = ('<div class="card"><h2>Current Roster</h2>'
@@ -517,13 +613,15 @@ def register(app):
                    ("Mileage at assignment", cur.get("mi_in", "—")),
                    ("Personal mileage velocity", f"{vel} mi/day" if vel is not None else "—")])
         assign = form("/demos/user/" + u["id"] + "/assign",
-                      '<label>Demo VIN</label><input name=vin required style="max-width:240px">'
-                      '<label>Start date (YYYY-MM-DD)</label><input name=start style="max-width:160px">'
+                      '<label>Demo VIN</label>'
+                      + _datalist_input("vin", "assign_vins", _known_vins(app, s.scope),
+                                        placeholder="select or type VIN")
+                      + '<label>Start date</label><input name=start type=date style="max-width:180px">'
                       '<label>Mileage at assignment</label><input name=mi type=number style="max-width:160px">',
                       csrf=s.csrf_token, submit="Assign demo")
         ret = (form("/demos/user/" + u["id"] + "/return",
                     '<label>Return / swap mileage</label><input name=mi type=number required style="max-width:160px">'
-                    '<label>Swap date (YYYY-MM-DD)</label><input name=date style="max-width:160px">',
+                    '<label>Swap date</label><input name=date type=date style="max-width:180px">',
                     csrf=s.csrf_token, submit="Record return / swap") if cur else "")
         # preference-first next demo
         short, _o = _short_over(app, s.scope)
@@ -625,11 +723,13 @@ def register(app):
                         f'<label>{esc(label)} — server file path (in the uploads folder)</label>'
                         f'<input name=path placeholder="C:\\ElitePipeline\\uploads\\..." style="max-width:420px">',
                         csrf=s.csrf_token, submit=f"Import {label}")
+        combos = [lbl for _cid, lbl in _known_combos(app, s.scope)]
         bench = _ws_get(app, s.scope, "benched", []) or []
         brows = [[esc(b), safe(_ws_btn(s, "/data/bench/restore", "combo", b, "Restore"))] for b in bench]
-        bench_form = form("/data/bench", '<label>Bench a combination (identity or id — no longer orderable)</label>'
-                          '<input name=combo required style="max-width:360px">',
+        bench_form = form("/data/bench", '<label>Bench a combination (no longer orderable)</label>'
+                          + _select("combo", [(c, c) for c in combos] or [("", "— no combinations —")]),
                           csrf=s.csrf_token, submit="Bench")
+        vins = _known_vins(app, s.scope)
         un = _ws_get(app, s.scope, "unavailable", []) or []
         urows = []
         for i, iv in enumerate(un):
@@ -638,26 +738,29 @@ def register(app):
             urows.append([esc(iv.get("vin", "")), esc(iv.get("reason", "")), esc(iv.get("start", "")),
                           esc(iv.get("end", "—")), safe(act)])
         un_form = form("/data/unavailable",
-                       '<label>VIN</label><input name=vin required style="max-width:240px">'
-                       '<label>Reason</label><input name=reason style="max-width:300px">'
-                       '<label>Unavailable start (YYYY-MM-DD)</label><input name=start style="max-width:160px">',
+                       '<label>VIN</label>'
+                       + _datalist_input("vin", "un_vins", vins, placeholder="select or type VIN")
+                       + '<label>Reason</label>'
+                       + _select("reason", [(r, r) for r in ("body shop", "mechanical", "event damage", "other")])
+                       + '<label>Unavailable start</label><input name=start type=date style="max-width:180px">',
                        csrf=s.csrf_token, submit="Mark unavailable")
         icv = _ws_get(app, s.scope, "icv_program", []) or []
         icv_rows = [[esc(p.get("eff", "")), esc(p.get("model", "")), esc(p.get("trim", "")), esc(p.get("amount", ""))]
                     for p in icv]
+        models = _known_models(app, s.scope)
         icv_form = form("/data/program/icv",
-                        '<label>Effective month (YYYY-MM)</label><input name=eff style="max-width:140px">'
-                        '<label>Model</label><input name=model style="max-width:120px">'
-                        '<label>Trim</label><input name=trim style="max-width:180px">'
+                        '<label>Effective month</label>' + _month_select(app, "eff", _default_month(app))
+                        + '<label>Model</label>' + _select("model", [(m, m) for m in models])
+                        + '<label>Trim</label><input name=trim style="max-width:180px">'
                         '<label>ICV $</label><input name=amount type=number style="max-width:140px">',
                         csrf=s.csrf_token, submit="Add ICV value")
         vel = _ws_get(app, s.scope, "velocity_program", []) or []
         vel_rows = [[esc(p.get("eff", "")), esc(p.get("model", "")), esc(p.get("trim", "")), esc(p.get("amount", "")),
                      esc(p.get("day_cap", "")), esc(p.get("mile_cap", ""))] for p in vel]
         vel_form = form("/data/program/velocity",
-                        '<label>Effective month (YYYY-MM)</label><input name=eff style="max-width:140px">'
-                        '<label>Model</label><input name=model style="max-width:120px">'
-                        '<label>Trim</label><input name=trim style="max-width:180px">'
+                        '<label>Effective month</label>' + _month_select(app, "eff", _default_month(app))
+                        + '<label>Model</label>' + _select("model", [(m, m) for m in models])
+                        + '<label>Trim</label><input name=trim style="max-width:180px">'
                         '<label>Velocity $</label><input name=amount type=number style="max-width:140px">'
                         '<label>Day cap</label><input name=day_cap type=number style="max-width:120px">'
                         '<label>Mileage cap</label><input name=mile_cap type=number style="max-width:140px">',
@@ -859,10 +962,12 @@ def _mileage_velocity(u):
 
 def _their_trade(app, s, short, over):
     st = _ws_get(app, s.scope, "trade_their", {}) or {}
+    combos = [lbl for _cid, lbl in _known_combos(app, s.scope)]
     entry = form("/dealer-trade/their",
-                 '<label>Unit / combination the other dealer requested from us</label>'
-                 '<input name=requested value="' + esc(st.get("requested", "")) + '" style="max-width:360px">'
-                 '<label>Their inventory snapshot (one unit / combination per line)</label>'
+                 '<label>Unit / combination the other dealer requested from us (our inventory)</label>'
+                 + _datalist_input("requested", "their_req_combos", combos, value=st.get("requested", ""),
+                                   placeholder="select our combination")
+                 + '<label>Their inventory snapshot (external — one unit / combination per line)</label>'
                  '<textarea name=inv rows=6 style="max-width:520px">' + esc("\n".join(st.get("inv", []))) + '</textarea>',
                  csrf=s.csrf_token, submit="Evaluate trade")
     out = '<div class="card"><h2>Their Trade</h2><p class="muted">Help the other store while protecting our own '
@@ -902,11 +1007,13 @@ def _their_trade(app, s, short, over):
 
 def _our_trade(app, s, short, over):
     st = _ws_get(app, s.scope, "trade_our", {}) or {}
+    combos = [lbl for _cid, lbl in _known_combos(app, s.scope)]
     entry = form("/dealer-trade/our",
-                 '<label>Exact unit we need from them (we already have the sold customer)</label>'
+                 '<label>Exact unit we need from them (external — we already have the sold customer)</label>'
                  '<input name=needed value="' + esc(st.get("needed", "")) + '" style="max-width:360px">'
-                 '<label>What they are demanding from us (leave blank if flexible)</label>'
-                 '<input name=demanded value="' + esc(st.get("demanded", "")) + '" style="max-width:360px">',
+                 '<label>What they are demanding from us (our inventory; leave blank if flexible)</label>'
+                 + _datalist_input("demanded", "our_dem_combos", combos, value=st.get("demanded", ""),
+                                   placeholder="select our combination"),
                  csrf=s.csrf_token, submit="Evaluate trade")
     out = ('<div class="card"><h2>Our Trade</h2><p class="muted">We know the unit we need. Protect what we give '
            'away while obtaining it.</p>' + entry + '</div>')
