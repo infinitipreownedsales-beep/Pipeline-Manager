@@ -36,14 +36,23 @@ def _default_month(app):
     return to_utc_iso(app.stack.clock.now())[:7]
 
 
+def _benched(app, scope):
+    return set(app.prefs.get_pref(f"scope::{scope}", "benched", default=[]) or [])
+
+
+def _is_benched(bench, combo_id, identity):
+    return combo_id in bench or identity in bench
+
+
 def _acquire_board(app, scope):
     """Read the certified issued plans into per-combination ACQUIRE recommendations (no recompute).
-    Returns list of dicts sorted by (model, -order, identity)."""
+    Benched combinations are excluded from ordering. Returns dicts sorted by (model, -order, identity)."""
     conn = _conn(app)
     rows = conn.execute("SELECT * FROM inventory_plan_result WHERE store_scope=? AND status='issued'",
                         (scope,)).fetchall()
     ident = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
         "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (scope,)).fetchall()}
+    bench = _benched(app, scope)
     out = []
     for r in rows:
         try:
@@ -54,6 +63,8 @@ def _acquire_board(app, scope):
         if not dec or order <= 0:
             continue
         readable = _readable(ident.get(r["combination_id"], r["combination_id"]))
+        if _is_benched(bench, r["combination_id"], readable):
+            continue
         out.append({"pid": r["id"], "combo": r["combination_id"], "identity": readable,
                     "model": _model_of(readable), "order": order, "current": r["current_supply"],
                     "future": dec.get("incoming_in_horizon", r["future_supply"])})
@@ -348,78 +359,404 @@ def register(app):
         s.flash = "PPO window reverted."
         return Response.redirect(f"/ordering/ppo?window={window}")
 
-    # ---- Dealer Trade ---------------------------------------------------------------------------------
-    @app.get("/dealer-trade")
-    def dealer_trade(app, req):
-        s = req.session
-        app.require(s, "workspace.view")
-        body = _placeholder(
-            "Dealer Trade",
-            "Our Trade (a unit we need from another store) and Their Trade (a unit they want from us) are not "
-            "yet built as guided operator workflows. The governed dealer-trade domain remains intact in the "
-            "backend and can be reached by an administrator from the Admin area.")
-        return _resp(app, s, "Dealer Trade", body, "/dealer-trade")
-
-    # ---- Wholesale ------------------------------------------------------------------------------------
+    # ---- Wholesale — ranked disposition-readiness + dealer-safe copy list -----------------------------
     @app.get("/wholesale")
     def wholesale(app, req):
         s = req.session
         app.require(s, "workspace.view")
-        body = _placeholder(
-            "Wholesale",
-            "A ranked disposition-readiness list (what to move first) is not yet built as an operator workflow. "
-            "Arrived over-stocked combinations flagged for disposition are visible today on the Pipeline home "
-            "and the CPO board.")
+        app.ensure_inventory_published(s.scope)
+        conn = _conn(app)
+        rows = conn.execute("SELECT * FROM inventory_plan_result WHERE store_scope=? AND status='issued'",
+                            (s.scope,)).fetchall()
+        ident = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
+            "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (s.scope,)).fetchall()}
+        now, future = [], []
+        for r in rows:
+            try:
+                dec = (json.loads(r["evidence"]) if r["evidence"] else {}).get("decision") or {}
+            except Exception:   # noqa: BLE001
+                dec = {}
+            arr, inc = int(dec.get("arrived_excess", 0) or 0), int(dec.get("incoming_excess", 0) or 0)
+            readable = _readable(ident.get(r["combination_id"], r["combination_id"]))
+            if arr > 0:
+                now.append({"identity": readable, "qty": arr, "pid": r["id"],
+                            "dts": dec.get("dts_burden", "—")})
+            if inc > 0:
+                future.append({"identity": readable, "qty": inc, "pid": r["id"]})
+        now.sort(key=lambda d: (-d["qty"], d["identity"]))
+        future.sort(key=lambda d: (-d["qty"], d["identity"]))
+
+        nrows = [[esc(i + 1),
+                  safe(f'<a href="/combination/{esc(d["pid"])}">{esc(d["identity"])}</a>'),
+                  esc(d["qty"]), esc(d["dts"])] for i, d in enumerate(now)]
+        dealer_text = "\n".join(f'{d["identity"]} — {d["qty"]} available' for d in now)
+        copy = ('<h3>Dealer list (safe to send)</h3>'
+                f'<textarea id="dl" readonly rows="{max(2, len(now)+1)}" '
+                'style="max-width:520px;font-family:monospace">' + esc(dealer_text) + '</textarea>'
+                '<div style="margin-top:8px"><button type=button onclick="'
+                "navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('dl').value);"
+                'this.textContent=&quot;Copied&quot;">Copy dealer list</button></div>'
+                '<p class="muted">Copied text is combination + quantity only — no rank, age, or internal reasoning.</p>')
+        frows = [[safe(f'<a href="/combination/{esc(d["pid"])}">{esc(d["identity"])}</a>'), esc(d["qty"])]
+                 for d in future]
+        body = ('<div class="card"><h2>What to move first</h2>'
+                '<p class="muted">Ranked by disposition readiness (arrived over-stock). Click a combination for '
+                'Recommendation → Why → Proof. Within a combination, dispose the oldest appropriate unit first.</p>'
+                + table(["#", "Combination", "To move", "DTS burden"], nrows) + copy + '</div>'
+                '<div class="card"><h2>Future changes (incoming to redirect)</h2>'
+                + table(["Combination", "Redirect"], frows) + '</div>')
         return _resp(app, s, "Wholesale", body, "/wholesale")
 
-    # ---- Demos ----------------------------------------------------------------------------------------
+    # ---- Dealer Trade — Our Trade / Their Trade (uses the certified short/over board) ------------------
+    @app.get("/dealer-trade")
+    def dealer_trade(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        short, over = _short_over(app, s.scope)     # combos we ACQUIRE (short) / have EXCESS (over)
+        tab = req.q("tab") or "their"
+        nav = ('<div class="card"><a href="/dealer-trade?tab=their"><button class="'
+               + ("primary" if tab == "their" else "secondary") + '">Their Trade</button></a> '
+               '<a href="/dealer-trade?tab=our"><button class="'
+               + ("primary" if tab == "our" else "secondary") + '">Our Trade</button></a></div>')
+        if tab == "our":
+            body = nav + _our_trade(app, s, short, over)
+        else:
+            body = nav + _their_trade(app, s, short, over)
+        return _resp(app, s, "Dealer Trade", body, "/dealer-trade")
+
+    @app.post("/dealer-trade/their")
+    def their_save(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        _ws_put(app, s.scope, "trade_their", {
+            "requested": (req.form.get("requested") or "").strip(),
+            "inv": [ln.strip() for ln in (req.form.get("inv") or "").splitlines() if ln.strip()],
+            "unavail": []})
+        s.flash = "Their-trade session saved."
+        return Response.redirect("/dealer-trade?tab=their")
+
+    @app.post("/dealer-trade/their/unavailable")
+    def their_unavail(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        st = _ws_get(app, s.scope, "trade_their", {}) or {}
+        try:
+            idx = int(req.form.get("idx"))
+            un = set(st.get("unavail", []))
+            un.add(idx)
+            st["unavail"] = sorted(un)
+            _ws_put(app, s.scope, "trade_their", st)
+        except (TypeError, ValueError):
+            pass
+        return Response.redirect("/dealer-trade?tab=their")
+
+    @app.post("/dealer-trade/our")
+    def our_save(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        _ws_put(app, s.scope, "trade_our", {"needed": (req.form.get("needed") or "").strip(),
+                                            "demanded": (req.form.get("demanded") or "").strip()})
+        s.flash = "Our-trade session saved."
+        return Response.redirect("/dealer-trade?tab=our")
+
+    # ---- Demos — user-first roster + call-up board ----------------------------------------------------
     @app.get("/demos")
     def demos(app, req):
         s = req.session
         app.require(s, "workspace.view")
-        n = _conn(app).execute("SELECT COUNT(*) FROM executive_demo_unit WHERE store_scope=?",
-                               (s.scope,)).fetchone()[0]
-        roster = (f'<p class="muted">{esc(n)} demo vehicle record(s) exist in the backend, but no operator demo '
-                  'roster (users, mileage behaviour, swap timing) has been entered yet.</p>' if n else
-                  '<p class="muted">No demo roster has been entered yet.</p>')
-        body = (f'<div class="card"><h2>Current Roster</h2>{roster}'
-                '<p class="muted">The user-first roster / call-up board is not yet built. Executive-Demo backend '
-                'behaviour remains DATA_ONLY and unchanged.</p></div>')
+        roster = _ws_get(app, s.scope, "demo_roster", []) or []
+        short, _over = _short_over(app, s.scope)
+        rows = []
+        for u in roster:
+            cur = u.get("current") or {}
+            vel = _mileage_velocity(u)
+            rows.append([safe(f'<a href="/demos/user/{esc(u["id"])}">{esc(u["name"])}</a>'),
+                         esc(u.get("role", "")), esc(u.get("model_pref", "")),
+                         esc(cur.get("vin", "—")), esc(vel if vel is not None else "—")])
+        add = form("/demos/user",
+                   '<label>Name</label><input name=name required style="max-width:260px">'
+                   '<label>Role / title</label><input name=role style="max-width:260px">'
+                   '<label>Model preference (e.g. QX60)</label><input name=model_pref style="max-width:160px">'
+                   '<label>Trim preference</label><input name=trim_pref style="max-width:200px">',
+                   csrf=s.csrf_token, submit="Add user")
+        callup = _callup_board(short)
+        body = ('<div class="card"><h2>Current Roster</h2>'
+                + table(["User", "Role", "Prefers", "Current demo VIN", "Miles/day"], rows)
+                + '</div><div class="card"><h3>Add a demo user</h3>' + add + '</div>'
+                + callup)
         return _resp(app, s, "Demos", body, "/demos")
 
-    # ---- CTP ------------------------------------------------------------------------------------------
+    @app.post("/demos/user")
+    def demos_add(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        from ...ids import new_id
+        roster = _ws_get(app, s.scope, "demo_roster", []) or []
+        name = (req.form.get("name") or "").strip()
+        if name:
+            roster.append({"id": new_id("demu"), "name": name, "role": (req.form.get("role") or "").strip(),
+                           "model_pref": (req.form.get("model_pref") or "").strip().upper(),
+                           "trim_pref": (req.form.get("trim_pref") or "").strip(),
+                           "current": None, "history": []})
+            _ws_put(app, s.scope, "demo_roster", roster)
+            s.flash = "User added."
+        return Response.redirect("/demos")
+
+    @app.get("/demos/user/{uid}")
+    def demos_user(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        roster = _ws_get(app, s.scope, "demo_roster", []) or []
+        u = next((x for x in roster if x["id"] == req.params["uid"]), None)
+        if u is None:
+            return app._safe_page(s, "Not found", "That demo user is not on the roster.", 404)
+        cur = u.get("current") or {}
+        vel = _mileage_velocity(u)
+        info = kv([("Role", u.get("role", "")), ("Prefers", f'{u.get("model_pref","")} {u.get("trim_pref","")}'.strip()),
+                   ("Current demo VIN", cur.get("vin", "—")), ("Start date", cur.get("start", "—")),
+                   ("Mileage at assignment", cur.get("mi_in", "—")),
+                   ("Personal mileage velocity", f"{vel} mi/day" if vel is not None else "—")])
+        assign = form("/demos/user/" + u["id"] + "/assign",
+                      '<label>Demo VIN</label><input name=vin required style="max-width:240px">'
+                      '<label>Start date (YYYY-MM-DD)</label><input name=start style="max-width:160px">'
+                      '<label>Mileage at assignment</label><input name=mi type=number style="max-width:160px">',
+                      csrf=s.csrf_token, submit="Assign demo")
+        ret = (form("/demos/user/" + u["id"] + "/return",
+                    '<label>Return / swap mileage</label><input name=mi type=number required style="max-width:160px">'
+                    '<label>Swap date (YYYY-MM-DD)</label><input name=date style="max-width:160px">',
+                    csrf=s.csrf_token, submit="Record return / swap") if cur else "")
+        # preference-first next demo
+        short, _o = _short_over(app, s.scope)
+        pref = (u.get("model_pref") or "").upper()
+        picks = [b for b in short if b["model"] == pref] or short
+        nb = table(["Rank", "Best next demo"], [[esc(i + 1), esc(b["identity"])] for i, b in enumerate(picks[:3])]) \
+            if picks else empty("No available combination supports a next demo yet.")
+        hrows = [[esc(h.get("vin", "")), esc(h.get("mi_in", "")), esc(h.get("mi_out", "")),
+                  esc(h.get("miles", "")), esc(h.get("start", "")), esc(h.get("end", ""))] for h in u.get("history", [])]
+        body = (f'<p><a href="/demos">← Roster</a></p><div class="card"><h2>{esc(u["name"])}</h2>{info}</div>'
+                f'<div class="card"><h3>Next demo — prefers {esc(pref or "any")}</h3>{nb}</div>'
+                '<div class="card"><h3>Assign / swap</h3>' + assign + ret + '</div>'
+                '<div class="card"><h3>Demo history</h3>'
+                + table(["VIN", "Miles in", "Miles out", "Driven", "Start", "End"], hrows) + '</div>')
+        return _resp(app, s, u["name"], body, "/demos")
+
+    @app.post("/demos/user/{uid}/assign")
+    def demos_assign(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        roster = _ws_get(app, s.scope, "demo_roster", []) or []
+        for u in roster:
+            if u["id"] == req.params["uid"]:
+                u["current"] = {"vin": (req.form.get("vin") or "").strip(),
+                                "start": (req.form.get("start") or "").strip(),
+                                "mi_in": _int_or0(req.form.get("mi"))}
+                _ws_put(app, s.scope, "demo_roster", roster)
+                s.flash = "Demo assigned."
+                break
+        return Response.redirect("/demos/user/" + req.params["uid"])
+
+    @app.post("/demos/user/{uid}/return")
+    def demos_return(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        roster = _ws_get(app, s.scope, "demo_roster", []) or []
+        for u in roster:
+            if u["id"] == req.params["uid"] and u.get("current"):
+                cur = u["current"]
+                mi_out = _int_or0(req.form.get("mi"))
+                cur["mi_out"] = mi_out
+                cur["end"] = (req.form.get("date") or "").strip()
+                cur["miles"] = max(0, mi_out - _int_or0(cur.get("mi_in")))
+                u.setdefault("history", []).append(cur)
+                u["current"] = None
+                _ws_put(app, s.scope, "demo_roster", roster)
+                s.flash = "Return recorded; demo returned to retail pool."
+                break
+        return Response.redirect("/demos/user/" + req.params["uid"])
+
+    # ---- CTP — expose existing governed CTP actions in plain language ---------------------------------
     @app.get("/ctp")
     def ctp(app, req):
         s = req.session
         app.require(s, "workspace.view")
-        body = _placeholder(
-            "CTP",
-            "CTP remains its own governed domain. A dedicated operator-facing CTP page is not yet built; the "
-            "underlying CTP engine and records are unchanged and available to an administrator.")
+        conn = _conn(app)
+        try:
+            acts = conn.execute(
+                "SELECT a.* FROM ctp_action a JOIN supply_workflow w ON a.workflow_id=w.id "
+                "WHERE w.store_scope=? ORDER BY a.created_at DESC", (s.scope,)).fetchall()
+        except Exception:   # noqa: BLE001
+            acts = []
+        ident = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
+            "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (s.scope,)).fetchall()}
+        rows = []
+        for a in acts:
+            frm = _readable(ident.get(a["original_combination_id"], a["original_combination_id"] or "—"))
+            to = _readable(ident.get(a["proposed_combination_id"], a["proposed_combination_id"] or "—"))
+            rows.append([esc(frm), esc(to), esc(a["resulting_order_state"] or "proposed"),
+                         esc((a["created_at"] or "")[:10])])
+        if rows:
+            body = ('<div class="card"><h2>Change-to-plan actions</h2>'
+                    '<p class="muted">Recommendation: change an incoming order to a stronger combination before '
+                    'it arrives. Why/Proof: driven by the certified need/excess that opened each action.</p>'
+                    + table(["From", "To", "State", "Recorded"], rows) + '</div>')
+        else:
+            body = ('<div class="card"><h2>Change-to-plan</h2>'
+                    '<p>No change-to-plan actions are currently open for this store. When the engine identifies '
+                    'an incoming order that should be re-specified before arrival, it appears here as '
+                    'Recommendation → Why → Proof.</p></div>')
         return _resp(app, s, "CTP", body, "/ctp")
 
-    # ---- Data control room ----------------------------------------------------------------------------
+    # ---- Data control room — imports, bench, unavailable inventory, Service-Loaner program settings ---
     @app.get("/data")
     def data_room(app, req):
         s = req.session
         app.require(s, "workspace.view")
-        from ..app import source_health
+        from ..app import source_health, SOURCE_INDICATORS
         srows = [[esc(label), safe(badge("healthy" if tone == "green" else "attention" if tone == "yellow"
                                          else "stale" if tone == "red" else "unresolved",
                                          "current" if tone == "green" else "aging" if tone == "yellow"
-                                         else "stale" if tone == "red" else "not loaded")),
-                  esc(word)]
+                                         else "stale" if tone == "red" else "not loaded")), esc(word)]
                  for (label, word, tone) in source_health(app, s.scope)]
-        body = ('<div class="card"><h2>Sources</h2>'
-                + table(["Source", "State", "Age / status"], srows)
-                + '<p class="muted">Update Data (file upload) is not yet wired into this screen; freshness above '
-                'is read honestly from recorded imports. A source with no successful load shows "not loaded".</p>'
-                '</div>'
-                '<div class="card"><h2>Settings &amp; preferences</h2>'
-                '<p class="muted">Benched combinations, program settings and UI preferences will live here. '
-                'The Service-Loaner desired-fleet size and monthly placement requirement are managed today on '
-                'the <a href="/service-loaner">Service Loaners</a> screen.</p></div>')
+        # import controls: one server file-path form per source, run through the existing orchestrator
+        imp = ""
+        for label, key, _g, _y in SOURCE_INDICATORS:
+            imp += form("/data/import",
+                        f'<input type=hidden name=contract value="{esc(key)}">'
+                        f'<label>{esc(label)} — server file path (in the uploads folder)</label>'
+                        f'<input name=path placeholder="C:\\ElitePipeline\\uploads\\..." style="max-width:420px">',
+                        csrf=s.csrf_token, submit=f"Import {label}")
+        bench = _ws_get(app, s.scope, "benched", []) or []
+        brows = [[esc(b), safe(_ws_btn(s, "/data/bench/restore", "combo", b, "Restore"))] for b in bench]
+        bench_form = form("/data/bench", '<label>Bench a combination (identity or id — no longer orderable)</label>'
+                          '<input name=combo required style="max-width:360px">',
+                          csrf=s.csrf_token, submit="Bench")
+        un = _ws_get(app, s.scope, "unavailable", []) or []
+        urows = []
+        for i, iv in enumerate(un):
+            act = _ws_btn(s, "/data/unavailable/return", "idx", str(i), "Mark available") if not iv.get("end") \
+                else esc("returned " + iv.get("end", ""))
+            urows.append([esc(iv.get("vin", "")), esc(iv.get("reason", "")), esc(iv.get("start", "")),
+                          esc(iv.get("end", "—")), safe(act)])
+        un_form = form("/data/unavailable",
+                       '<label>VIN</label><input name=vin required style="max-width:240px">'
+                       '<label>Reason</label><input name=reason style="max-width:300px">'
+                       '<label>Unavailable start (YYYY-MM-DD)</label><input name=start style="max-width:160px">',
+                       csrf=s.csrf_token, submit="Mark unavailable")
+        icv = _ws_get(app, s.scope, "icv_program", []) or []
+        icv_rows = [[esc(p.get("eff", "")), esc(p.get("model", "")), esc(p.get("trim", "")), esc(p.get("amount", ""))]
+                    for p in icv]
+        icv_form = form("/data/program/icv",
+                        '<label>Effective month (YYYY-MM)</label><input name=eff style="max-width:140px">'
+                        '<label>Model</label><input name=model style="max-width:120px">'
+                        '<label>Trim</label><input name=trim style="max-width:180px">'
+                        '<label>ICV $</label><input name=amount type=number style="max-width:140px">',
+                        csrf=s.csrf_token, submit="Add ICV value")
+        vel = _ws_get(app, s.scope, "velocity_program", []) or []
+        vel_rows = [[esc(p.get("eff", "")), esc(p.get("model", "")), esc(p.get("trim", "")), esc(p.get("amount", "")),
+                     esc(p.get("day_cap", "")), esc(p.get("mile_cap", ""))] for p in vel]
+        vel_form = form("/data/program/velocity",
+                        '<label>Effective month (YYYY-MM)</label><input name=eff style="max-width:140px">'
+                        '<label>Model</label><input name=model style="max-width:120px">'
+                        '<label>Trim</label><input name=trim style="max-width:180px">'
+                        '<label>Velocity $</label><input name=amount type=number style="max-width:140px">'
+                        '<label>Day cap</label><input name=day_cap type=number style="max-width:120px">'
+                        '<label>Mileage cap</label><input name=mile_cap type=number style="max-width:140px">',
+                        csrf=s.csrf_token, submit="Add Velocity terms")
+        body = ('<div class="card"><h2>Sources</h2>' + table(["Source", "State", "Age / status"], srows) + '</div>'
+                '<div class="card"><h2>Update data</h2><p class="muted">Place the export in the uploads folder and '
+                'enter its path; the import runs through the certified ingestion pipeline and updates freshness '
+                'above. Nothing is marked loaded unless the import actually succeeds.</p>' + imp + '</div>'
+                '<div class="card"><h2>Benched combinations</h2><p class="muted">A benched combination is no longer '
+                'orderable and is excluded from ordering recommendations.</p>'
+                + table(["Combination", ""], brows) + bench_form + '</div>'
+                '<div class="card"><h2>Temporarily unavailable inventory</h2>'
+                + table(["VIN", "Reason", "Since", "Returned", ""], urows) + un_form + '</div>'
+                '<div class="card"><h2>Service-Loaner ICV program</h2>'
+                + table(["Effective", "Model", "Trim", "$"], icv_rows) + icv_form + '</div>'
+                '<div class="card"><h2>Service-Loaner Velocity program</h2>'
+                + table(["Effective", "Model", "Trim", "$", "Day cap", "Mile cap"], vel_rows) + vel_form + '</div>')
         return _resp(app, s, "Data", body, "/data")
+
+    @app.post("/data/import")
+    def data_import(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        s.flash = _run_import(app, s.scope, req.form.get("contract"), (req.form.get("path") or "").strip())
+        return Response.redirect("/data")
+
+    @app.post("/data/bench")
+    def data_bench(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        combo = (req.form.get("combo") or "").strip()
+        bench = _ws_get(app, s.scope, "benched", []) or []
+        if combo and combo not in bench:
+            bench.append(combo)
+            _ws_put(app, s.scope, "benched", bench)
+            s.flash = "Combination benched (excluded from ordering)."
+        return Response.redirect("/data")
+
+    @app.post("/data/bench/restore")
+    def data_bench_restore(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        combo = req.form.get("combo")
+        bench = [b for b in (_ws_get(app, s.scope, "benched", []) or []) if b != combo]
+        _ws_put(app, s.scope, "benched", bench)
+        s.flash = "Combination restored."
+        return Response.redirect("/data")
+
+    @app.post("/data/unavailable")
+    def data_unavailable(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        vin = (req.form.get("vin") or "").strip()
+        un = _ws_get(app, s.scope, "unavailable", []) or []
+        if vin:
+            un.append({"vin": vin, "reason": (req.form.get("reason") or "").strip(),
+                       "start": (req.form.get("start") or "").strip(), "end": ""})
+            _ws_put(app, s.scope, "unavailable", un)
+            s.flash = "Unit marked temporarily unavailable."
+        return Response.redirect("/data")
+
+    @app.post("/data/unavailable/return")
+    def data_unavailable_return(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        from ...clock import to_utc_iso
+        un = _ws_get(app, s.scope, "unavailable", []) or []
+        try:
+            i = int(req.form.get("idx"))
+            if 0 <= i < len(un):
+                un[i]["end"] = to_utc_iso(app.stack.clock.now())[:10]
+                _ws_put(app, s.scope, "unavailable", un)
+                s.flash = "Unit returned to availability; unavailable interval preserved."
+        except (TypeError, ValueError):
+            pass
+        return Response.redirect("/data")
+
+    @app.post("/data/program/icv")
+    def data_icv(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        icv = _ws_get(app, s.scope, "icv_program", []) or []
+        icv.append({"eff": (req.form.get("eff") or "").strip(), "model": (req.form.get("model") or "").strip().upper(),
+                    "trim": (req.form.get("trim") or "").strip(), "amount": _int_or0(req.form.get("amount"))})
+        _ws_put(app, s.scope, "icv_program", icv)
+        s.flash = "ICV program value added (history retained)."
+        return Response.redirect("/data")
+
+    @app.post("/data/program/velocity")
+    def data_velocity(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        vel = _ws_get(app, s.scope, "velocity_program", []) or []
+        vel.append({"eff": (req.form.get("eff") or "").strip(), "model": (req.form.get("model") or "").strip().upper(),
+                    "trim": (req.form.get("trim") or "").strip(), "amount": _int_or0(req.form.get("amount")),
+                    "day_cap": _int_or0(req.form.get("day_cap")), "mile_cap": _int_or0(req.form.get("mile_cap"))})
+        _ws_put(app, s.scope, "velocity_program", vel)
+        s.flash = "Velocity terms added (history retained)."
+        return Response.redirect("/data")
 
     # ---- Admin index (secondary; gathers governance / engineering screens) ----------------------------
     @app.get("/admin")
@@ -456,7 +793,174 @@ def _line_btn(s, b, state, text, cls="primary"):
             f'<button type=submit class="{esc(cls)}" style="padding:3px 9px">{esc(text)}</button></form>')
 
 
-def _placeholder(title, message):
-    return (f'<div class="card"><h2>{esc(title)}</h2><p>{esc(message)}</p>'
-            '<p class="muted">This surface was made real so navigation is coherent; the specialized workflow '
-            'is intentionally deferred. Nothing was fabricated.</p></div>')
+def _int_or0(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _ws_btn(s, action, name, value, text):
+    return (f'<form class="mut" method="post" action="{esc(action)}">'
+            f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+            f'<input type=hidden name="{esc(name)}" value="{esc(value)}">'
+            f'<button type=submit class="secondary" style="padding:3px 9px">{esc(text)}</button></form>')
+
+
+def _short_over(app, scope):
+    """The certified board split into what we are SHORT on (ACQUIRE) and what we are OVER on (EXCESS),
+    each as {identity, model, qty}. Used by Dealer Trade + Demos call-up. Read-only, no recompute."""
+    conn = app.stack.db.conn
+    rows = conn.execute("SELECT * FROM inventory_plan_result WHERE store_scope=? AND status='issued'",
+                        (scope,)).fetchall()
+    ident = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
+        "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (scope,)).fetchall()}
+    short, over = [], []
+    for r in rows:
+        try:
+            dec = (json.loads(r["evidence"]) if r["evidence"] else {}).get("decision") or {}
+        except Exception:   # noqa: BLE001
+            dec = {}
+        readable = _readable(ident.get(r["combination_id"], r["combination_id"]))
+        acq = int(dec.get("acquire_units", 0) or 0)
+        exc = int(dec.get("arrived_excess", 0) or 0)
+        if acq > 0:
+            short.append({"identity": readable, "model": _model_of(readable), "qty": acq})
+        if exc > 0:
+            over.append({"identity": readable, "model": _model_of(readable), "qty": exc})
+    short.sort(key=lambda d: (-d["qty"], d["identity"]))
+    over.sort(key=lambda d: (-d["qty"], d["identity"]))
+    return short, over
+
+
+def _callup_board(short):
+    cards = ""
+    for model in ("QX60", "QX65", "QX80"):
+        picks = [b for b in short if b["model"] == model]
+        best = picks[0]["identity"] if picks else "none available in the current plan"
+        cards += f'<p><strong>Best available {model} demo:</strong> {esc(best)}</p>'
+    return f'<div class="card"><h2>Call-Up Board</h2>{cards}</div>'
+
+
+def _mileage_velocity(u):
+    """Miles/day from the user's completed history (total driven / total days), else None."""
+    total_mi, total_days = 0, 0
+    import datetime as _dt
+    for h in u.get("history", []):
+        total_mi += _int_or0(h.get("miles"))
+        try:
+            d0 = _dt.date.fromisoformat(h.get("start", "")[:10])
+            d1 = _dt.date.fromisoformat(h.get("end", "")[:10])
+            total_days += max(1, (d1 - d0).days)
+        except Exception:   # noqa: BLE001
+            pass
+    return round(total_mi / total_days, 1) if total_days else None
+
+
+def _their_trade(app, s, short, over):
+    st = _ws_get(app, s.scope, "trade_their", {}) or {}
+    entry = form("/dealer-trade/their",
+                 '<label>Unit / combination the other dealer requested from us</label>'
+                 '<input name=requested value="' + esc(st.get("requested", "")) + '" style="max-width:360px">'
+                 '<label>Their inventory snapshot (one unit / combination per line)</label>'
+                 '<textarea name=inv rows=6 style="max-width:520px">' + esc("\n".join(st.get("inv", []))) + '</textarea>',
+                 csrf=s.csrf_token, submit="Evaluate trade")
+    out = '<div class="card"><h2>Their Trade</h2><p class="muted">Help the other store while protecting our own '
+    out += 'inventory. External inventory never becomes our supply until a trade is committed.</p>' + entry + '</div>'
+    req = st.get("requested", "")
+    if req:
+        # is what they asked for something WE are short on? then propose a lower-harm alternative from our over-stock
+        harmful = any(b["model"] in req.upper() or b["identity"] in req for b in short)
+        alt = over[0]["identity"] if over else None
+        rec = (f'Releasing “{esc(req)}” is costly — it is a combination we are short on. '
+               + (f'Lower-harm alternative to offer instead: <strong>{esc(alt)}</strong> (we are over-stocked there).'
+                  if alt else 'No over-stocked alternative is available to offer instead.')) if harmful \
+            else f'Releasing “{esc(req)}” is reasonable — it is not a combination we are short on.'
+        out += f'<div class="card"><h3>Should we release what they asked for?</h3><p>{rec}</p></div>'
+    # rank what to ask back: their lines matching a model we are short on rank highest; unavailable promote next
+    inv, unavail = st.get("inv", []), set(st.get("unavail", []))
+    scored = []
+    for i, line in enumerate(inv):
+        score = sum(b["qty"] for b in short if b["model"] and b["model"] in line.upper())
+        scored.append((i, line, score))
+    scored.sort(key=lambda t: (-(t[0] not in unavail), -t[2], t[1]))
+    rows = []
+    for rank, (i, line, score) in enumerate([t for t in scored if t[0] not in unavail], 1):
+        tag = "Best ask" if rank == 1 else f"#{rank}"
+        rows.append([esc(tag), esc(line), esc(score),
+                     safe(_ws_btn(s, "/dealer-trade/their/unavailable", "idx", str(i), "Unavailable"))])
+    for i in sorted(unavail):
+        if i < len(inv):
+            rows.append([safe(badge("stale", "unavailable")), esc(inv[i]), esc("—"), safe("")])
+    out += ('<div class="card"><h3>What we should ask for back (ranked)</h3>'
+            '<p class="muted">Ranked by how much it relieves a combination we are short on. Mark a candidate '
+            'Unavailable to promote the next best.</p>'
+            + table(["Rank", "Their unit / combination", "Fit score", ""], rows) + '</div>') if inv else \
+        (out + empty("Paste their inventory to rank the best ask."))
+    return out
+
+
+def _our_trade(app, s, short, over):
+    st = _ws_get(app, s.scope, "trade_our", {}) or {}
+    entry = form("/dealer-trade/our",
+                 '<label>Exact unit we need from them (we already have the sold customer)</label>'
+                 '<input name=needed value="' + esc(st.get("needed", "")) + '" style="max-width:360px">'
+                 '<label>What they are demanding from us (leave blank if flexible)</label>'
+                 '<input name=demanded value="' + esc(st.get("demanded", "")) + '" style="max-width:360px">',
+                 csrf=s.csrf_token, submit="Evaluate trade")
+    out = ('<div class="card"><h2>Our Trade</h2><p class="muted">We know the unit we need. Protect what we give '
+           'away while obtaining it.</p>' + entry + '</div>')
+    demanded = st.get("demanded", "")
+    if demanded:
+        harmful = any(b["model"] in demanded.upper() or b["identity"] in demanded for b in short)
+        alt = over[0]["identity"] if over else None
+        rec = (f'They demand “{esc(demanded)}”, which we are short on — high business impact. '
+               + (f'Best alternative to offer: <strong>{esc(alt)}</strong> (over-stocked).' if alt
+                  else 'No over-stocked alternative is available to offer.')) if harmful \
+            else f'They demand “{esc(demanded)}”, which is not a combination we are short on — acceptable to release.'
+        out += f'<div class="card"><h3>Impact of their demand</h3><p>{rec}</p></div>'
+    elif st.get("needed"):
+        rows = [[esc(i + 1), esc(b["identity"]), esc(b["qty"])] for i, b in enumerate(over[:5])]
+        out += ('<div class="card"><h3>Best units for us to release (they are flexible)</h3>'
+                '<p class="muted">Ranked from our over-stock, lowest business harm first.</p>'
+                + (table(["Rank", "Combination", "Over by"], rows) if rows
+                   else empty("We have no over-stocked combination to release without harm.")) + '</div>')
+    return out
+
+
+def _run_import(app, scope, contract_key, path):
+    """Run a real import through the existing ingestion orchestrator (when the runtime provides one). Never
+    fabricates success — returns the actual outcome/error string for the operator flash."""
+    if not contract_key or not path:
+        return "Enter a file path to import."
+    orch = None
+    src_id = None
+    pilot = getattr(app, "_pilot_stack", None)
+    p11 = getattr(pilot, "p11", None)
+    if p11 is not None:
+        orch = getattr(p11, "orch", None)
+        try:
+            src_id = p11.source_id(contract_key)
+        except Exception:   # noqa: BLE001
+            src_id = None
+    if orch is None or src_id is None:
+        return ("Import service is not available in this runtime; no data was changed. "
+                "(Available in the full operational runtime.)")
+    import os
+    import csv
+    if not os.path.exists(path):
+        return f"No file was found at {path}; nothing was imported."
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh.read().splitlines()))
+    except Exception as e:   # noqa: BLE001
+        return f"Could not read the file: {e}. Nothing was imported."
+    try:
+        from ...ops.intake import content_hash
+        run = orch.run(contract_key=contract_key, rows=rows, source_id=src_id, scope=scope,
+                       initiated_by="operator", claimed_snapshot="partial",
+                       content_hash=content_hash(repr(rows).encode("utf-8")))
+        state = run["state"] if run else "UNKNOWN"
+        return f"Import {state}: {len(rows)} row(s) from {contract_key}."
+    except Exception as e:   # noqa: BLE001
+        return f"Import failed and nothing was changed: {e}"
