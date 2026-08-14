@@ -1,0 +1,81 @@
+"""Service Loaner cockpit read model + UI surface — three fleet counts never conflated, governed desired
+fleet + monthly placement requirement persist, and the mix is honestly UNDETERMINED (no fabrication) until
+real per-unit economics are loaded."""
+import os
+import tempfile
+import unittest
+
+from elite.ui.fixtures import Phase10
+from elite.workflow.fixtures import SCOPE
+from elite.loaner.loaner_cockpit import MetaPrefs, build_cockpit, set_desired_fleet
+from elite.loaner import placement_settings as PS
+from elite.loaner.ideal_mix import UnitEcon
+
+
+class TestLoanerCockpit(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.p = Phase10(os.path.join(self.tmp, "elite.db"))
+        self.conn = self.p.stack.db.conn
+        self.full = self.p.login(self.p.op_full)
+
+    def tearDown(self):
+        self.p.close()
+
+    def _month(self):
+        from elite.clock import to_utc_iso
+        return to_utc_iso(self.p.clock.now())[:7]
+
+    # counts are distinct; with no economics loaded the mix is UNDETERMINED, not fabricated
+    def test_counts_and_undetermined_mix(self):
+        ck = build_cockpit(self.conn, SCOPE, self.p.app.prefs, self._month())
+        self.assertIsInstance(ck.current_fleet, int)
+        self.assertIsNone(ck.desired_fleet)                 # not set yet
+        self.assertFalse(ck.economically_determined)        # no per-unit economics -> honest
+        self.assertIsNone(ck.ideal_fleet)
+        self.assertIn("undetermined", ck.note().lower())
+
+    # desired fleet is a governed, store-scoped setting that persists
+    def test_desired_fleet_persists(self):
+        meta = MetaPrefs(self.p.app.prefs, SCOPE)
+        set_desired_fleet(meta, 22)
+        ck = build_cockpit(self.conn, SCOPE, self.p.app.prefs, self._month())
+        self.assertEqual(ck.desired_fleet, 22)
+
+    # a monthly placement requirement resolves for its month only, and drives the optimizer when economics exist
+    def test_requirement_and_economic_mix(self):
+        month = self._month()
+        PS.set_requirement(MetaPrefs(self.p.app.prefs, SCOPE), effective_month=month, required=3, reason="OEM push")
+        held = [UnitEcon(id=f"h{i}", keep_value=200 - i, exit_value=0.0) for i in range(2)]
+        cands = [UnitEcon(id="x1", in_value=500), UnitEcon(id="x2", in_value=450), UnitEcon(id="weak", in_value=-40)]
+        ck = build_cockpit(self.conn, SCOPE, self.p.app.prefs, month, held=held, candidates=cands)
+        self.assertTrue(ck.economically_determined)
+        self.assertIsNotNone(ck.requirement)
+        self.assertEqual(ck.requirement["required"], 3)
+        self.assertEqual(len(ck.mix.by_action("IN")), 3)    # requirement met
+        self.assertTrue(any(d["objective_driven"] for d in ck.mix.by_action("IN")))  # weak one is objective-driven
+        # next month has no requirement (temporary, not inherited)
+        nxt = "2027-01"
+        ck2 = build_cockpit(self.conn, SCOPE, self.p.app.prefs, nxt, held=held, candidates=cands)
+        self.assertIsNone(ck2.requirement)
+
+    # the UI page renders the three counts and does not crash
+    def test_service_loaner_page_renders(self):
+        set_desired_fleet(MetaPrefs(self.p.app.prefs, SCOPE), 20)
+        r = self.full.get("/service-loaner")
+        self.assertEqual(r.status, 200)
+        self.assertIn("Ideal Mix / Additions", r.body)
+        self.assertIn("Current fleet", r.body)
+        self.assertIn("Ideal fleet", r.body)
+        self.assertIn("20", r.body)                          # desired fleet shown
+
+    # setting desired fleet through the governed POST persists across a reload
+    def test_set_desired_fleet_post(self):
+        r = self.full.post("/service-loaner/desired-fleet", {"desired": "18"})
+        self.assertEqual(r.status, 303)
+        ck = build_cockpit(self.conn, SCOPE, self.p.app.prefs, self._month())
+        self.assertEqual(ck.desired_fleet, 18)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

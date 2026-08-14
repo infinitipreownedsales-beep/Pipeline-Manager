@@ -10,8 +10,56 @@ from __future__ import annotations
 import json
 import secrets
 
-from ..render import badge, esc, esc_text, empty, page, safe, table, kv
+from ..render import badge, esc, esc_text, empty, page, safe, table, kv, form
 from ..http import Response
+
+
+def _planning_month(app):
+    from ...clock import to_utc_iso
+    return to_utc_iso(app.stack.clock.now())[:7]      # 'YYYY-MM'
+
+
+def _ideal_mix_card(app, s):
+    """Service Loaner ECONOMIC Ideal Mix summary: the three fleet counts (Current / Desired / Ideal) never
+    conflated, the governed monthly placement requirement, and the IN/HOLD/OUT ranking when real per-unit
+    economics are available. When economics are not loaded, it says so honestly (no fabricated mix)."""
+    from ...loaner.loaner_cockpit import build_cockpit
+    ck = build_cockpit(_conn(app), s.scope, app.prefs, _planning_month(app))
+    ideal = ck.ideal_fleet if ck.economically_determined else "—"
+    counts = kv([("Current fleet (authoritative)", ck.current_fleet),
+                 ("Desired fleet (operator)", ck.desired_fleet if ck.desired_fleet is not None else "not set"),
+                 ("Ideal fleet (economic optimum)", ideal),
+                 ("Planning month", ck.planning_month)])
+    req = ck.requirement
+    req_html = ""
+    if req and req.get("required") is not None:
+        req_html = (f'<p class="callout">Monthly placement requirement in force: '
+                    f'<strong>{esc(req["required"])}</strong> for {esc(ck.planning_month)}'
+                    + (f' — {esc(req.get("reason"))}' if req.get("reason") else "")
+                    + '. Any placement beyond the economic optimum is <strong>objective-driven</strong>, '
+                    'not economically ideal, and can be met by IN/OUT rotation.</p>')
+    mix_html = ""
+    if ck.economically_determined and ck.mix is not None:
+        rows = []
+        order = {"IN": 0, "HOLD": 1, "OUT": 2, "WAIT": 3}
+        for d in sorted(ck.mix.decisions.values(), key=lambda d: (order.get(d["action"], 9), -d["net"])):
+            tag = "objective-driven" if d.get("objective_driven") else ""
+            rows.append([safe(badge({"IN": "attention", "HOLD": "healthy", "OUT": "pending"}.get(d["action"], "ok"),
+                                     d["action"] + (f" ({tag})" if tag else ""))),
+                         esc(d.get("identity") or d.get("id")), esc(round(d["net"], 2)), esc(d.get("reason", ""))])
+        mix_html = ('<h3>Recommended mix (IN / HOLD / OUT)</h3>'
+                    + table(["Call", "Combination / unit", "Net economics", "Why"], rows))
+        if ck.mix.future_stocking_need:
+            mix_html += (f'<p class="muted">Future stocking need: {esc(ck.mix.future_stocking_need)} position(s) '
+                         'left open — not filled with an economically inferior unit.</p>')
+    note = f'<p class="muted">{esc(ck.note())}</p>' if ck.note() else ""
+    setf = form("/service-loaner/desired-fleet",
+                f'<label for=df>Desired fleet size (optional operational target)</label>'
+                f'<input id=df name=desired type=number min=0 style="max-width:160px" '
+                f'value="{esc(ck.desired_fleet if ck.desired_fleet is not None else "")}">',
+                csrf=s.csrf_token, submit="Save desired fleet")
+    return (f'<div class="card"><h2>Ideal Mix / Additions</h2>{counts}{req_html}{note}{mix_html}'
+            f'<div style="margin-top:10px">{setf}</div></div>')
 
 # The one approved zero-mile-rented question — shown verbatim.
 ZERO_MILE_QUESTION = "Where is this customer's vehicle, and let's check the miles on the loaner?"
@@ -151,9 +199,26 @@ def register(app):
         body = ('<div class="card"><p>Membership state and rental state are shown <strong>separately</strong>. '
                 'Service Loaner is a separate domain from Executive Demo. The Economic Call does not change '
                 'because execution is blocked.</p>' + alert_html + '</div>'
+                + _ideal_mix_card(app, s)
                 + '<h2>Active fleet</h2>'
                 + table(["VIN", "Membership", "Rental", "Last checkout mileage"], urows))
         return _resp(app, s, "Service Loaners", body, "/service-loaner")
+
+    @app.post("/service-loaner/desired-fleet")
+    def set_desired(app, req):
+        from ...loaner.loaner_cockpit import MetaPrefs, set_desired_fleet
+        s = req.session
+        app.require(s, "workspace.view")
+        raw = (req.form.get("desired") or "").strip()
+        try:
+            n = int(raw) if raw else None
+            if n is not None and n < 0:
+                n = None
+        except ValueError:
+            n = None
+        set_desired_fleet(MetaPrefs(app.prefs, s.scope), n)
+        s.flash = "Desired Service-Loaner fleet size saved." if n is not None else "Desired fleet size cleared."
+        return Response.redirect("/service-loaner")
 
     @app.post("/service-loaner/{unit_id}/used-cars")
     def confirm_used_cars(app, req):
