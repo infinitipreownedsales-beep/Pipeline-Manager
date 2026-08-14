@@ -161,8 +161,9 @@ def register(app):
         ident = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
             "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (s.scope,)).fetchall()}
         from ...newinv.publish import plan_call
+        bench = _benched(app, s.scope)
 
-        models = {}          # model -> list of (call_kind, label, readable, current, incoming, target)
+        models = {}          # model -> list of (call_kind, label, readable, current, incoming, target, pid)
         totals = {"acquire": 0, "arrived_excess": 0, "incoming_excess": 0, "combos": 0}
         for r in rows:
             try:
@@ -172,15 +173,22 @@ def register(app):
             if not dec:
                 continue
             readable = _readable(ident.get(r["combination_id"], r["combination_id"]))
+            incoming = dec.get("incoming_in_horizon", r["future_supply"]) or 0
+            benched = _is_benched(bench, r["combination_id"], readable)
+            # Bench law: no-longer-orderable + no incoming -> drop from the active pipeline; keep (labelled)
+            # only while incoming supply still needs management.
+            if benched and not incoming:
+                continue
             kind, _q, label = plan_call(dec)
+            if benched:
+                label += " · No longer orderable"
             totals["acquire"] += int(dec.get("acquire_units", 0) or 0)
             totals["arrived_excess"] += int(dec.get("arrived_excess", 0) or 0)
             totals["incoming_excess"] += int(dec.get("incoming_excess", 0) or 0)
             totals["combos"] += 1
             models.setdefault(_model_of(readable), []).append(
-                (kind, label, readable, r["current_supply"],
-                 dec.get("incoming_in_horizon", r["future_supply"]), round(dec.get("target_level", 0) or 0, 1),
-                 r["id"]))
+                (kind, label, readable, r["current_supply"], incoming,
+                 round(dec.get("target_level", 0) or 0, 1), r["id"]))
 
         if not models:
             body = ('<div class="card"><p class="muted">No certified inventory plan is loaded for this store yet. '
@@ -242,12 +250,36 @@ def register(app):
                     ("Credibility Z", round(cred.get("credibility_z", 0) or 0, 4)),
                     ("Calculation version", r["calculation_version"] or "—"),
                     ("Reproducibility package", r["reproducibility_package"] or "—")])
+        benched = subject in _benched(app, s.scope)
+        bench_card = (f'<div class="card"><h3>Ordering availability</h3>'
+                      + (f'<p>{badge("stale", "No longer orderable")} This combination is benched. '
+                         + _ws_btn(s, "/data/bench/restore", "combo", subject, "Restore (make orderable)") + '</p>'
+                         if benched else
+                         '<p class="muted">Bench only if this combination is genuinely no longer obtainable / '
+                         'orderable (not a skip or a preference). History is preserved.</p>'
+                         + _bench_button(s, subject, f"/combination/{r['id']}")) + '</div>')
         body = (f'<p><a href="/">← Pipeline</a></p>'
                 f'<div class="card"><h2>Recommendation</h2><p>{esc(label)}</p></div>'
                 f'<div class="card"><h2>Why</h2>{why}</div>'
                 f'<div class="card"><h2>Proof</h2>{proof}'
-                '<p class="muted">Read from the certified issued plan — not recomputed.</p></div>')
+                '<p class="muted">Read from the certified issued plan — not recomputed.</p></div>'
+                + bench_card)
         return _resp(app, s, subject, body, "/")
+
+    @app.post("/bench")
+    def bench_context(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        combo = (req.form.get("combo") or "").strip()
+        back = req.form.get("back") or "/"
+        if not back.startswith("/"):
+            back = "/"
+        bench = _ws_get(app, s.scope, "benched", []) or []
+        if combo and combo not in bench:
+            bench.append(combo)
+            _ws_put(app, s.scope, "benched", bench)
+            s.flash = f"Benched {combo} — no longer orderable; removed from ordering recommendations. History kept."
+        return Response.redirect(back)
 
     # ---- Ordering -------------------------------------------------------------------------------------
     @app.get("/ordering")
@@ -881,7 +913,8 @@ def _cpo_line(s, b, rank, state, *, promoted=False):
     elif state == "not_ordered":
         action = safe(badge("stale", "Not Ordered") + " " + _line_btn(s, b, "clear", "Revert", "secondary"))
     else:
-        action = safe(_line_btn(s, b, "confirmed", "Confirm") + " " + _line_btn(s, b, "not_ordered", "Not Ordered", "secondary"))
+        action = safe(_line_btn(s, b, "confirmed", "Confirm") + " " + _line_btn(s, b, "not_ordered", "Not Ordered", "secondary")
+                      + " " + _bench_button(s, b["identity"], f"/ordering/cpo?month={b.get('month','')}"))
     label = ident if state != "not_ordered" else safe(f'<span style="opacity:.55">{ident}</span>')
     return [esc(rank), label, esc(b["order"]), esc(b["current"]), esc(b["future"]), action]
 
@@ -901,6 +934,18 @@ def _int_or0(v):
         return int(v)
     except (TypeError, ValueError):
         return 0
+
+
+def _bench_button(s, identity, back):
+    """A native in-context Bench control (with the required confirmation). Bench means ONLY 'no longer
+    orderable' — it removes the combination from future ordering feasibility while preserving history."""
+    return (f'<form class="mut" method="post" action="/bench">'
+            f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+            f'<input type=hidden name=combo value="{esc(identity)}">'
+            f'<input type=hidden name=back value="{esc(back)}">'
+            '<button type=submit class="secondary" style="padding:3px 9px" '
+            'onclick="return confirm(&quot;Bench this combination because it is no longer orderable?&quot;)">'
+            'Bench</button></form>')
 
 
 def _ws_btn(s, action, name, value, text):
