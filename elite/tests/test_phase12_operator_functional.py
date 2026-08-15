@@ -85,6 +85,35 @@ class TestOperatorFunctional(unittest.TestCase):
         b2 = self.full.get("/dealer-trade", tab="their").body
         self.assertIn("unavailable", b2.lower())
 
+    def test_their_trade_real_nna_tsv_ranks_exact_combination(self):
+        # Real browser clipboard shape from NNA: tab-separated rows with hidden model-code metadata stripped.
+        st = NewInvStore(self.conn, self.p.clock)
+        self._persist(st, self._combo(st, "8521", "GAT", "N"), acq=2, exc=0)
+
+        raw = (
+            "532\tGRUBBS INFINITI S ANTONIO\tVC601030\t601030\tQX65 AUTO AWD\tAUTO\t"
+            "GAT\tG\t$64,815\t$ 62,267\t80\t05/28/2026\tSUV\n"
+            "532\tGRUBBS INFINITI S ANTONIO\tVC605214\t605214\tQX65 AUTO AWD\tAUTO\t"
+            "GAT\tN\t$65,905\t$ 63,296\t16\t07/30/2026\tSUV"
+        )
+
+        self.full.post("/dealer-trade/their", {
+            "requested": "QX65 something",
+            "inv": raw,
+        })
+
+        b = self.full.get("/dealer-trade", tab="their").body
+
+        self.assertIn("2 external candidates parsed", b)
+        self.assertIn("Exact shortage: QX65 8521 GAT/N (need 2)", b)
+        self.assertIn("VC605214", b)
+        self.assertIn("VC601030", b)
+
+        # Exact GAT/N shortage must rank above same-code/same-exterior GAT/G,
+        # regardless of the latter unit being substantially older.
+        ranked = b[b.index("What we should ask for back (ranked)"):]
+        self.assertLess(ranked.index("VC605214"), ranked.index("VC601030"))
+
     # Data: bench persists + excludes from CPO; unavailable interval persists; ICV/Velocity program persists
     def test_data_controls_persist(self):
         # bench QX65 acquire combo -> disappears from CPO

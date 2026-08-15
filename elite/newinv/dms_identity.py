@@ -24,7 +24,7 @@ from ..ids import new_id
 from .models import SellableCombination
 
 # Model line from the first two digits of the (4- or 5-digit) model code (legacy _PREFIX_TO_MODEL).
-_PREFIX_TO_MODEL = {"83": "QX80", "84": "QX60", "85": "QX65", "81": "QX65", "82": "QX65"}
+_PREFIX_TO_MODEL = {"81": "QX50", "82": "QX55", "83": "QX80", "84": "QX60", "85": "QX65"}
 
 
 def digits_only(value) -> str:

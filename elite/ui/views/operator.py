@@ -555,9 +555,12 @@ def register(app):
     def their_save(app, req):
         s = req.session
         app.require(s, "workspace.view")
+        inv_raw = req.form.get("inv") or ""
         _ws_put(app, s.scope, "trade_their", {
             "requested": (req.form.get("requested") or "").strip(),
-            "inv": [ln.strip() for ln in (req.form.get("inv") or "").splitlines() if ln.strip()],
+            "inv_raw": inv_raw,
+            # Keep legacy line storage for backward compatibility with old sessions.
+            "inv": [ln.strip() for ln in inv_raw.splitlines() if ln.strip()],
             "unavail": []})
         s.flash = "Their-trade session saved."
         return Response.redirect("/dealer-trade?tab=their")
@@ -748,7 +751,7 @@ def register(app):
                                          else "stale" if tone == "red" else "not loaded")), esc(word)]
                  for (label, word, tone) in source_health(app, s.scope)]
         # import controls: one browser file-upload per source, staged then run through the existing orchestrator
-        _fmt = {"new_inventory_current": ".csv", "speed_to_sell": ".xlsx",
+        _fmt = {"new_inventory_current": ".xlsx,.csv", "speed_to_sell": ".xlsx",
                 "service_loaner_fleet": ".csv", "retail_history": ".csv"}
         imp = ""
         for label, key, _g, _y in SOURCE_INDICATORS:
@@ -757,7 +760,7 @@ def register(app):
                     f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
                     f'<input type=hidden name=contract value="{esc(key)}">'
                     f'<label>Update {esc(label)} (accepts {esc(_fmt.get(key, ""))})</label>'
-                    f'<input type=file name=file id="{fid}" '
+                    f'<input type=file name=file id="{fid}" accept="{esc(_fmt.get(key, ""))}" '
                     f'onchange="var n=this.files[0]?this.files[0].name:&quot;&quot;;'
                     f'document.getElementById(&quot;{fid}_n&quot;).textContent=n">'
                     f'<div id="{fid}_n" class="muted" style="margin:4px 0"></div>'
@@ -823,7 +826,13 @@ def register(app):
     def data_import(app, req):
         s = req.session
         app.require(s, "workspace.view")
-        s.flash = _run_upload(app, s.scope, req.form.get("contract"), req.files.get("file"))
+        contract = req.form.get("contract")
+        upload = req.files.get("file")
+        if contract == "new_inventory_current" and upload:
+            filename = (upload[0] or "").lower()
+            if filename.endswith(".xlsx"):
+                contract = "new_inventory_pipeline_summary"
+        s.flash = _run_upload(app, s.scope, contract, upload)
         return Response.redirect("/data")
 
     @app.post("/data/bench")
@@ -1012,6 +1021,263 @@ def _mileage_velocity(u):
     return round(total_mi / total_days, 1) if total_days else None
 
 
+
+def _parse_external_trade_inventory(raw):
+    """Parse temporary counterparty inventory.
+
+    Supports:
+      * copied NNA markdown-table inventory rows;
+      * legacy one-unit-per-line free text.
+
+    Counterparty units remain external evidence only. Nothing here creates Supply.
+    """
+    import re
+
+    if isinstance(raw, (list, tuple)):
+        text = "\n".join(str(x) for x in raw)
+    else:
+        text = str(raw or "")
+
+    units = []
+
+    # Actual browser clipboard from NNA is tab-separated plain text:
+    # Mi, Dealer, Stock#, Serial, Description, Trans, Ext, Int,
+    # MSRP, Inv, DIS, ETA, Body Style.
+    #
+    # The browser strips the hidden Model Code metadata. For QX65 the same
+    # authoritative NNA feed established these description -> certified-code
+    # relationships:
+    #   QX65 LUXE AWD  -> 8501
+    #   QX65 SPORT AWD -> 8511
+    #   QX65 AUTO AWD  -> 8521
+    qx65_description_codes = {
+        "QX65 LUXE AWD": "8501",
+        "QX65 SPORT AWD": "8511",
+        "QX65 AUTO AWD": "8521",
+    }
+
+    for line in text.splitlines():
+        if "\t" not in line:
+            continue
+        cells = [c.strip() for c in line.split("\t")]
+        if len(cells) < 13:
+            continue
+
+        mi, dealer, stock, serial, description, trans, ext, interior, \
+            msrp_cell, inv_cell, dis_cell, eta, body_style = cells[:13]
+
+        description_u = description.upper()
+        model_match = re.search(r"\b(QX\d+)\b", description_u)
+        model = model_match.group(1) if model_match else ""
+        model_code = qx65_description_codes.get(description_u, "")
+
+        def money(v):
+            m = re.search(r"([\d,]+)", v or "")
+            return int(m.group(1).replace(",", "")) if m else None
+
+        dm = re.search(r"\d+", dis_cell or "")
+        dis = int(dm.group(0)) if dm else 0
+
+        ext = ext.upper()
+        interior = interior.upper()
+        identity = " ".join(x for x in (
+            model,
+            model_code,
+            f"{ext}/{interior}" if ext and interior else ""
+        ) if x)
+
+        units.append({
+            "source_index": len(units),
+            "dealer": dealer,
+            "miles": mi,
+            "stock_number": stock,
+            "serial": serial,
+            "model_code_raw": "",
+            "model_code": model_code,
+            "model": model,
+            "description": description,
+            "trans": trans,
+            "ext": ext,
+            "int": interior,
+            "msrp": money(msrp_cell),
+            "invoice": money(inv_cell),
+            "dis": dis,
+            "eta": eta,
+            "body_style": body_style,
+            "identity": identity or description,
+            "raw": line,
+            "structured": True,
+        })
+
+    if units:
+        return units
+
+    # NNA copied table rows. A real vehicle row contains the Stock# followed by
+    # a markdown Serial link whose title carries "Model Code - NNNNN".
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        if "Model Code -" not in line:
+            continue
+
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 14:
+            continue
+
+        try:
+            # Expected NNA layout:
+            # blank, Mi, Dealer, Stock#, Serial-link, Description, Trans,
+            # Ext, Int, MSRP, Inv, DIS, ETA, Body Style
+            mi = cells[1]
+            dealer = cells[2]
+            stock = cells[3]
+            serial_cell = cells[4]
+            description = cells[5]
+            trans = cells[6]
+            ext = cells[7].upper()
+            interior = cells[8].upper()
+            msrp_cell = cells[9]
+            inv_cell = cells[10]
+            dis_cell = cells[11]
+            eta = cells[12]
+            body_style = cells[13]
+
+            mm = re.search(r"Model Code\s*-\s*(\d+)", serial_cell, re.I)
+            model_code_raw = mm.group(1) if mm else ""
+            # NNA feed currently carries a five-digit lifecycle code such as
+            # 85217 while Elite's certified sellable identity uses 8521.
+            model_code = model_code_raw[:4] if len(model_code_raw) >= 4 else model_code_raw
+
+            sm = re.search(r"\[([A-Za-z0-9]+)\]", serial_cell)
+            serial = sm.group(1) if sm else ""
+
+            model_match = re.search(r"\b(QX\d+)\b", description.upper())
+            model = model_match.group(1) if model_match else ""
+
+            def money(v):
+                m = re.search(r"([\d,]+)", v or "")
+                return int(m.group(1).replace(",", "")) if m else None
+
+            dm = re.search(r"\d+", dis_cell or "")
+            dis = int(dm.group(0)) if dm else 0
+
+            identity = " ".join(x for x in (
+                model,
+                model_code,
+                f"{ext}/{interior}" if ext and interior else ""
+            ) if x)
+
+            units.append({
+                "source_index": len(units),
+                "dealer": dealer,
+                "miles": mi,
+                "stock_number": stock,
+                "serial": serial,
+                "model_code_raw": model_code_raw,
+                "model_code": model_code,
+                "model": model,
+                "description": description,
+                "trans": trans,
+                "ext": ext,
+                "int": interior,
+                "msrp": money(msrp_cell),
+                "invoice": money(inv_cell),
+                "dis": dis,
+                "eta": eta,
+                "body_style": body_style,
+                "identity": identity or description,
+                "raw": line,
+                "structured": True,
+            })
+        except Exception:   # noqa: BLE001
+            # A malformed counterparty row is ignored rather than fabricated.
+            continue
+
+    if units:
+        return units
+
+    # Backward-compatible free-text mode for quick/manual candidate entry.
+    for line in (ln.strip() for ln in text.splitlines()):
+        if not line:
+            continue
+        model_match = re.search(r"\b(QX\d+)\b", line.upper())
+        model = model_match.group(1) if model_match else ""
+        units.append({
+            "source_index": len(units),
+            "model": model,
+            "model_code": "",
+            "ext": "",
+            "int": "",
+            "stock_number": "",
+            "serial": "",
+            "description": line,
+            "dis": 0,
+            "identity": line,
+            "raw": line,
+            "structured": False,
+        })
+    return units
+
+
+def _score_external_trade_candidate(unit, short):
+    """Rank a counterparty unit against the certified current shortage board.
+
+    Specificity dominates:
+      exact certified combination > same model-code/color neighborhood >
+      same model-code > generic same-model relief.
+
+    Returns (score, reason, matched_shortage_qty).
+    """
+    model = (unit.get("model") or "").upper()
+    code = (unit.get("model_code") or "").upper()
+    ext = (unit.get("ext") or "").upper()
+    interior = (unit.get("int") or "").upper()
+
+    best_score = 0
+    best_reason = "No current shortage match"
+    best_qty = 0
+
+    for need in short:
+        need_identity = (need.get("identity") or "").upper()
+        need_model = (need.get("model") or "").upper()
+        qty = int(need.get("qty", 0) or 0)
+
+        if not model or model != need_model:
+            continue
+
+        # Parse certified readable identity, e.g. QX65 8521 GAT/N.
+        parts = need_identity.split()
+        need_code = parts[1] if len(parts) > 1 else ""
+        colors = parts[2] if len(parts) > 2 else ""
+        if "/" in colors:
+            need_ext, need_int = colors.split("/", 1)
+        else:
+            need_ext, need_int = "", ""
+
+        if code and code == need_code and ext == need_ext and interior == need_int:
+            score = 1000 + qty * 100
+            reason = f"Exact shortage: {need['identity']} (need {qty})"
+        elif code and code == need_code and ext and ext == need_ext:
+            score = 700 + qty * 50
+            reason = f"Same model code + exterior as shortage: {need['identity']}"
+        elif code and code == need_code and interior and interior == need_int:
+            score = 650 + qty * 50
+            reason = f"Same model code + interior as shortage: {need['identity']}"
+        elif code and code == need_code:
+            score = 500 + qty * 40
+            reason = f"Same model code as shortage: {need['identity']}"
+        else:
+            score = 100 + qty * 10
+            reason = f"Model-level shortage relief: {need_model}"
+
+        if score > best_score:
+            best_score = score
+            best_reason = reason
+            best_qty = qty
+
+    return best_score, best_reason, best_qty
+
 def _their_trade(app, s, short, over):
     st = _ws_get(app, s.scope, "trade_their", {}) or {}
     combos = [lbl for _cid, lbl in _known_combos(app, s.scope)]
@@ -1020,7 +1286,8 @@ def _their_trade(app, s, short, over):
                  + _datalist_input("requested", "their_req_combos", combos, value=st.get("requested", ""),
                                    placeholder="select our combination")
                  + '<label>Their inventory snapshot (external — one unit / combination per line)</label>'
-                 '<textarea name=inv rows=6 style="max-width:520px">' + esc("\n".join(st.get("inv", []))) + '</textarea>',
+                 '<textarea name=inv rows=10 style="max-width:760px">' + esc(
+                     st.get("inv_raw", "\n".join(st.get("inv", [])))) + '</textarea>',
                  csrf=s.csrf_token, submit="Evaluate trade")
     out = '<div class="card"><h2>Their Trade</h2><p class="muted">Help the other store while protecting our own '
     out += 'inventory. External inventory never becomes our supply until a trade is committed.</p>' + entry + '</div>'
@@ -1034,27 +1301,79 @@ def _their_trade(app, s, short, over):
                   if alt else 'No over-stocked alternative is available to offer instead.')) if harmful \
             else f'Releasing “{esc(req)}” is reasonable — it is not a combination we are short on.'
         out += f'<div class="card"><h3>Should we release what they asked for?</h3><p>{rec}</p></div>'
-    # rank what to ask back: their lines matching a model we are short on rank highest; unavailable promote next
-    inv, unavail = st.get("inv", []), set(st.get("unavail", []))
+    # Parse the counterparty snapshot into actual external vehicles, then rank each
+    # against the certified combination-level shortage board.
+    raw_inventory = st.get("inv_raw", "\n".join(st.get("inv", [])))
+    candidates = _parse_external_trade_inventory(raw_inventory)
+    unavail = set(st.get("unavail", []))
+
     scored = []
-    for i, line in enumerate(inv):
-        score = sum(b["qty"] for b in short if b["model"] and b["model"] in line.upper())
-        scored.append((i, line, score))
-    scored.sort(key=lambda t: (-(t[0] not in unavail), -t[2], t[1]))
+    for i, unit in enumerate(candidates):
+        score, reason, shortage_qty = _score_external_trade_candidate(unit, short)
+        # Older external units are preferred only as a tie-breaker: they may be easier
+        # for the counterparty dealer to release. Business fit always dominates age.
+        scored.append((i, unit, score, reason, shortage_qty))
+
+    scored.sort(key=lambda t: (
+        t[0] in unavail,             # available first
+        -t[2],                       # strongest business fit
+        -int(t[1].get("dis", 0) or 0),  # older first only within equal fit
+        t[1].get("stock_number", ""),
+        t[1].get("identity", ""),
+    ))
+
     rows = []
-    for rank, (i, line, score) in enumerate([t for t in scored if t[0] not in unavail], 1):
+    available = [t for t in scored if t[0] not in unavail]
+    for rank, (i, unit, score, reason, shortage_qty) in enumerate(available, 1):
         tag = "Best ask" if rank == 1 else f"#{rank}"
-        rows.append([esc(tag), esc(line), esc(score),
-                     safe(_ws_btn(s, "/dealer-trade/their/unavailable", "idx", str(i), "Unavailable"))])
-    for i in sorted(unavail):
-        if i < len(inv):
-            rows.append([safe(badge("stale", "unavailable")), esc(inv[i]), esc("—"), safe("")])
-    out += ('<div class="card"><h3>What we should ask for back (ranked)</h3>'
-            '<p class="muted">Ranked by how much it relieves a combination we are short on. Mark a candidate '
-            'Unavailable to promote the next best.</p>'
-            + table(["Rank", "Their unit / combination", "Fit score", ""], rows) + '</div>') if inv else \
-        (out + empty("Paste their inventory to rank the best ask."))
+
+        if unit.get("structured"):
+            label = unit.get("identity") or unit.get("description")
+            detail = []
+            if unit.get("stock_number"):
+                detail.append(f"Stock {unit['stock_number']}")
+            if unit.get("description"):
+                detail.append(unit["description"])
+            if unit.get("dis"):
+                detail.append(f"DIS {unit['dis']}")
+            display = label + (" | " + " | ".join(detail) if detail else "")
+        else:
+            display = unit.get("identity", "")
+
+        fit = f"{score} | {reason}"
+        rows.append([
+            esc(tag),
+            esc(display),
+            esc(fit),
+            safe(_ws_btn(s, "/dealer-trade/their/unavailable", "idx", str(i), "Unavailable"))
+        ])
+
+    for i, unit, score, reason, shortage_qty in scored:
+        if i not in unavail:
+            continue
+        display = unit.get("identity") or unit.get("description") or unit.get("raw", "")
+        rows.append([
+            safe(badge("stale", "unavailable")),
+            esc(display),
+            esc("?"),
+            safe("")
+        ])
+
+    if candidates:
+        parsed_note = (
+            f'<p class="muted">{len(candidates)} external candidate'
+            f'{"s" if len(candidates) != 1 else ""} parsed. '
+            'Exact certified combination shortages rank ahead of model-level matches. '
+            'External units do not become our supply until a trade is committed.</p>'
+        )
+        out += ('<div class="card"><h3>What we should ask for back (ranked)</h3>'
+                + parsed_note
+                + table(["Rank", "Their unit / combination", "Fit", ""], rows)
+                + '</div>')
+    else:
+        out += empty("Paste their inventory to rank the best ask.")
     return out
+
 
 
 def _our_trade(app, s, short, over):

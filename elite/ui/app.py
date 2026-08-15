@@ -222,9 +222,15 @@ def source_health(app, scope):
     for label, key, green_max, yellow_max in SOURCE_INDICATORS:
         row = None
         try:
-            row = conn.execute(
-                "SELECT received_at FROM import_run WHERE source_contract=? AND store_scope=? "
-                "AND accepted_count>0 ORDER BY received_at DESC LIMIT 1", (key, scope)).fetchone()
+            if key == "new_inventory_current":
+                row = conn.execute(
+                    "SELECT received_at FROM import_run WHERE source_contract IN (?,?) AND store_scope=? "
+                    "AND accepted_count>0 ORDER BY received_at DESC LIMIT 1",
+                    ("new_inventory_current", "new_inventory_pipeline_summary", scope)).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT received_at FROM import_run WHERE source_contract=? AND store_scope=? "
+                    "AND accepted_count>0 ORDER BY received_at DESC LIMIT 1", (key, scope)).fetchone()
         except Exception:   # noqa: BLE001
             row = None
         if not row or not row["received_at"]:

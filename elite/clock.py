@@ -62,6 +62,34 @@ def local_business_date(t, tz_name: str = "America/Chicago") -> str:
         from zoneinfo import ZoneInfo
         return t.astimezone(ZoneInfo(tz_name)).strftime("%Y-%m-%d")
     except Exception:
+        # Windows/Python installations may not include the IANA tz database.
+        # Preserve the dealership's America/Chicago business-date semantics
+        # deterministically instead of silently degrading to UTC.
+        if tz_name == "America/Chicago":
+            utc = t.astimezone(_dt.timezone.utc)
+            year = utc.year
+
+            # U.S. DST: second Sunday in March, transition at 08:00 UTC
+            # (02:00 CST -> 03:00 CDT).
+            march_1 = _dt.date(year, 3, 1)
+            first_sun_march = 1 + ((6 - march_1.weekday()) % 7)
+            second_sun_march = first_sun_march + 7
+            dst_start = _dt.datetime(
+                year, 3, second_sun_march, 8, 0, tzinfo=_dt.timezone.utc
+            )
+
+            # U.S. DST: first Sunday in November, transition at 07:00 UTC
+            # (02:00 CDT -> 01:00 CST).
+            nov_1 = _dt.date(year, 11, 1)
+            first_sun_nov = 1 + ((6 - nov_1.weekday()) % 7)
+            dst_end = _dt.datetime(
+                year, 11, first_sun_nov, 7, 0, tzinfo=_dt.timezone.utc
+            )
+
+            offset_hours = -5 if dst_start <= utc < dst_end else -6
+            local = utc + _dt.timedelta(hours=offset_hours)
+            return local.strftime("%Y-%m-%d")
+
         return t.astimezone(_dt.timezone.utc).strftime("%Y-%m-%d")
 
 

@@ -136,6 +136,7 @@ class TestPhase2Data(unittest.TestCase):
         self.assertIs(normalize_scalar("N/A"), Special.NA)
         self.assertNotEqual(Special.UNKNOWN, Special.NA)
         self.assertIsNot(normalize_scalar(None), normalize_scalar(""))  # MISSING vs BLANK distinct
+        self.assertEqual(normalize_scalar("2026-02-10 14:07:02 UTC", "date"), "2026-02-10")
 
     def test_16_invalid_value_cannot_become_authoritative_fact(self):
         b = self.p.ingest_dms([dict(stock_number="N1", vin=GOOD_VIN, model="qx80", mileage="abc")])

@@ -80,10 +80,12 @@ def normalize_scalar(raw, kind: str = "text"):
             return f"{m.group(2)}-{int(m.group(1)):02d}"
         return Special.INVALID
     if kind == "date":
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
-            y, m, d = map(int, s.split("-"))
+        iso = re.match(r"^(\d{4}-\d{2}-\d{2})(?:\s|T|$)", s)
+        if iso:
+            date_part = iso.group(1)
+            y, m, d = map(int, date_part.split("-"))
             if 1 <= m <= 12 and 1 <= d <= 31:
-                return s
+                return date_part
         m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", s)
         if m and 1 <= int(m.group(1)) <= 12 and 1 <= int(m.group(2)) <= 31:
             return f"{m.group(3)}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"

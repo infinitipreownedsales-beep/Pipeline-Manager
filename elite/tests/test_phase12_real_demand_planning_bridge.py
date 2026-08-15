@@ -318,6 +318,26 @@ def _by_code(res, code):
 
 
 class TestDecisionEngineCorrection(unittest.TestCase):
+    def test_dms_model_code_prefixes_match_real_speed_to_sell_families(self):
+        from elite.newinv.dms_identity import dms_planning_key
+
+        cases = (
+            ("8131", "QX50"),
+            ("8211", "QX55"),
+            ("8331", "QX80"),
+            ("8481", "QX60"),
+            ("8521", "QX65"),
+        )
+
+        for code, expected_model in cases:
+            with self.subTest(code=code):
+                key = dms_planning_key({
+                    "model_code": code,
+                    "exterior": "QBE",
+                    "interior": "G",
+                })
+                self.assertEqual(key[0], expected_model)
+
     # (2/3) sparse explosion killed: a single partial-month sale no longer yields ~Need 5
     def test_sparse_single_sale_does_not_explode(self):
         rows = _panel(extra=[D("202608", "SPARSE0000000001", "5", "8599", "QBE", "G", model="QX65 SPORT")])
@@ -331,7 +351,7 @@ class TestDecisionEngineCorrection(unittest.TestCase):
     # (5/8) historical DTS is risk evidence: a persistent 180-day mover is dampened, not stocked deep
     def test_slow_mover_dts_burden_suppresses_depth(self):
         slow = [D(f"2025{(j % 12) + 1:02d}", f"SLOW{j:02d}00000000X", "180", "8131", "QBE", "W",
-                  model="QX65") for j in range(8)]
+                  model="QX50") for j in range(8)]
         _p, res = _run(_panel(extra=slow), [])
         o = _by_code(res, "8131")
         self.assertIsNotNone(o)
