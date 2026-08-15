@@ -1468,11 +1468,43 @@ def _run_upload(app, scope, contract_key, upload):
         payload = data
     try:
         run = ops.orch.run(contract_key=contract_key, payload=payload, source_id=src_id, scope=scope,
-                           initiated_by="operator", claimed_snapshot="partial",
+                           initiated_by="operator", claimed_snapshot=("full" if contract_key == "service_loaner_fleet" else "partial"),
                            content_hash=content_hash(payload))
         state = (run["state"] if run else "UNKNOWN")
         if state in ("COMPLETED", "COMPLETED_WITH_WARNINGS"):
-            return f"Imported {safe} into {contract_key} — {state}."
+            if contract_key == "service_loaner_fleet" and run["import_batch_id"]:
+                try:
+                    from ...loaner.snapshot import SnapshotService
+
+                    p6 = app.p9.p8.p7.p6
+                    batch = ops.data.get_batch(run["import_batch_id"])
+                    already_projected = (
+                        p6.store.conn.execute(
+                            "SELECT 1 FROM service_loaner_snapshot_reconciliation "
+                            "WHERE import_batch_id=? AND store_scope=? LIMIT 1",
+                            (batch.id, scope),
+                        ).fetchone()
+                        if batch else None
+                    )
+                    if batch and not already_projected:
+                        accepted_rows = []
+                        for obs in ops.data.list_observations(batch.id):
+                            if obs is None or obs.acceptance_status != "accepted":
+                                continue
+                            row = dict(obs.raw_values or {})
+                            normalized = obs.normalized_values or {}
+                            row["rental_status"] = normalized.get("status") or row.get("status")
+                            accepted_rows.append(row)
+                        projector = SnapshotService(
+                            p6.store, ops.data, ops.ingestion, app.stack.clock, scope
+                        )
+                        projector.reconcile(batch, accepted_rows)
+                except Exception as e:
+                    return (
+                        f"Imported {safe} into {contract_key} - {state}, but the Service Loaner "
+                        f"operating-fleet projection did not complete: {e}. Review required."
+                    )
+            return f"Imported {safe} into {contract_key} - {state}."
         return (f"Import of {safe} did not complete ({state}); previous data is unchanged and freshness "
                 "was not updated.")
     except Exception as e:   # noqa: BLE001

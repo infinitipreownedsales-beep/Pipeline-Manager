@@ -1,4 +1,4 @@
-"""Browser file upload for the four daily sources: the operator chooses a file in the browser; Elite
+﻿"""Browser file upload for the four daily sources: the operator chooses a file in the browser; Elite
 parses multipart/form-data, sanitizes the filename, stages it in the uploads folder, and runs it through
 the EXISTING ingestion orchestrator. Success updates freshness; failure never does; traversal is rejected;
 no server-path text box remains."""
@@ -49,6 +49,36 @@ class TestDataUpload(unittest.TestCase):
     def test_loaner_upload_reaches_importer(self):
         self._upload("service_loaner_fleet", "icv.csv", LOANER_FULL)
         self.assertGreaterEqual(self._runs("service_loaner_fleet"), 1)
+
+    def test_loaner_upload_projects_to_requested_operator_scope(self):
+        """Regression: accepted ICV rows project into the operator-requested scope,
+        never the Phase-6 fixture construction scope."""
+        from elite.ui.views.operator import _run_upload
+
+        operator_scope = "store:HG_INFINITI_JACKSON"
+        payload = LOANER_FULL.encode("utf-8") if isinstance(LOANER_FULL, str) else LOANER_FULL
+        msg = _run_upload(self.app, operator_scope, "service_loaner_fleet", ("icv.csv", payload))
+        self.assertIn("COMPLETED", msg)
+
+        run = self.conn.execute(
+            "SELECT import_batch_id FROM import_run WHERE source_contract=? AND store_scope=? "
+            "ORDER BY created_at DESC LIMIT 1",
+            ("service_loaner_fleet", operator_scope),
+        ).fetchone()
+        self.assertIsNotNone(run)
+        batch_id = run["import_batch_id"]
+
+        correct = self.conn.execute(
+            "SELECT COUNT(*) FROM service_loaner_unit WHERE store_scope=? AND last_accepted_snapshot=?",
+            (operator_scope, batch_id),
+        ).fetchone()[0]
+        wrong = self.conn.execute(
+            "SELECT COUNT(*) FROM service_loaner_unit WHERE store_scope=? AND last_accepted_snapshot=?",
+            (SCOPE, batch_id),
+        ).fetchone()[0]
+
+        self.assertGreater(correct, 0)
+        self.assertEqual(wrong, 0)
 
     def test_speed_to_sell_upload_reaches_importer(self):
         self._upload("speed_to_sell", "sts.xlsx", b"PK\x03\x04 not-a-real-xlsx")
