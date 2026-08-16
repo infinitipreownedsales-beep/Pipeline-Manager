@@ -70,8 +70,9 @@ class LoanerCockpit:
 
     def note(self):
         if not self.economically_determined:
-            return ("Economic Ideal Mix is undetermined: per-unit ICV, Velocity and preowned-DTS inputs "
-                    "have not been loaded for this fleet yet. Load them in Data to rank IN / HOLD / OUT.")
+            return ("Economic Ideal Mix is undetermined: the complete real per-unit economics required "
+                    "for IN / HOLD / OUT are not available yet. Preowned market evidence may be shown "
+                    "separately, but no economic ranking is created until the remaining required inputs are loaded.")
         return self.mix.note if self.mix else ""
 
 

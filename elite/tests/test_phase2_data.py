@@ -137,12 +137,29 @@ class TestPhase2Data(unittest.TestCase):
         self.assertNotEqual(Special.UNKNOWN, Special.NA)
         self.assertIsNot(normalize_scalar(None), normalize_scalar(""))  # MISSING vs BLANK distinct
         self.assertEqual(normalize_scalar("2026-02-10 14:07:02 UTC", "date"), "2026-02-10")
+        self.assertEqual(normalize_scalar("20210312", "date"), "2021-03-12")
 
     def test_16_invalid_value_cannot_become_authoritative_fact(self):
         b = self.p.ingest_dms([dict(stock_number="N1", vin=GOOD_VIN, model="qx80", mileage="abc")])
         self.assertEqual(b.quarantined_count, 1)
         self.assertEqual(b.accepted_count, 0)
         self.assertEqual(self._facts(), 0)
+
+    def test_17_observation_only_invalid_typed_value_is_quarantined(self):
+        b = self.p.ingestion.ingest(
+            source_id="src_feed",
+            profile_version=1,
+            rows=[dict(stock_number="N1", vin=GOOD_VIN, model="qx80", mileage="abc")],
+            raw_text="observation-invalid-value",
+            scope="store:HG",
+            entity_kind="retail_sale_observation",
+            fact_type="",
+        )
+        self.assertEqual(b.quarantined_count, 1)
+        self.assertEqual(b.accepted_count, 0)
+        obs = self.p.store.list_observations(b.id)[0]
+        self.assertEqual(obs.validation_status, "quarantined")
+        self.assertEqual(obs.acceptance_status, "quarantined")
 
     def test_31_every_row_has_reconciliation_outcome(self):
         rows, _ = self.cases["conflicting_duplicate"]

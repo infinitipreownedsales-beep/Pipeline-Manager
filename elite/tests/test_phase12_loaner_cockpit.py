@@ -4,12 +4,14 @@ real per-unit economics are loaded."""
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from elite.ui.fixtures import Phase10
 from elite.workflow.fixtures import SCOPE
 from elite.loaner.loaner_cockpit import MetaPrefs, build_cockpit, set_desired_fleet
 from elite.loaner import placement_settings as PS
 from elite.loaner.ideal_mix import UnitEcon
+from elite.loaner.preowned_evidence import ModelEvidence, PreownedEvidence, summarize_model_sales
 
 
 class TestLoanerCockpit(unittest.TestCase):
@@ -68,6 +70,51 @@ class TestLoanerCockpit(unittest.TestCase):
         self.assertIn("Current fleet", r.body)
         self.assertIn("Ideal fleet", r.body)
         self.assertIn("20", r.body)                          # desired fleet shown
+
+    def test_preowned_evidence_summarizes_dts_without_inventing_economics(self):
+        rows = [
+            {"model": "QX60", "days_to_sell": 28},
+            {"model": "QX60", "days_to_sell": 34},
+            {"model": "QX60", "days_to_sell": 70},
+            {"model": "QX80", "days_to_sell": 15},
+        ]
+        ev = summarize_model_sales(rows, {"QX60": 7})
+        self.assertEqual(len(ev), 1)
+        self.assertEqual(ev[0].model, "QX60")
+        self.assertEqual(ev[0].active_units, 7)
+        self.assertEqual(ev[0].sales_count, 3)
+        self.assertEqual(ev[0].numeric_dts_count, 3)
+        self.assertEqual(ev[0].median_dts, 34.0)
+
+    def test_service_loaner_page_renders_preowned_evidence_without_determining_mix(self):
+        evidence = PreownedEvidence(
+            retail_received_at="2026-08-15T21:00:00+00:00",
+            models=(
+                ModelEvidence(
+                    model="QX60",
+                    active_units=27,
+                    sales_count=757,
+                    numeric_dts_count=751,
+                    median_dts=34.0,
+                ),
+            ),
+            retail_history_loaded=True,
+            fleet_models_resolved=True,
+        )
+
+        with patch("elite.loaner.preowned_evidence.build_preowned_evidence", return_value=evidence):
+            r = self.full.get("/service-loaner")
+
+        self.assertEqual(r.status, 200)
+        self.assertIn("Preowned Market Evidence", r.body)
+        self.assertIn("QX60", r.body)
+        self.assertIn("757", r.body)
+        self.assertIn("751", r.body)
+        self.assertIn("34 days", r.body)
+
+        ck = build_cockpit(self.conn, SCOPE, self.p.app.prefs, self._month())
+        self.assertFalse(ck.economically_determined)
+        self.assertIsNone(ck.ideal_fleet)
 
     # setting desired fleet through the governed POST persists across a reload
     def test_set_desired_fleet_post(self):

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 
+from ..data.identity import resolve_vehicle
 from ..data.normalize import normalize_vin, vin_status
 from ..ids import new_id
 from .models import ServiceLoanerUnit
@@ -55,11 +56,22 @@ class SnapshotService:
             present.add(vin)
             rental = row.get("rental_status")
             conflicting = bool(row.get("conflicting_state"))
+
+            # Service Loaner membership and Phase 2 physical identity must share the
+            # canonical scoped VehicleUnit. Never manufacture an ID-shaped reference
+            # such as ``vu_<VIN>`` when no such VehicleUnit exists.
+            _, vehicle, _ = resolve_vehicle(self.data, vin, self.scope)
+            if vehicle is None:
+                self.store.add_snapshot_recon(batch.id, snapshot_type, self.scope, vin, None,
+                                              "VEHICLE_IDENTITY_UNRESOLVED")
+                bump("VEHICLE_IDENTITY_UNRESOLVED")
+                continue
+
             unit = self.store.unit_for_vin(vin, self.scope, active_only=True)
             if unit is None:
                 unit = self.store.add_unit(ServiceLoanerUnit(
                     id=new_id("slu"), store_scope=self.scope, vin=vin,
-                    vehicle_unit_id=row.get("vehicle_unit_id") or f"vu_{vin}",
+                    vehicle_unit_id=vehicle.id,
                     combination_id=row.get("combination_id"),
                     membership_state=("ACTIVE_RENTED" if rental == "rented" else "ACTIVE_AVAILABLE"),
                     current_rental_state=rental, last_accepted_snapshot=batch.id, active_fleet_presence=True,
@@ -67,8 +79,12 @@ class SnapshotService:
                 outcome = "MEMBER_ADDED"
             else:
                 with self.store.conn:
-                    self.store.set_unit_field(self.store.conn, unit.id, current_rental_state=rental,
-                                              last_accepted_snapshot=batch.id, active_fleet_presence=1)
+                    self.store.set_unit_field(
+                        self.store.conn, unit.id,
+                        vehicle_unit_id=vehicle.id,
+                        current_rental_state=rental,
+                        last_accepted_snapshot=batch.id,
+                        active_fleet_presence=1)
                 outcome = "MEMBER_CONFIRMED"
             if conflicting:
                 outcome = "CONFLICTING_STATE"

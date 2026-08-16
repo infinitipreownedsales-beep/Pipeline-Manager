@@ -38,6 +38,34 @@ class TestPhase6Snapshot(unittest.TestCase):
         self.assertIsNotNone(u.vehicle_unit_id)               # Vehicle Unit identity present
         self.assertNotEqual(u.id, u.vehicle_unit_id)          # SL Unit id does not replace it
 
+    def test_02b_vehicle_unit_id_resolves_to_canonical_vehicle(self):
+        self._ingest([{"vin": VIN, "rental_status": "available"}])
+        u = self.p.store.unit_for_vin(VIN, SCOPE)
+        v = self.p.data.get_vehicle(u.vehicle_unit_id)
+        self.assertIsNotNone(v)
+        self.assertEqual(v.vin, VIN)
+        self.assertEqual(v.store_scope, SCOPE)
+
+    def test_02c_reconcile_repairs_legacy_synthetic_vehicle_unit_id(self):
+        self._ingest([{"vin": VIN, "rental_status": "available"}])
+        u = self.p.store.unit_for_vin(VIN, SCOPE)
+
+        with self.p.store.conn:
+            self.p.store.set_unit_field(self.p.store.conn, u.id, vehicle_unit_id=f"vu_{VIN}")
+
+        broken = self.p.store.unit_for_vin(VIN, SCOPE)
+        self.assertEqual(broken.vehicle_unit_id, f"vu_{VIN}")
+        self.assertIsNone(self.p.data.get_vehicle(broken.vehicle_unit_id))
+
+        self._ingest([{"vin": VIN, "rental_status": "rented"}])
+
+        repaired = self.p.store.unit_for_vin(VIN, SCOPE)
+        vehicle = self.p.data.get_vehicle(repaired.vehicle_unit_id)
+        self.assertIsNotNone(vehicle)
+        self.assertEqual(vehicle.vin, VIN)
+        self.assertNotEqual(repaired.vehicle_unit_id, f"vu_{VIN}")
+        self.assertEqual(repaired.current_rental_state, "rented")
+
     def test_04_valid_full_snapshot_reconciles_by_vin(self):
         _b, s = self._ingest([{"vin": VIN, "rental_status": "available"},
                               {"vin": VIN2, "rental_status": "rented"}])

@@ -50,7 +50,9 @@ def _kind(name):
         return "month"
     if n.endswith("_date") or n == "sold_date":
         return "date"
-    if n in ("mileage", "last_checkout_mileage", "year", "value", "residual", "price"):
+    if n in ("price", "vehicle_cost", "gross_profit"):
+        return "number"
+    if n in ("mileage", "last_checkout_mileage", "year", "value", "residual", "days_to_sell"):
         return "int"
     return "text"
 
@@ -92,8 +94,11 @@ class Phase11:
                                   logger=self.oplog)
         self.intake = FileIntake(self.ops, max_bytes=self.opsconfig.max_upload_bytes)
 
+        # Source contracts/schema profiles are runtime infrastructure, not synthetic seed data.
+        # Reconcile them on every startup so production (seed=False) receives declared schema upgrades.
+        self._register_sources()
+
         if seed:
-            self._register_sources()
             self._operators()
             self._register_jobs()
 
@@ -101,8 +106,9 @@ class Phase11:
     def _register_sources(self):
         for contract in SOURCE_CONTRACTS.values():
             sid = self.source_id(contract.key)
-            if self.data.get_source(sid) is not None:
-                continue
+            version = contract.schema_version
+            profile_id = f"{sid}_p{version}"
+
             names, seen = [], set()
             for f in (list(contract.required_fields) + list(contract.optional_fields)
                       + list(contract.identity_keys)):
@@ -112,11 +118,25 @@ class Phase11:
                       for n in names]
             auth = [contract.fact_type] if contract.fact_type else []
             snap = contract.snapshot_capability in ("full", "full_or_partial")
-            self.data.add_source(SourceRegistry(
-                id=sid, name=contract.key, owner=contract.owner, source_type=contract.source_system,
-                supported_profiles=[sid + "_p1"], authoritative_fact_types=auth, scope=SCOPE))
-            self.data.add_profile(SchemaProfile(id=sid + "_p1", source_id=sid, version=1, fields=fields,
-                                                snapshot_capable=snap, full_snapshot_requirements={}))
+
+            source = self.data.get_source(sid)
+            if source is None:
+                self.data.add_source(SourceRegistry(
+                    id=sid, name=contract.key, owner=contract.owner, source_type=contract.source_system,
+                    supported_profiles=[profile_id], authoritative_fact_types=auth, scope=SCOPE))
+            elif profile_id not in source.supported_profiles:
+                profiles = list(source.supported_profiles) + [profile_id]
+                with self.data.conn:
+                    self.data.conn.execute(
+                        "UPDATE source_registry SET supported_profiles=? WHERE id=?",
+                        (__import__("json").dumps(profiles), sid),
+                    )
+
+            if self.data.get_profile(sid, version) is None:
+                self.data.add_profile(SchemaProfile(
+                    id=profile_id, source_id=sid, version=version, fields=fields,
+                    snapshot_capable=snap, full_snapshot_requirements={}
+                ))
 
     @staticmethod
     def source_id(contract_key):

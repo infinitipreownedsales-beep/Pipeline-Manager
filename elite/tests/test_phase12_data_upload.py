@@ -46,6 +46,113 @@ class TestDataUpload(unittest.TestCase):
         self._upload("retail_history", "preowned.csv", RETAIL_VALID)
         self.assertGreaterEqual(self._runs("retail_history"), 1)
 
+    def test_retail_history_accepts_native_dms_sales_export(self):
+        native = (
+            "Sales Date,Stock Number,Year,Make,Model,Exterior Color,Interior Color,Trim,"
+            "VIN,Days to Sell,Model Number,Vehicle Cost,Vehicle Price,Gross Profit\n"
+            '20210312,P10408,2014,LINCOLN,MKZ,GRAY,,4DR SDN FWD,'
+            '3LN6L2GK3ER821746,-288,,"15,200.67","17,427.38","1,813.71"\n'
+        )
+        self._upload("retail_history", "10YEARSOFUSEDCARSALES.csv", native)
+
+        run = self.conn.execute(
+            "SELECT state, accepted_count, rejected_count FROM import_run "
+            "WHERE source_contract=? AND store_scope=? "
+            "ORDER BY created_at DESC LIMIT 1",
+            ("retail_history", SCOPE),
+        ).fetchone()
+
+        self.assertIsNotNone(run)
+        self.assertIn(run["state"], ("COMPLETED", "COMPLETED_WITH_WARNINGS"))
+        self.assertGreaterEqual(run["accepted_count"], 1)
+        self.assertEqual(run["rejected_count"], 0)
+
+    def test_retail_history_preserves_repeat_vin_as_separate_sale_observations(self):
+        native = (
+            "Sales Date,Stock Number,Year,Make,Model,Exterior Color,Interior Color,Trim,"
+            "VIN,Days to Sell,Model Number,Vehicle Cost,Vehicle Price,Gross Profit\n"
+            '20200716,XP3774A,2015,JEEP,WRANGLER UNLIMI,,,SPORT,'
+            '1C4BJWDG1FL754497,17,,,"23,499.76",0\n'
+            '20240823,T47570B,2015,JEEP,WRANGLER UNLIMI,,,SPORT,'
+            '1C4BJWDG1FL754497,29,,,"19,999.00",0\n'
+        )
+        self._upload("retail_history", "repeat-vin-history.csv", native)
+
+        run = self.conn.execute(
+            "SELECT import_batch_id, accepted_count, duplicate_count "
+            "FROM import_run WHERE source_contract=? AND store_scope=? "
+            "ORDER BY created_at DESC LIMIT 1",
+            ("retail_history", SCOPE),
+        ).fetchone()
+
+        self.assertIsNotNone(run)
+        self.assertEqual(run["accepted_count"], 2)
+        self.assertEqual(run["duplicate_count"], 0)
+
+        batch = self.conn.execute(
+            "SELECT conflicting_count, quarantined_count FROM import_batch WHERE id=?",
+            (run["import_batch_id"],),
+        ).fetchone()
+        self.assertEqual(batch["conflicting_count"], 0)
+        self.assertEqual(batch["quarantined_count"], 0)
+
+        obs = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM source_observation "
+            "WHERE import_batch_id=? AND acceptance_status='accepted'",
+            (run["import_batch_id"],),
+        ).fetchone()["n"]
+        self.assertEqual(obs, 2)
+
+    def test_retail_history_v3_normalizes_preowned_dts_and_economics(self):
+        native = (
+            "Sales Date,Stock Number,Year,Make,Model,Exterior Color,Interior Color,Trim,"
+            "VIN,Days to Sell,Model Number,Vehicle Cost,Vehicle Price,Gross Profit\n"
+            '20210312,P10408,2014,LINCOLN,MKZ,GRAY,,4DR SDN FWD,'
+            '3LN6L2GK3ER821746,-288,ABC123,"15,200.67","17,427.38","1,813.71"\n'
+        )
+        self._upload("retail_history", "retail-v3.csv", native)
+
+        run = self.conn.execute(
+            "SELECT import_batch_id FROM import_run "
+            "WHERE source_contract=? AND store_scope=? "
+            "ORDER BY created_at DESC LIMIT 1",
+            ("retail_history", SCOPE),
+        ).fetchone()
+        self.assertIsNotNone(run)
+
+        batch = self.conn.execute(
+            "SELECT schema_profile_version, accepted_count, quarantined_count "
+            "FROM import_batch WHERE id=?",
+            (run["import_batch_id"],),
+        ).fetchone()
+
+        self.assertEqual(batch["schema_profile_version"], 3)
+        self.assertEqual(batch["accepted_count"], 1)
+        self.assertEqual(batch["quarantined_count"], 0)
+
+        import json
+        obs = self.conn.execute(
+            "SELECT raw_values, normalized_values FROM source_observation "
+            "WHERE import_batch_id=? LIMIT 1",
+            (run["import_batch_id"],),
+        ).fetchone()
+
+        raw = json.loads(obs["raw_values"])
+        norm = json.loads(obs["normalized_values"])
+
+        self.assertEqual(raw["days_to_sell"], "-288")
+        self.assertEqual(norm["sold_date"], "2021-03-12")
+        self.assertEqual(norm["stock_number"], "P10408")
+        self.assertEqual(norm["year"], 2014)
+        self.assertEqual(norm["make"], "LINCOLN")
+        self.assertEqual(norm["model"], "MKZ")
+        self.assertEqual(norm["trim"], "4DR SDN FWD")
+        self.assertEqual(norm["days_to_sell"], -288)
+        self.assertEqual(norm["model_number"], "ABC123")
+        self.assertEqual(norm["vehicle_cost"], 15200.67)
+        self.assertEqual(norm["price"], 17427.38)
+        self.assertEqual(norm["gross_profit"], 1813.71)
+
     def test_loaner_upload_reaches_importer(self):
         self._upload("service_loaner_fleet", "icv.csv", LOANER_FULL)
         self.assertGreaterEqual(self._runs("service_loaner_fleet"), 1)

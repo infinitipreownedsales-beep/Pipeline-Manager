@@ -71,6 +71,12 @@ def normalize_scalar(raw, kind: str = "text"):
             return False           # explicit False, distinct from BLANK/MISSING
         return Special.INVALID
     if kind == "month":
+        compact = re.fullmatch(r"(\d{4})(\d{2})", s)
+        if compact:
+            y, m = map(int, compact.groups())
+            if 1 <= m <= 12:
+                return f"{y:04d}-{m:02d}"
+            return Special.INVALID
         if re.fullmatch(r"\d{4}-\d{2}", s):
             y, m = map(int, s.split("-"))
             if 1 <= m <= 12:
@@ -80,6 +86,12 @@ def normalize_scalar(raw, kind: str = "text"):
             return f"{m.group(2)}-{int(m.group(1)):02d}"
         return Special.INVALID
     if kind == "date":
+        compact = re.fullmatch(r"(\d{4})(\d{2})(\d{2})", s)
+        if compact:
+            y, m, d = map(int, compact.groups())
+            if 1 <= m <= 12 and 1 <= d <= 31:
+                return f"{y:04d}-{m:02d}-{d:02d}"
+            return Special.INVALID
         iso = re.match(r"^(\d{4}-\d{2}-\d{2})(?:\s|T|$)", s)
         if iso:
             date_part = iso.group(1)

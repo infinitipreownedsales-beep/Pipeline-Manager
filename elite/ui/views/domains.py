@@ -19,6 +19,56 @@ def _planning_month(app):
     return to_utc_iso(app.stack.clock.now())[:7]      # 'YYYY-MM'
 
 
+def _preowned_evidence_card(app, s):
+    """Read-only historical resale evidence for models in the active Service Loaner fleet.
+
+    This is evidence only. It does not create ICV, Velocity, or IN / HOLD / OUT economics.
+    """
+    from ...loaner.preowned_evidence import build_preowned_evidence
+
+    ev = build_preowned_evidence(_conn(app), s.scope)
+
+    if not ev.fleet_models_resolved:
+        return (
+            '<div class="card"><h2>Preowned Market Evidence</h2>'
+            '<p class="muted">Active Service Loaner model identity is not yet available from '
+            'the authoritative fleet snapshot, so historical resale evidence cannot be matched safely.</p>'
+            '</div>'
+        )
+
+    if not ev.retail_history_loaded:
+        return (
+            '<div class="card"><h2>Preowned Market Evidence</h2>'
+            '<p class="muted">No completed preowned-history v3 import is available yet. '
+            'No resale absorption estimate has been invented.</p></div>'
+        )
+
+    rows = []
+    for m in ev.models:
+        median = f"{m.median_dts:g} days" if m.median_dts is not None else "?"
+        rows.append([
+            esc(m.model),
+            esc(m.active_units),
+            esc(m.sales_count),
+            esc(m.numeric_dts_count),
+            esc(median),
+        ])
+
+    return (
+        '<div class="card"><h2>Preowned Market Evidence</h2>'
+        '<p>Source-backed dealership resale history for models currently represented in the '
+        'authoritative Service Loaner fleet.</p>'
+        + table(
+            ["Model", "Active loaners", "Historical sales", "Usable DTS", "Median DTS"],
+            rows,
+        )
+        + '<p class="muted">Historical absorption evidence only. It does not create ICV, Velocity, '
+          'IN, HOLD, or OUT values. Economic Ideal Mix remains undetermined until the complete '
+          'real per-unit economics are available.</p>'
+        '</div>'
+    )
+
+
 def _ideal_mix_card(app, s):
     """Service Loaner ECONOMIC Ideal Mix summary: the three fleet counts (Current / Desired / Ideal) never
     conflated, the governed monthly placement requirement, and the IN/HOLD/OUT ranking when real per-unit
@@ -199,6 +249,7 @@ def register(app):
         body = ('<div class="card"><p>Membership state and rental state are shown <strong>separately</strong>. '
                 'Service Loaner is a separate domain from Executive Demo. The Economic Call does not change '
                 'because execution is blocked.</p>' + alert_html + '</div>'
+                + _preowned_evidence_card(app, s)
                 + _ideal_mix_card(app, s)
                 + '<h2>Active fleet</h2>'
                 + table(["VIN", "Membership", "Rental", "Last checkout mileage"], urows))

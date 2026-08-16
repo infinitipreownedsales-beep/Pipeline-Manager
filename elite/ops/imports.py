@@ -139,6 +139,7 @@ class ImportOrchestrator:
             batch = self.ingestion.ingest(**adapter.ingest_kwargs(
                 source_id=source_id, scope=scope, entity_kind=contract.entity_kind,
                 fact_type=contract.fact_type, claimed_snapshot=claimed_snapshot,
+                profile_version=contract.schema_version,
                 effective_time=effective_time, correlation_id=correlation_id, correction_of=correction_of,
                 observed_time=(effective_time if snapshot_bdate is not None else None),
                 snapshot_business_date=snapshot_bdate, snapshot_tz=snapshot_tz))

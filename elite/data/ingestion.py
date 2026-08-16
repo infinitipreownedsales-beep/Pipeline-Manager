@@ -140,10 +140,15 @@ class IngestionService:
                        vstatus, obs, seen, observed_subjects, effective_time, stock_identity=True):
         if vstatus == "rejected":
             return "rejected", "rejected", [], []
-        # Observation-only source (non-physical entity_kind): retain the row as immutable evidence with NO
-        # physical-identity resolution. This creates no VehicleUnit / ProductionOrder / business fact even
-        # when the row carries a VIN (the VIN stays verbatim in the stored observation for the derived
-        # demand/supply bridges). Duplicate-VIN reconciliation is a derived concern, never collapsed here.
+        if vstatus == "quarantined":
+            # Validation applies before physical-vs-observation identity semantics. An
+            # observation-only source must preserve malformed rows as quarantined evidence,
+            # never promote them to accepted evidence merely because no physical identity is resolved.
+            return "quarantined", "quarantined", [], []
+        # Observation-only source (non-physical entity_kind): retain the valid row as immutable evidence
+        # with NO physical-identity resolution. This creates no VehicleUnit / ProductionOrder / business
+        # fact even when the row carries a VIN (the VIN stays verbatim in the stored observation for the
+        # derived demand/supply bridges). Duplicate-VIN reconciliation is a derived concern, never collapsed here.
         if entity_kind not in _PHYSICAL_ENTITY_KINDS:
             return "observation", "accepted", [], []
         key = _record_identity(entity_kind, row, normalized, stock_identity)
