@@ -17,6 +17,33 @@ from dataclasses import dataclass
 import json
 import statistics
 
+# A model-year needs at least this many usable Days-to-Sell observations before its absorption is shown as
+# a defensible comparison rather than an under-sampled hint.
+MIN_MODEL_YEAR_DTS = 8
+
+
+@dataclass(frozen=True)
+class DtsDistribution:
+    """Shape of the historical Days-to-Sell sample (source values only; nothing invented)."""
+    count: int
+    minimum: float | None
+    p25: float | None
+    median: float | None
+    p75: float | None
+    maximum: float | None
+
+
+def _distribution(values):
+    vals = sorted(v for v in values if isinstance(v, (int, float)) and not isinstance(v, bool))
+    if not vals:
+        return DtsDistribution(0, None, None, None, None, None)
+    med = float(statistics.median(vals))
+    if len(vals) >= 2:
+        q1, _q2, q3 = statistics.quantiles(vals, n=4, method="inclusive")
+    else:
+        q1 = q3 = float(vals[0])
+    return DtsDistribution(len(vals), float(vals[0]), float(q1), med, float(q3), float(vals[-1]))
+
 
 @dataclass(frozen=True)
 class ModelEvidence:
@@ -25,6 +52,17 @@ class ModelEvidence:
     sales_count: int
     numeric_dts_count: int
     median_dts: float | None
+    distribution: DtsDistribution | None = None
+
+
+@dataclass(frozen=True)
+class ModelYearEvidence:
+    model: str
+    year: int
+    sales_count: int
+    numeric_dts_count: int
+    median_dts: float | None
+    defensible: bool = False
 
 
 @dataclass(frozen=True)
@@ -33,6 +71,7 @@ class PreownedEvidence:
     models: tuple[ModelEvidence, ...]
     retail_history_loaded: bool
     fleet_models_resolved: bool
+    model_years: tuple[ModelYearEvidence, ...] = ()
 
 
 def _json(value):
@@ -78,7 +117,36 @@ def summarize_model_sales(rows, active_models):
             sales_count=int(sales.get(model, 0)),
             numeric_dts_count=len(values),
             median_dts=(float(statistics.median(values)) if values else None),
+            distribution=_distribution(values),
         ))
+    return tuple(out)
+
+
+def summarize_model_year_sales(rows, active_models, *, min_sample=MIN_MODEL_YEAR_DTS):
+    """Historical resale absorption grouped by (model, year), restricted to models present in the active
+    fleet. `defensible` marks a model-year whose usable DTS sample meets the minimum. Read-only; no economics."""
+    sales = Counter()
+    dts = defaultdict(list)
+    for row in rows:
+        model = row.get("model")
+        year = row.get("year")
+        if not isinstance(model, str):
+            continue
+        model = model.strip().upper()
+        if model not in active_models or not isinstance(year, int) or isinstance(year, bool):
+            continue
+        key = (model, year)
+        sales[key] += 1
+        value = row.get("days_to_sell")
+        if isinstance(value, int) and not isinstance(value, bool):
+            dts[key].append(value)
+    out = []
+    for key in sorted(sales, key=lambda k: (k[0], -k[1])):
+        values = dts.get(key, [])
+        out.append(ModelYearEvidence(
+            model=key[0], year=key[1], sales_count=int(sales[key]), numeric_dts_count=len(values),
+            median_dts=(float(statistics.median(values)) if values else None),
+            defensible=len(values) >= min_sample))
     return tuple(out)
 
 
@@ -165,4 +233,5 @@ def build_preowned_evidence(conn, scope):
         models=summarize_model_sales(rows, active_models),
         retail_history_loaded=True,
         fleet_models_resolved=True,
+        model_years=summarize_model_year_sales(rows, active_models),
     )

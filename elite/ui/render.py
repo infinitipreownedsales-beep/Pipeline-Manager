@@ -68,6 +68,16 @@ input,select,textarea{width:100%;max-width:520px;padding:7px;border:1px solid va
 .err{border-left:4px solid #b00020;background:#fdecef;padding:10px 12px;border-radius:6px}
 .empty{color:var(--muted);padding:24px;text-align:center;border:1px dashed var(--line);border-radius:10px}
 .kv{display:grid;grid-template-columns:200px 1fr;gap:2px 12px}.kv dt{color:var(--muted)}.kv dd{margin:0}
+.bars{display:grid;gap:7px;margin:8px 0}
+.bars .brow{display:grid;grid-template-columns:150px 1fr auto;gap:10px;align-items:center;font-size:13px}
+.bars .blabel{color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bars .track{background:var(--bg);border:1px solid var(--line);border-radius:6px;height:16px;position:relative;overflow:hidden}
+.bars .fill{position:absolute;left:0;top:0;height:100%;background:var(--accent);opacity:.85}
+.bars .bval{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.dist .track{background:var(--bg);border:1px solid var(--line);border-radius:6px;height:18px;position:relative;overflow:hidden}
+.dist .iqr{position:absolute;top:0;height:100%;background:var(--accent);opacity:.35}
+.dist .med{position:absolute;top:0;width:2px;height:100%;background:var(--accent)}
+.dist .cap{position:absolute;top:50%;width:1px;height:10px;transform:translateY(-50%);background:var(--muted)}
 ol.timeline{list-style:none;padding-left:0}ol.timeline li{padding:6px 0 6px 16px;border-left:2px solid var(--line);margin-left:6px}
 @media(max-width:640px){.kv{grid-template-columns:1fr}main{padding:10px}}
 """
@@ -149,6 +159,46 @@ def table(headers, rows):
 def kv(pairs):
     items = "".join(f"<dt>{esc(k)}</dt><dd>{v if _is_html(v) else esc(v)}</dd>" for k, v in pairs)
     return f'<dl class="kv">{items}</dl>'
+
+
+def bars(rows, *, max_value=None, unit="", caption=None):
+    """A labeled horizontal-bar chart. `rows` = list of (label, value[, value_text]). The numeric value is
+    always shown as text (never color-alone). Answers 'how big is each category relative to the largest'."""
+    vals = [(r[2] if len(r) > 2 else None, float(r[1] or 0)) for r in rows]
+    mx = max_value if max_value is not None else max([v for _t, v in vals] + [0]) or 1
+    out = ['<div class="bars" role="img"' + (f' aria-label="{esc(caption)}"' if caption else "") + ">"]
+    for (label, value, *rest) in rows:
+        vt = rest[0] if rest else (f"{value:g}{unit}")
+        pct = max(0.0, min(100.0, (float(value or 0) / mx) * 100.0))
+        out.append(f'<div class="brow"><span class="blabel" title="{esc(label)}">{esc(label)}</span>'
+                   f'<span class="track"><span class="fill" style="width:{pct:.1f}%"></span></span>'
+                   f'<span class="bval">{esc(vt)}</span></div>')
+    out.append("</div>")
+    return "".join(out)
+
+
+def dist_row(label, dist, *, scale_max, unit=" days"):
+    """One historical-distribution row: a light IQR box (p25–p75) with a median marker + min/max whiskers,
+    all values labeled in text. `dist` is a mapping/obj with minimum/p25/median/p75/maximum/count."""
+    def g(k):
+        v = getattr(dist, k, None) if not isinstance(dist, dict) else dist.get(k)
+        return None if v is None else float(v)
+    lo, q1, med, q3, hi, n = g("minimum"), g("p25"), g("median"), g("p75"), g("maximum"), (
+        getattr(dist, "count", None) if not isinstance(dist, dict) else dist.get("count"))
+    sm = float(scale_max) or 1.0
+    def pct(v):
+        return max(0.0, min(100.0, (v / sm) * 100.0)) if v is not None else 0.0
+    track = ""
+    if med is not None:
+        left, right = pct(q1 if q1 is not None else med), pct(q3 if q3 is not None else med)
+        track = (f'<span class="cap" style="left:{pct(lo):.1f}%"></span>'
+                 f'<span class="iqr" style="left:{left:.1f}%;width:{max(0.6, right-left):.1f}%"></span>'
+                 f'<span class="med" style="left:{pct(med):.1f}%"></span>'
+                 f'<span class="cap" style="left:{pct(hi):.1f}%"></span>')
+    txt = (f"med {med:g}{unit} · IQR {q1:g}–{q3:g} · n={n}" if med is not None else "no usable sample")
+    return ('<div class="dist" style="margin:6px 0">'
+            f'<div style="font-size:13px;margin-bottom:3px">{esc(label)} — <span class="muted">{esc(txt)}</span></div>'
+            f'<div class="track">{track}</div></div>')
 
 
 def _is_html(v):

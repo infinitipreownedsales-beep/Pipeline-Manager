@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import secrets
 
-from ..render import badge, esc, esc_text, empty, page, safe, table, kv, form
+from ..render import badge, esc, esc_text, empty, page, safe, table, kv, form, bars, dist_row
 from ..http import Response
 
 
@@ -43,28 +43,52 @@ def _preowned_evidence_card(app, s):
             'No resale absorption estimate has been invented.</p></div>'
         )
 
-    rows = []
-    for m in ev.models:
-        median = f"{m.median_dts:g} days" if m.median_dts is not None else "?"
-        rows.append([
-            esc(m.model),
-            esc(m.active_units),
-            esc(m.sales_count),
-            esc(m.numeric_dts_count),
-            esc(median),
-        ])
+    models = list(ev.models)
+    # 1) Fleet composition — where is the current authoritative fleet concentrated?
+    comp = bars([(m.model, m.active_units, f"{m.active_units} loaner(s)") for m in models],
+                caption="Active Service Loaner fleet composition by model")
+    composition = ('<h3>Current fleet composition</h3>'
+                   '<p class="muted">Where the authoritative active fleet is concentrated by model.</p>' + comp)
+
+    # 2) Historical Days-to-Sell distribution — how quickly, and how consistently, does each model resell?
+    dscale = max([float(getattr(m.distribution, "maximum", 0) or 0)
+                  for m in models if m.distribution] + [1.0])
+    dist_rows = "".join(dist_row(m.model, m.distribution, scale_max=dscale)
+                        for m in models if m.distribution and m.distribution.count)
+    distribution = ""
+    if dist_rows:
+        distribution = ('<h3>Historical resale speed (Days to Sell)</h3>'
+                        '<p class="muted">Median marker with the middle-50% (IQR) band and min/max, from '
+                        'accepted preowned sales. Faster-selling models sit to the left.</p>' + dist_rows)
+
+    # 3) Model-year absorption where the sample is defensible — how do model-years compare?
+    myrows = [my for my in ev.model_years if my.defensible]
+    under = [my for my in ev.model_years if not my.defensible]
+    modelyear = ""
+    if myrows:
+        mtable = table(["Model-year", "Historical sales", "Usable DTS", "Median DTS"],
+                       [[esc(f"{my.model} {my.year}"), esc(my.sales_count), esc(my.numeric_dts_count),
+                         esc(f"{my.median_dts:g} days" if my.median_dts is not None else "?")] for my in myrows])
+        note = (f'<p class="muted">{len(under)} additional model-year(s) had too small a sample to compare '
+                'and are held back.</p>' if under else "")
+        modelyear = ('<h3>Model-year resale absorption</h3>'
+                     '<p class="muted">Only model-years with a defensible sample are compared.</p>' + mtable + note)
+
+    # base per-model table retained as the auditable Proof detail
+    proof = table(["Model", "Active loaners", "Historical sales", "Usable DTS", "Median DTS"],
+                  [[esc(m.model), esc(m.active_units), esc(m.sales_count), esc(m.numeric_dts_count),
+                    esc(f"{m.median_dts:g} days" if m.median_dts is not None else "?")] for m in models])
+    asof = f' · as of {esc(ev.retail_received_at[:10])}' if ev.retail_received_at else ""
 
     return (
         '<div class="card"><h2>Preowned Market Evidence</h2>'
-        '<p>Source-backed dealership resale history for models currently represented in the '
-        'authoritative Service Loaner fleet.</p>'
-        + table(
-            ["Model", "Active loaners", "Historical sales", "Usable DTS", "Median DTS"],
-            rows,
-        )
-        + '<p class="muted">Historical absorption evidence only. It does not create ICV, Velocity, '
-          'IN, HOLD, or OUT values. Economic Ideal Mix remains undetermined until the complete '
-          'real per-unit economics are available.</p>'
+        f'<p class="muted">Source-backed dealership resale history for models in the authoritative Service '
+        f'Loaner fleet{asof}. Evidence only.</p>'
+        + composition + distribution + modelyear
+        + '<h3>Proof — per-model detail</h3>' + proof
+        + '<p class="muted">Historical absorption evidence only. It does not create ICV, Velocity, IN, HOLD, '
+          'or OUT values. Economic Ideal Mix remains undetermined until the complete real per-unit economics '
+          'are available.</p>'
         '</div>'
     )
 
