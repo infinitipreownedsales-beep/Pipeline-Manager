@@ -361,9 +361,12 @@ def register(app):
             b["month"] = month
             models.setdefault(b["model"], []).append(b)
 
+        # The month selector must submit deterministically in every browser (incl. Remote Desktop where a
+        # <select> onchange may not auto-navigate). Keep onchange as an enhancement, but ALWAYS render a
+        # visible submit button so the selected month reliably reaches the server and rebinds the board.
         monthf = (f'<form method="get" action="/ordering/cpo" class="mut">'
-                  f'<label>CPO ordering month</label>{_month_select(app, "month", month, onchange=True)}'
-                  f'<noscript><button type=submit class=secondary>Select</button></noscript></form>')
+                  f'<label>CPO ordering month</label>{_month_select(app, "month", month, onchange=True)} '
+                  f'<button type=submit class=secondary>Show month</button></form>')
         parts = [f'<div class="card"><h2>CPO — {esc(month)}</h2>{monthf}'
                  '<p class="muted">Allocation is a ceiling, not a command: Elite recommends only what is '
                  'economically justified and leaves the rest open. Work each line individually.</p></div>']
