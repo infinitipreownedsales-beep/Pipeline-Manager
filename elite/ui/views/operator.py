@@ -118,31 +118,68 @@ def _is_benched(bench, combo_id, identity):
     return combo_id in bench or identity in bench
 
 
-def _acquire_board(app, scope):
-    """Read the certified issued plans into per-combination ACQUIRE recommendations (no recompute).
-    Benched combinations are excluded from ordering. Returns dicts sorted by (model, -order, identity)."""
+def _plan_months(app, scope):
+    """Map plan_id -> {month: certified time-phased row} from inventory_plan_month (no recompute)."""
+    idx = {}
+    try:
+        for mr in _conn(app).execute(
+                "SELECT m.plan_id, m.month, m.expected_demand, m.cumulative_demand, m.cumulative_supply, "
+                "m.shortage, m.excess, m.confidence, m.seq FROM inventory_plan_month m "
+                "JOIN inventory_plan_result p ON m.plan_id=p.id "
+                "WHERE p.store_scope=? AND p.status='issued'", (scope,)).fetchall():
+            idx.setdefault(mr["plan_id"], {})[mr["month"]] = mr
+    except Exception:   # noqa: BLE001
+        pass
+    return idx
+
+
+def _acquire_board(app, scope, month=None):
+    """Certified issued ACQUIRE recommendations (no recompute). When `month` is given, each row is bound to
+    the certified time-phased state for that planning month: Relevant Future is the supply POSITION available
+    by that month (so a later arrival is not credited to an earlier month), and month shortage/demand/excess/
+    confidence become the ranking + Why/Proof context. The discrete ORDER-now quantity stays exactly the
+    certified actionability decision — a projected later shortage is never turned into an order now.
+    Benched combinations are excluded. Ordering: month-shortage first when month data exists, else -order."""
     conn = _conn(app)
     rows = conn.execute("SELECT * FROM inventory_plan_result WHERE store_scope=? AND status='issued'",
                         (scope,)).fetchall()
     ident = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
         "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (scope,)).fetchall()}
     bench = _benched(app, scope)
+    pmonths = _plan_months(app, scope) if month else {}
     out = []
     for r in rows:
         try:
             dec = (json.loads(r["evidence"]) if r["evidence"] else {}).get("decision") or {}
         except Exception:   # noqa: BLE001
             dec = {}
-        order = int(dec.get("acquire_units", 0) or 0)
+        order = int(dec.get("acquire_units", 0) or 0)   # commit-now action — certified, month-independent
         if not dec or order <= 0:
             continue
         readable = _readable(ident.get(r["combination_id"], r["combination_id"]))
         if _is_benched(bench, r["combination_id"], readable):
             continue
+        certified_future = dec.get("incoming_in_horizon", r["future_supply"])
+        mrow = (pmonths.get(r["id"]) or {}).get(month) if month else None
+        # Relevant Future = certified supply position available BY the selected month (excludes later arrivals)
+        relevant_future = (mrow["cumulative_supply"] if mrow is not None and mrow["cumulative_supply"] is not None
+                           else certified_future)
         out.append({"pid": r["id"], "combo": r["combination_id"], "identity": readable,
                     "model": _model_of(readable), "order": order, "current": r["current_supply"],
-                    "future": dec.get("incoming_in_horizon", r["future_supply"])})
-    out.sort(key=lambda d: (d["model"], -d["order"], d["identity"]))
+                    "future": relevant_future, "certified_future": certified_future,
+                    "m_present": mrow is not None,
+                    "m_shortage": (mrow["shortage"] if mrow is not None else None),
+                    "m_demand": (mrow["expected_demand"] if mrow is not None else None),
+                    "m_cum_demand": (mrow["cumulative_demand"] if mrow is not None else None),
+                    "m_cum_supply": (mrow["cumulative_supply"] if mrow is not None else None),
+                    "m_excess": (mrow["excess"] if mrow is not None else None),
+                    "m_confidence": (mrow["confidence"] if mrow is not None else None)})
+    if month and any(b["m_shortage"] is not None for b in out):
+        out.sort(key=lambda d: (d["model"],
+                                -(d["m_shortage"]) if d["m_shortage"] is not None else float("inf"),
+                                -d["order"], d["identity"]))
+    else:
+        out.sort(key=lambda d: (d["model"], -d["order"], d["identity"]))
     return out
 
 
@@ -240,13 +277,31 @@ def register(app):
         label = plan_call(dec)[2] if dec else "No discrete action on record"
         mons = ", ".join(mm.get("month", "") for mm in (dec.get("monitor_months") or [])) or "—"
         cred = dec.get("credibility") if isinstance(dec.get("credibility"), dict) else {}
-        why = kv([("Target (60-day level)", round(dec.get("target_level", 0) or 0, 2)),
-                  ("On the ground now", r["current_supply"]),
-                  ("Incoming (in horizon)", dec.get("incoming_in_horizon", r["future_supply"])),
-                  ("Incoming (pending ETA)", dec.get("pending_timing", 0)),
-                  ("Watch months", mons), ("Historical days-to-sell burden", dec.get("dts_burden", "—")),
-                  ("Evidence level", dec.get("evidence_level", "—"))])
+        # month-specific certified time-phased context, when the caller (CPO) passed a planning month
+        month = req.q("month")
+        mrow = None
+        if month:
+            mrow = conn.execute("SELECT * FROM inventory_plan_month WHERE plan_id=? AND month=?",
+                                (r["id"], month)).fetchone()
+        why_rows = [("Target (60-day level)", round(dec.get("target_level", 0) or 0, 2)),
+                    ("On the ground now", r["current_supply"])]
+        if mrow is not None:
+            why_rows += [(f"Expected demand — {month}", round(mrow["expected_demand"] or 0, 2)),
+                         (f"Cumulative demand through {month}", round(mrow["cumulative_demand"] or 0, 2)),
+                         (f"Supply position by {month}", mrow["cumulative_supply"]),
+                         (f"Projected shortage — {month}", round(mrow["shortage"] or 0, 2)),
+                         (f"Projected excess — {month}", round(mrow["excess"] or 0, 2)),
+                         (f"Confidence — {month}", mrow["confidence"] or "—")]
+        else:
+            why_rows += [("Incoming (in horizon)", dec.get("incoming_in_horizon", r["future_supply"])),
+                         ("Incoming (pending ETA)", dec.get("pending_timing", 0))]
+        why_rows += [("Watch months", mons), ("Historical days-to-sell burden", dec.get("dts_burden", "—")),
+                     ("Evidence level", dec.get("evidence_level", "—"))]
+        if month and mrow is None:
+            why_rows.append((f"Planning month {month}", "outside the certified planning horizon for this combination"))
+        why = kv(why_rows)
         proof = kv([("Combination", subject), ("Issued plan (audit id)", r["id"]),
+                    ("Planning month", month or "— (overall)"),
                     ("Credibility Z", round(cred.get("credibility_z", 0) or 0, 4)),
                     ("Calculation version", r["calculation_version"] or "—"),
                     ("Reproducibility package", r["reproducibility_package"] or "—")])
@@ -300,7 +355,7 @@ def register(app):
         month = req.q("month") or _default_month(app)
         alloc = _ws_get(app, s.scope, f"cpo_alloc::{month}", {}) or {}
         lines = _ws_get(app, s.scope, f"cpo_line::{month}", {}) or {}
-        board = _acquire_board(app, s.scope)
+        board = _acquire_board(app, s.scope, month)
         models = {}
         for b in board:
             b["month"] = month
@@ -339,14 +394,14 @@ def register(app):
             head = (f'{esc(mo)} · Allocation {cap} · Recommended {len(recs)} · Worked {worked}'
                     + (f' · <strong>{open_cap} intentionally open</strong>' if open_cap else ''))
             block = f'<div class="card"><h3>{head}</h3>' + table(
-                ["#", "Combination", "Order", "Current", "Relevant Future", "Action"], rows)
+                ["#", "Combination", "Order now", "Current", f"Relevant Future (by {esc(month)})", "Action"], rows)
             if open_cap:
                 block += (f'<p class="muted">Why open: only {len(recs)} combination(s) for {esc(mo)} are '
                           f'economically justified this month; {open_cap} allocation left open rather than '
                           'manufacturing a weak order.</p>')
             if nextbest[len(promoted):]:
-                nb = table(["Combination", "Order", "Current", "Relevant Future"],
-                           [[safe(f'<a href="/combination/{esc(b["pid"])}">{esc(b["identity"])}</a>'),
+                nb = table(["Combination", "Order now", "Current", f"Relevant Future (by {esc(month)})"],
+                           [[safe(f'<a href="/combination/{esc(b["pid"])}?month={esc(month)}">{esc(b["identity"])}</a>'),
                              esc(b["order"]), esc(b["current"]), esc(b["future"])]
                             for b in nextbest[len(promoted):]])
                 block += f'<details><summary style="cursor:pointer">Next best (reserves)</summary>{nb}</details>'
@@ -922,7 +977,8 @@ def register(app):
 
 
 def _cpo_line(s, b, rank, state, *, promoted=False):
-    ident = safe(f'<a href="/combination/{esc(b["pid"])}">{esc(b["identity"])}</a>'
+    _mq = f'?month={esc(b.get("month", ""))}' if b.get("month") else ""
+    ident = safe(f'<a href="/combination/{esc(b["pid"])}{_mq}">{esc(b["identity"])}</a>'
                  + (' ' + badge("completed", "promoted") if promoted else ''))
     if state == "confirmed":
         action = safe(badge("completed", "Confirmed") + " " + _line_btn(s, b, "clear", "Revert", "secondary"))
