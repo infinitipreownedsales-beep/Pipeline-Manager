@@ -150,6 +150,43 @@ def summarize_model_year_sales(rows, active_models, *, min_sample=MIN_MODEL_YEAR
     return tuple(out)
 
 
+def active_fleet_models(conn, scope):
+    """(vin -> MODEL) for the authoritative active Service-Loaner fleet, from the latest completed loaner
+    snapshot. Read-only; returns {} when unavailable."""
+    active_vins = {r[0] for r in conn.execute(
+        "SELECT vin FROM service_loaner_unit WHERE store_scope=? AND superseded_by IS NULL "
+        "AND active_fleet_presence=1 AND vin IS NOT NULL", (scope,)).fetchall()}
+    if not active_vins:
+        return {}
+    batch = conn.execute(
+        "SELECT id FROM import_batch WHERE source_id='src_p11_service_loaner_fleet' AND store_scope=? "
+        "AND lifecycle_status='completed' ORDER BY received_at DESC, id DESC LIMIT 1", (scope,)).fetchone()
+    out = {}
+    if batch:
+        for obs in conn.execute("SELECT raw_values FROM source_observation WHERE import_batch_id=? "
+                                "AND acceptance_status='accepted'", (batch[0],)).fetchall():
+            raw = _json(obs[0])
+            vin = str(raw.get("vin") or "").strip().upper()
+            model = raw.get("model")
+            if vin in active_vins and isinstance(model, str) and model.strip():
+                out[vin] = model.strip().upper()
+    return out
+
+
+def latest_retail_rows(conn, scope):
+    """(normalized rows, received_at) for the latest completed retail_history schema>=3 batch, or ([], None)."""
+    batch = conn.execute(
+        "SELECT id, received_at FROM import_batch WHERE source_id='src_p11_retail_history' AND store_scope=? "
+        "AND schema_profile_version>=3 AND lifecycle_status='completed' "
+        "ORDER BY received_at DESC, id DESC LIMIT 1", (scope,)).fetchone()
+    if not batch:
+        return [], None
+    rows = [_json(o[0]) for o in conn.execute(
+        "SELECT normalized_values FROM source_observation WHERE import_batch_id=? AND acceptance_status='accepted'",
+        (batch[0],)).fetchall()]
+    return rows, batch[1]
+
+
 def build_preowned_evidence(conn, scope):
     """Build model-level historical resale evidence for the active Service Loaner fleet."""
 

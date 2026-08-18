@@ -61,14 +61,15 @@ class TestLoanerCockpit(unittest.TestCase):
         ck2 = build_cockpit(self.conn, SCOPE, self.p.app.prefs, nxt, held=held, candidates=cands)
         self.assertIsNone(ck2.requirement)
 
-    # the UI page renders the three counts and does not crash
+    # the UI page renders the three distinct fleet counts (Intelligence Layer) and does not crash
     def test_service_loaner_page_renders(self):
         set_desired_fleet(MetaPrefs(self.p.app.prefs, SCOPE), 20)
         r = self.full.get("/service-loaner")
         self.assertEqual(r.status, 200)
-        self.assertIn("Ideal Mix / Additions", r.body)
+        self.assertIn("Fleet state", r.body)
         self.assertIn("Current fleet", r.body)
         self.assertIn("Ideal fleet", r.body)
+        self.assertIn("Undetermined", r.body)                # Ideal stays Undetermined
         self.assertIn("20", r.body)                          # desired fleet shown
 
     def test_preowned_evidence_summarizes_dts_without_inventing_economics(self):
@@ -86,32 +87,11 @@ class TestLoanerCockpit(unittest.TestCase):
         self.assertEqual(ev[0].numeric_dts_count, 3)
         self.assertEqual(ev[0].median_dts, 34.0)
 
-    def test_service_loaner_page_renders_preowned_evidence_without_determining_mix(self):
-        evidence = PreownedEvidence(
-            retail_received_at="2026-08-15T21:00:00+00:00",
-            models=(
-                ModelEvidence(
-                    model="QX60",
-                    active_units=27,
-                    sales_count=757,
-                    numeric_dts_count=751,
-                    median_dts=34.0,
-                ),
-            ),
-            retail_history_loaded=True,
-            fleet_models_resolved=True,
-        )
-
-        with patch("elite.loaner.preowned_evidence.build_preowned_evidence", return_value=evidence):
-            r = self.full.get("/service-loaner")
-
+    def test_service_loaner_page_keeps_ideal_undetermined(self):
+        # the Intelligence Layer page never determines an economic mix; cockpit stays undetermined
+        r = self.full.get("/service-loaner")
         self.assertEqual(r.status, 200)
-        self.assertIn("Preowned Market Evidence", r.body)
-        self.assertIn("QX60", r.body)
-        self.assertIn("757", r.body)
-        self.assertIn("751", r.body)
-        self.assertIn("34 days", r.body)
-
+        self.assertIn("Undetermined", r.body)
         ck = build_cockpit(self.conn, SCOPE, self.p.app.prefs, self._month())
         self.assertFalse(ck.economically_determined)
         self.assertIsNone(ck.ideal_fleet)

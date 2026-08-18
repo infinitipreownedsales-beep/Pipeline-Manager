@@ -57,57 +57,5 @@ class TestModelYear(unittest.TestCase):
         self.assertEqual(by[("QX60", 2024)].median_dts, 30.0)
 
 
-class TestEvidenceCard(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp()
-        self.p = Phase10(os.path.join(self.tmp, "elite.db"))
-        self.full = self.p.login(self.p.op_full)
-
-    def tearDown(self):
-        self.p.close()
-
-    def _month(self):
-        from elite.clock import to_utc_iso
-        return to_utc_iso(self.p.clock.now())[:7]
-
-    def test_card_renders_visuals_without_economics(self):
-        evidence = PreownedEvidence(
-            retail_received_at="2026-08-15T21:00:00+00:00",
-            models=(ModelEvidence(model="QX60", active_units=27, sales_count=757, numeric_dts_count=751,
-                                  median_dts=34.0,
-                                  distribution=DtsDistribution(751, 3.0, 21.0, 34.0, 58.0, 190.0)),
-                    ModelEvidence(model="QX50", active_units=4, sales_count=120, numeric_dts_count=118,
-                                  median_dts=41.0,
-                                  distribution=DtsDistribution(118, 5.0, 25.0, 41.0, 66.0, 150.0))),
-            retail_history_loaded=True, fleet_models_resolved=True,
-            model_years=(ModelYearEvidence("QX60", 2024, 90, 88, 30.0, True),
-                         ModelYearEvidence("QX60", 2023, 3, 3, 45.0, False)))
-        with patch("elite.loaner.preowned_evidence.build_preowned_evidence", return_value=evidence):
-            body = self.full.get("/service-loaner").body
-        # fleet composition + distribution + model-year sections, all present, provenance shown
-        self.assertIn("Current fleet composition", body)
-        self.assertIn("Historical resale speed", body)
-        self.assertIn("Model-year resale absorption", body)
-        self.assertIn("QX60 2024", body)                          # defensible model-year shown
-        self.assertNotIn("QX60 2023", body)                       # under-sampled model-year held back
-        self.assertIn("held back", body)
-        self.assertIn("as of 2026-08-15", body)                   # provenance
-        self.assertIn("34 days", body)                            # proof detail retained
-        self.assertIn("class=\"bars\"", body) if False else self.assertIn('class="bars"', body)
-        # economics remain undetermined
-        self.assertIn("undetermined", body.lower())
-        ck = build_cockpit(self.p.stack.db.conn, SCOPE, self.p.app.prefs, self._month())
-        self.assertFalse(ck.economically_determined)
-        self.assertIsNone(ck.ideal_fleet)
-
-    def test_card_honest_when_no_history(self):
-        ev = PreownedEvidence(retail_received_at=None, models=(), retail_history_loaded=False,
-                              fleet_models_resolved=True)
-        with patch("elite.loaner.preowned_evidence.build_preowned_evidence", return_value=ev):
-            body = self.full.get("/service-loaner").body
-        self.assertIn("No completed preowned-history v3 import", body)
-        self.assertNotIn("Current fleet composition", body)       # no fabricated visuals
-
-
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -10,130 +10,10 @@ from __future__ import annotations
 import json
 import secrets
 
-from ..render import badge, esc, esc_text, empty, page, safe, table, kv, form, bars, dist_row
+from ..render import (badge, esc, esc_text, empty, page, safe, table, kv, form, bars, dist_row,
+                      workspace_header, metric, stat_row, chip, disclosure, rec_card)
 from ..http import Response
 
-
-def _planning_month(app):
-    from ...clock import to_utc_iso
-    return to_utc_iso(app.stack.clock.now())[:7]      # 'YYYY-MM'
-
-
-def _preowned_evidence_card(app, s):
-    """Read-only historical resale evidence for models in the active Service Loaner fleet.
-
-    This is evidence only. It does not create ICV, Velocity, or IN / HOLD / OUT economics.
-    """
-    from ...loaner.preowned_evidence import build_preowned_evidence
-
-    ev = build_preowned_evidence(_conn(app), s.scope)
-
-    if not ev.fleet_models_resolved:
-        return (
-            '<div class="card"><h2>Preowned Market Evidence</h2>'
-            '<p class="muted">Active Service Loaner model identity is not yet available from '
-            'the authoritative fleet snapshot, so historical resale evidence cannot be matched safely.</p>'
-            '</div>'
-        )
-
-    if not ev.retail_history_loaded:
-        return (
-            '<div class="card"><h2>Preowned Market Evidence</h2>'
-            '<p class="muted">No completed preowned-history v3 import is available yet. '
-            'No resale absorption estimate has been invented.</p></div>'
-        )
-
-    models = list(ev.models)
-    # 1) Fleet composition — where is the current authoritative fleet concentrated?
-    comp = bars([(m.model, m.active_units, f"{m.active_units} loaner(s)") for m in models],
-                caption="Active Service Loaner fleet composition by model")
-    composition = ('<h3>Current fleet composition</h3>'
-                   '<p class="muted">Where the authoritative active fleet is concentrated by model.</p>' + comp)
-
-    # 2) Historical Days-to-Sell distribution — how quickly, and how consistently, does each model resell?
-    dscale = max([float(getattr(m.distribution, "maximum", 0) or 0)
-                  for m in models if m.distribution] + [1.0])
-    dist_rows = "".join(dist_row(m.model, m.distribution, scale_max=dscale)
-                        for m in models if m.distribution and m.distribution.count)
-    distribution = ""
-    if dist_rows:
-        distribution = ('<h3>Historical resale speed (Days to Sell)</h3>'
-                        '<p class="muted">Median marker with the middle-50% (IQR) band and min/max, from '
-                        'accepted preowned sales. Faster-selling models sit to the left.</p>' + dist_rows)
-
-    # 3) Model-year absorption where the sample is defensible — how do model-years compare?
-    myrows = [my for my in ev.model_years if my.defensible]
-    under = [my for my in ev.model_years if not my.defensible]
-    modelyear = ""
-    if myrows:
-        mtable = table(["Model-year", "Historical sales", "Usable DTS", "Median DTS"],
-                       [[esc(f"{my.model} {my.year}"), esc(my.sales_count), esc(my.numeric_dts_count),
-                         esc(f"{my.median_dts:g} days" if my.median_dts is not None else "?")] for my in myrows])
-        note = (f'<p class="muted">{len(under)} additional model-year(s) had too small a sample to compare '
-                'and are held back.</p>' if under else "")
-        modelyear = ('<h3>Model-year resale absorption</h3>'
-                     '<p class="muted">Only model-years with a defensible sample are compared.</p>' + mtable + note)
-
-    # base per-model table retained as the auditable Proof detail
-    proof = table(["Model", "Active loaners", "Historical sales", "Usable DTS", "Median DTS"],
-                  [[esc(m.model), esc(m.active_units), esc(m.sales_count), esc(m.numeric_dts_count),
-                    esc(f"{m.median_dts:g} days" if m.median_dts is not None else "?")] for m in models])
-    asof = f' · as of {esc(ev.retail_received_at[:10])}' if ev.retail_received_at else ""
-
-    return (
-        '<div class="card"><h2>Preowned Market Evidence</h2>'
-        f'<p class="muted">Source-backed dealership resale history for models in the authoritative Service '
-        f'Loaner fleet{asof}. Evidence only.</p>'
-        + composition + distribution + modelyear
-        + '<h3>Proof — per-model detail</h3>' + proof
-        + '<p class="muted">Historical absorption evidence only. It does not create ICV, Velocity, IN, HOLD, '
-          'or OUT values. Economic Ideal Mix remains undetermined until the complete real per-unit economics '
-          'are available.</p>'
-        '</div>'
-    )
-
-
-def _ideal_mix_card(app, s):
-    """Service Loaner ECONOMIC Ideal Mix summary: the three fleet counts (Current / Desired / Ideal) never
-    conflated, the governed monthly placement requirement, and the IN/HOLD/OUT ranking when real per-unit
-    economics are available. When economics are not loaded, it says so honestly (no fabricated mix)."""
-    from ...loaner.loaner_cockpit import build_cockpit
-    ck = build_cockpit(_conn(app), s.scope, app.prefs, _planning_month(app))
-    ideal = ck.ideal_fleet if ck.economically_determined else "—"
-    counts = kv([("Current fleet (authoritative)", ck.current_fleet),
-                 ("Desired fleet (operator)", ck.desired_fleet if ck.desired_fleet is not None else "not set"),
-                 ("Ideal fleet (economic optimum)", ideal),
-                 ("Planning month", ck.planning_month)])
-    req = ck.requirement
-    req_html = ""
-    if req and req.get("required") is not None:
-        req_html = (f'<p class="callout">Monthly placement requirement in force: '
-                    f'<strong>{esc(req["required"])}</strong> for {esc(ck.planning_month)}'
-                    + (f' — {esc(req.get("reason"))}' if req.get("reason") else "")
-                    + '. Any placement beyond the economic optimum is <strong>objective-driven</strong>, '
-                    'not economically ideal, and can be met by IN/OUT rotation.</p>')
-    mix_html = ""
-    if ck.economically_determined and ck.mix is not None:
-        rows = []
-        order = {"IN": 0, "HOLD": 1, "OUT": 2, "WAIT": 3}
-        for d in sorted(ck.mix.decisions.values(), key=lambda d: (order.get(d["action"], 9), -d["net"])):
-            tag = "objective-driven" if d.get("objective_driven") else ""
-            rows.append([safe(badge({"IN": "attention", "HOLD": "healthy", "OUT": "pending"}.get(d["action"], "ok"),
-                                     d["action"] + (f" ({tag})" if tag else ""))),
-                         esc(d.get("identity") or d.get("id")), esc(round(d["net"], 2)), esc(d.get("reason", ""))])
-        mix_html = ('<h3>Recommended mix (IN / HOLD / OUT)</h3>'
-                    + table(["Call", "Combination / unit", "Net economics", "Why"], rows))
-        if ck.mix.future_stocking_need:
-            mix_html += (f'<p class="muted">Future stocking need: {esc(ck.mix.future_stocking_need)} position(s) '
-                         'left open — not filled with an economically inferior unit.</p>')
-    note = f'<p class="muted">{esc(ck.note())}</p>' if ck.note() else ""
-    setf = form("/service-loaner/desired-fleet",
-                f'<label for=df>Desired fleet size (optional operational target)</label>'
-                f'<input id=df name=desired type=number min=0 style="max-width:160px" '
-                f'value="{esc(ck.desired_fleet if ck.desired_fleet is not None else "")}">',
-                csrf=s.csrf_token, submit="Save desired fleet")
-    return (f'<div class="card"><h2>Ideal Mix / Additions</h2>{counts}{req_html}{note}{mix_html}'
-            f'<div style="margin-top:10px">{setf}</div></div>')
 
 # The one approved zero-mile-rented question — shown verbatim.
 ZERO_MILE_QUESTION = "Where is this customer's vehicle, and let's check the miles on the loaner?"
@@ -153,6 +33,109 @@ def _readable(canonical):
     code = kv_.get("model_code", "").strip()
     ext, inte = kv_.get("exterior", "").strip(), kv_.get("interior", "").strip()
     return f"{model} {code} {ext}/{inte}".strip()
+
+
+# --- Service Loaner Intelligence Layer (A + B) rendering (read-only; economics stay Undetermined) --------
+def _q_tone(label):
+    return {"Strong": "done", "Moderate": "need", "Thin": "skip"}.get(label, "skip")
+
+
+def _cohort_line(c, unit=""):
+    """One recorded-distribution line with cohort / n / as-of / recency exposed (never a timeless number)."""
+    if c is None or c.n == 0:
+        return '<p class="muted">No usable sample.</p>'
+    d = c.dist
+    body = dist_row(c.label, d, scale_max=float(d.maximum or 1), unit=unit)
+    gate = "" if c.gated else f' <span class="chip skip">Thin — n {c.n} &lt; gate {c.gate}</span>'
+    meta = (f'<div class="muted" style="font-size:12px">cohort: {esc(c.label)} · n={c.n} · as-of {esc(c.as_of or "—")} '
+            f'· observations {esc(c.earliest or "?")}–{esc(c.latest or "?")} · {c.recent_n} recent{gate}</div>')
+    return body + meta
+
+
+def _model_intel_card(mi):
+    from ...loaner.intelligence import RESALE_MIN_N
+    q = mi.quality
+    qchip = chip(_q_tone(q.label), f"Evidence: {q.label}") if q else ""
+    dts = (dist_row(f"{mi.model} · days to sell", mi.dts, scale_max=float(mi.dts.maximum or 1), unit=" days")
+           if mi.dts and mi.dts.count else '<p class="muted">No usable turn sample.</p>')
+    headline = next((c for c in mi.resale_years if c.gated), mi.resale_model)
+    resale = _cohort_line(headline)
+    gross = _cohort_line(mi.gross_model)
+    if mi.maturity:
+        mat = bars([(f"MY age {b.label}" + (" (thin)" if b.thin else ""), (b.median_price or 0),
+                     f"${b.median_price:,.0f} · n={b.n}" if b.median_price is not None else f"n={b.n}")
+                    for b in mi.maturity], caption="median recorded price by model-year age at resale")
+        if mi.maturity_excluded:
+            mat += (f'<p class="muted" style="font-size:12px">{mi.maturity_excluded} observation(s) excluded '
+                    '(invalid/missing model-year maturity).</p>')
+    else:
+        mat = '<p class="muted">Not enough observations to show model-year maturity.</p>'
+    proof = kv([("Recorded resale (headline cohort)", headline.label if headline else "—"),
+                ("Resale n / gate", f"{headline.n} / {RESALE_MIN_N}" if headline else f"— / {RESALE_MIN_N}"),
+                ("Recorded gross cohort", mi.gross_model.label if mi.gross_model else "—"),
+                ("Evidence — sample", q.sample if q else "—"),
+                ("Evidence — recency", q.recency if q else "—"),
+                ("Evidence — spread", q.spread if q else "—"),
+                ("Source", "retail_history v3 (recorded prices) — historical evidence, not a current-value estimate")])
+    return (f'<div class="card"><h3>{esc(mi.model)} <span class="muted" style="font-size:13px">· '
+            f'{mi.active_units} active · {mi.sales_count} historical sales</span> {qchip}</h3>'
+            f'<div style="font-size:13px;color:var(--muted);margin:2px 0">Historical turn</div>{dts}'
+            f'<div style="font-size:13px;color:var(--muted);margin:6px 0 2px">Historical recorded resale</div>{resale}'
+            f'<div style="font-size:13px;color:var(--muted);margin:6px 0 2px">Historical recorded gross</div>{gross}'
+            f'<div style="font-size:13px;color:var(--muted);margin:6px 0 2px">Model-year age at resale (maturity)</div>{mat}'
+            + disclosure("Why / Proof", proof)
+            + f'<p style="margin-top:6px"><a href="/service-loaner/model/{esc(mi.model)}">Resale what-if for {esc(mi.model)} →</a></p></div>')
+
+
+def _unit_card(u):
+    age = f"{u.age_days}d in service" if u.age_days is not None else "in-service date not resolved"
+    mi = f"{u.mileage:,} mi" if u.mileage_available else "mileage not reported"
+    pos = safe(f'VIN …{esc(u.vin[-6:])} · <strong>{esc(age)}</strong> · <strong>{esc(mi)}</strong> · '
+               f'{esc(u.membership_state)} / {esc(u.rental_state or "—")}')
+    flags = "".join(chip("skip", f) for f in u.quality_flags)
+    actions = safe(f'<a href="/service-loaner/unit/{esc(u.id)}"><button class=secondary style="padding:6px 12px">'
+                   'Open unit</button></a>')
+    return rec_card("", u.model or "loaner", "", pos, "", actions, chip_html=flags)
+
+
+def _loaner_intel_body(app, s, intel):
+    asof = (f'as of {esc(intel.retail_as_of)} · evidence only' if intel.retail_as_of
+            else 'no preowned history loaded · evidence only')
+    parts = [workspace_header("Service Loaners", safe(f'<span class="muted">{asof}</span>'))]
+    counts = stat_row([metric(intel.current_fleet, "Current fleet (authoritative)"),
+                       metric(intel.desired_fleet if intel.desired_fleet is not None else "not set", "Desired fleet"),
+                       metric("Undetermined", "Ideal fleet")])
+    comp = (bars([(m, n, f"{n} active") for m, n in intel.composition], caption="active fleet composition by model")
+            if intel.composition else empty("No active fleet models resolved."))
+    setf = form("/service-loaner/desired-fleet",
+                '<label for=df>Desired fleet size (optional operational target)</label>'
+                f'<input id=df name=desired type=number min=0 style="max-width:160px" '
+                f'value="{esc(intel.desired_fleet if intel.desired_fleet is not None else "")}">',
+                csrf=s.csrf_token, submit="Save desired fleet")
+    parts.append('<div class="card"><h2>Fleet state</h2>' + counts
+                 + '<div style="font-size:13px;color:var(--muted);margin:8px 0 2px">Composition</div>' + comp
+                 + '<p class="muted">Current, Desired and Ideal are distinct. Ideal fleet stays <strong>Undetermined</strong> '
+                 'until the gated Phase-4 economic inputs (ICV / Velocity / write-down) are authoritative.</p>'
+                 + disclosure("Set desired fleet target", setf) + '</div>')
+    if intel.attention:
+        items = "".join(f'<div style="padding:4px 0">{chip("need", a.kind.replace("_", " "))} {esc(a.message)}'
+                        + (f' <a href="/service-loaner/unit/{esc(a.unit_id)}">open unit</a>' if a.unit_id else "")
+                        + '</div>' for a in intel.attention)
+        parts.append(f'<div class="card"><h2>Operational attention ({len(intel.attention)})</h2>{items}'
+                     '<p class="muted">Operational and data-quality signals only — not an economic retire/hold call.</p></div>')
+    else:
+        parts.append('<div class="card"><h2>Operational attention</h2>'
+                     + empty("Nothing needs attention right now.") + '</div>')
+    if intel.retail_loaded and intel.models:
+        parts.append('<h2>What history says</h2>' + "".join(_model_intel_card(m) for m in intel.models))
+    elif not intel.retail_loaded:
+        parts.append('<div class="card"><h2>What history says</h2>'
+                     + empty("No completed preowned-history v3 import is available yet — no resale evidence invented.")
+                     + '</div>')
+    parts.append(f'<h2>Active fleet ({len(intel.units)})</h2>'
+                 + ('<div class="queue">' + "".join(_unit_card(u) for u in intel.units) + '</div>'
+                    if intel.units else empty("No active Service-Loaner units.")))
+    return "".join(parts)
 
 
 def register(app):
@@ -254,30 +237,72 @@ def register(app):
     def service_loaner(app, req):
         s = req.session
         app.require(s, "workspace.view")
-        units = _conn(app).execute(
-            "SELECT * FROM service_loaner_unit WHERE store_scope=? ORDER BY created_at", (s.scope,)).fetchall()
-        urows = []
-        for u in units:
-            urows.append([esc(u["vin"]), safe(badge("ok", u["membership_state"])),
-                          safe(badge("attention" if u["current_rental_state"] == "rented" else "ok",
-                                     u["current_rental_state"] or "—")),
-                          esc(u["last_checkout_mileage"] if u["last_checkout_mileage"] is not None else "—")])
-        alerts = _conn(app).execute(
-            "SELECT a.* FROM service_loaner_monitoring_alert a JOIN service_loaner_unit u "
-            "ON a.service_loaner_unit_id=u.id WHERE u.store_scope=? AND a.status='active' ORDER BY a.created_at",
-            (s.scope,)).fetchall()
-        alert_html = ""
-        for a in alerts:
-            alert_html += (f'<div class="callout" role="status">{badge("attention","Zero-mile rented alert")} '
-                           f'<strong>{esc_text(a["prompt"])}</strong></div>')
-        body = ('<div class="card"><p>Membership state and rental state are shown <strong>separately</strong>. '
-                'Service Loaner is a separate domain from Executive Demo. The Economic Call does not change '
-                'because execution is blocked.</p>' + alert_html + '</div>'
-                + _preowned_evidence_card(app, s)
-                + _ideal_mix_card(app, s)
-                + '<h2>Active fleet</h2>'
-                + table(["VIN", "Membership", "Rental", "Last checkout mileage"], urows))
-        return _resp(app, s, "Service Loaners", body, "/service-loaner")
+        from ...loaner.intelligence import build_intelligence
+        intel = build_intelligence(_conn(app), s.scope, app.prefs, app.stack.clock)
+        body = _loaner_intel_body(app, s, intel)
+        flash, s.flash = s.flash, None
+        return Response(page("Service Loaners", body, ctx=app.ctx(s), active_path="/service-loaner",
+                             flash=flash, wide=True, hide_title=True))
+
+    @app.get("/service-loaner/unit/{unit_id}")
+    def service_loaner_unit(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        from ...loaner.intelligence import build_intelligence
+        intel = build_intelligence(_conn(app), s.scope, app.prefs, app.stack.clock)
+        u = next((x for x in intel.units if x.id == req.params["unit_id"]), None)
+        if u is None:
+            return app._safe_page(s, "Not found", "That loaner unit is not in the active fleet.", 404)
+        age = f"{u.age_days} days" if u.age_days is not None else "not resolved (data-quality condition)"
+        mi = f"{u.mileage:,} mi" if u.mileage_available else "not reported (data-quality condition)"
+        facts = kv([("VIN", u.vin), ("Model", u.model or "—"),
+                    ("Authoritative in-service date", u.in_service_date or "—"),
+                    ("In-service age", age), ("Available mileage", mi),
+                    ("Membership state", u.membership_state), ("Rental state", u.rental_state or "—")])
+        model_ev = next((m for m in intel.models if m.model == u.model), None)
+        ev = ""
+        if model_ev:
+            headline = next((c for c in model_ev.resale_years if c.gated), model_ev.resale_model)
+            ev = ('<div class="card"><h3>Source-backed evidence for this model</h3>'
+                  '<div style="font-size:13px;color:var(--muted)">Historical turn</div>'
+                  + (dist_row(f"{u.model} · days to sell", model_ev.dts, scale_max=float(model_ev.dts.maximum or 1),
+                              unit=" days") if model_ev.dts and model_ev.dts.count else '<p class="muted">No usable turn sample.</p>')
+                  + '<div style="font-size:13px;color:var(--muted);margin-top:6px">Historical recorded resale</div>'
+                  + _cohort_line(headline) + '</div>')
+        else:
+            ev = '<div class="card"><p class="muted">No source-backed resale evidence for this unit\'s model yet.</p></div>'
+        flags = ("".join(f'<p>{chip("skip", f)}</p>' for f in u.quality_flags)) or '<p class="muted">No data-quality gaps.</p>'
+        body = (f'<p><a href="/service-loaner">← Service Loaners</a></p>'
+                f'<div class="card"><h2>{esc(u.model or "Loaner unit")} — VIN …{esc(u.vin[-6:])}</h2>{facts}</div>'
+                f'<div class="card"><h3>Data quality</h3>{flags}</div>' + ev
+                + '<p class="muted">Operational + source-backed evidence only. No economic retire/hold/release-by '
+                'call is produced — those remain Undetermined until Phase-4 inputs are authoritative.</p>')
+        return Response(page(f"Loaner {u.vin[-6:]}", body, ctx=app.ctx(s), active_path="/service-loaner",
+                             flash=None, wide=True, hide_title=True))
+
+    @app.get("/service-loaner/model/{model}")
+    def service_loaner_model(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        from ...loaner.intelligence import build_intelligence
+        intel = build_intelligence(_conn(app), s.scope, app.prefs, app.stack.clock)
+        mi = next((m for m in intel.models if m.model == req.params["model"].upper()), None)
+        if mi is None:
+            return app._safe_page(s, "Not found", "No source-backed evidence for that model.", 404)
+        years = "".join('<div style="margin:8px 0">' + _cohort_line(c) + '</div>' for c in mi.resale_years) \
+            or '<p class="muted">No model-year cohort meets the sample gate.</p>'
+        gross_years = "".join('<div style="margin:8px 0">' + _cohort_line(c) + '</div>' for c in mi.gross_years) \
+            or '<p class="muted">No model-year gross cohort meets the sample gate.</p>'
+        body = (f'<p><a href="/service-loaner">← Service Loaners</a></p>'
+                f'<div class="card"><h2>{esc(mi.model)} — resale what-if (historical evidence)</h2>'
+                '<p class="muted">Read-only comparison across model-years using recorded prices. Each cohort '
+                'exposes its definition, n, as-of and observation recency. No current-value estimate, no '
+                'inflation adjustment, no economics.</p></div>'
+                + _model_intel_card(mi)
+                + f'<div class="card"><h3>Recorded resale by model-year</h3>{years}</div>'
+                + f'<div class="card"><h3>Recorded gross by model-year</h3>{gross_years}</div>')
+        return Response(page(f"{mi.model} resale", body, ctx=app.ctx(s), active_path="/service-loaner",
+                             flash=None, wide=True, hide_title=True))
 
     @app.post("/service-loaner/desired-fleet")
     def set_desired(app, req):

@@ -58,8 +58,9 @@ class TestOperatorShell(unittest.TestCase):
     # Service Loaner cockpit is reachable directly and preserves the three fleet counts
     def test_service_loaner_reachable(self):
         b = self.full.get("/service-loaner").body
-        self.assertIn("Ideal Mix / Additions", b)
+        self.assertIn("Fleet state", b)
         self.assertIn("Current fleet", b)
+        self.assertIn("Undetermined", b)
 
     # Demos is an operator shell, not the backend portfolio-plan page, and does not fabricate a roster
     def test_demos_honest(self):
