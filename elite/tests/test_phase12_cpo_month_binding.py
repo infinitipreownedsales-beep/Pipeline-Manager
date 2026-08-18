@@ -91,8 +91,9 @@ class TestCpoMonthBinding(unittest.TestCase):
     # 3 + 4. month-scoped allocation and worked-line state stay separate per month
     def test_month_scoped_workstate(self):
         self.full.post("/ordering/cpo/allocation", {"month": "2026-09", "alloc_QX60": "5"})
-        self.assertIn("Allocation 5", self.full.get("/ordering/cpo", month="2026-09").body)
-        self.assertNotIn("Allocation 5", self.full.get("/ordering/cpo", month="2026-11").body)  # not leaked
+        # the saved ceiling (5) re-renders in the September allocation control and drives its hero metric
+        self.assertIn('value="5"', self.full.get("/ordering/cpo", month="2026-09").body)
+        self.assertNotIn('value="5"', self.full.get("/ordering/cpo", month="2026-11").body)  # not leaked to Nov
 
     # 9. Why/Proof is month-specific on the combination detail
     def test_month_specific_why_proof(self):
@@ -107,8 +108,9 @@ class TestCpoMonthBinding(unittest.TestCase):
     # 7 (page level). the CPO page renders the month in the Relevant-Future column header
     def test_cpo_page_month_bound(self):
         b = self.full.get("/ordering/cpo", month="2026-11").body
-        self.assertIn("Relevant Future (by 2026-11)", b)
-        self.assertIn("Order now", b)
+        self.assertIn("By 2026-11", b)
+        self.assertIn("ORDER", b)
+        self.assertIn("November 2026", b)
 
     # 10. certified New-Inventory records/schema unchanged by the month-binding read
     def test_certified_unchanged(self):

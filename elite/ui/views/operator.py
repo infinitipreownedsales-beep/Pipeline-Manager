@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import json
 
-from ..render import ADMIN_NAV, badge, esc, page, safe, table, kv, empty, form
+from ..render import (ADMIN_NAV, badge, esc, page, safe, table, kv, empty, form,
+                      workspace_header, month_nav, metric, stat_row, progress, chip, disclosure,
+                      action_group, rec_card, restraint_note)
 from ..http import Response
 from .domains import _readable, _resp, _conn
 
@@ -361,61 +363,81 @@ def register(app):
             b["month"] = month
             models.setdefault(b["model"], []).append(b)
 
-        # The month selector must submit deterministically in every browser (incl. Remote Desktop where a
-        # <select> onchange may not auto-navigate). Keep onchange as an enhancement, but ALWAYS render a
-        # visible submit button so the selected month reliably reaches the server and rebinds the board.
-        monthf = (f'<form method="get" action="/ordering/cpo" class="mut">'
-                  f'<label>CPO ordering month</label>{_month_select(app, "month", month, onchange=True)} '
-                  f'<button type=submit class=secondary>Show month</button></form>')
-        parts = [f'<div class="card"><h2>CPO — {esc(month)}</h2>{monthf}'
-                 '<p class="muted">Allocation is a ceiling, not a command: Elite recommends only what is '
-                 'economically justified and leaves the rest open. Work each line individually.</p></div>']
+        # --- month context: deterministic server-backed prev/current/next links (no submit-dependent JS),
+        #     with the visible-submit dropdown kept as a secondary jump control ---
+        prev_ym, next_ym = _month_neighbours(app, month)
+        jump = (f'<form method="get" action="/ordering/cpo" class="mut">'
+                f'{_month_select(app, "month", month, onchange=True)} '
+                f'<button type=submit class=secondary>Jump</button></form>')
+        nav = month_nav("/ordering/cpo",
+                        (prev_ym, _month_label(prev_ym)) if prev_ym else None,
+                        (month, _month_label(month)),
+                        (next_ym, _month_label(next_ym)) if next_ym else None, jump_html=safe(jump))
+        parts = [workspace_header("CPO Ordering", nav)]
 
-        # allocation form (one number per model on the board)
-        alloc_fields = "".join(
-            f'<label for=a_{esc(mo)}>{esc(mo)} monthly allocation</label>'
-            f'<input id=a_{esc(mo)} name="alloc_{esc(mo)}" type=number min=0 style="max-width:120px" '
-            f'value="{esc(alloc.get(mo, ""))}">' for mo in sorted(models))
-        if alloc_fields:
-            parts.append('<div class="card"><h3>Allocation by model</h3>'
-                         + form("/ordering/cpo/allocation",
-                                f'<input type=hidden name=month value="{esc(month)}">{alloc_fields}',
-                                csrf=s.csrf_token, submit="Save allocation") + '</div>')
+        if not models:
+            parts.append('<div class="card"><p class="muted">No certified ACQUIRE recommendations are issued '
+                         'for this store yet. Load or refresh the New-Inventory plan to populate CPO.</p></div>')
+            return Response(page("CPO Ordering", "".join(parts), ctx=app.ctx(s), active_path="/ordering",
+                                 flash=_flash(s), wide=True, hide_title=True))
 
         for mo in sorted(models):
             recs = models[mo]
             cap = int(alloc.get(mo, len(recs)) or 0)
             active, nextbest = recs[:cap], recs[cap:]
-            # promote next-best when an active line is Not Ordered
             not_ordered_active = sum(1 for b in active if lines.get(b["combo"]) == "not_ordered")
             promoted = nextbest[:not_ordered_active]
-            worked = sum(1 for b in active if lines.get(b["combo"]) in ("confirmed", "not_ordered"))
+            shown = active + promoted
+            worked = sum(1 for b in shown if lines.get(b["combo"]) in ("confirmed", "not_ordered"))
+            remaining = len(shown) - worked
             open_cap = max(0, cap - len(recs))
-            rows = []
-            for rank, b in enumerate(active + promoted, 1):
-                rows.append(_cpo_line(s, b, rank, lines.get(b["combo"]), promoted=b in promoted))
-            head = (f'{esc(mo)} · Allocation {cap} · Recommended {len(recs)} · Worked {worked}'
-                    + (f' · <strong>{open_cap} intentionally open</strong>' if open_cap else ''))
-            block = f'<div class="card"><h3>{head}</h3>' + table(
-                ["#", "Combination", "Order now", "Current", f"Relevant Future (by {esc(month)})", "Action"], rows)
+
+            # hero work summary — the operator sees state immediately
+            hero = stat_row([metric(len(recs), "Recommended", attn=remaining > 0),
+                             metric(worked, "Worked"),
+                             metric(remaining, "Remaining", attn=remaining > 0),
+                             metric(cap, "Allocation ceiling")])
+            hero += progress(worked, len(shown))
+            edit = disclosure("Edit allocation ceiling",
+                              form("/ordering/cpo/allocation",
+                                   f'<input type=hidden name=month value="{esc(month)}">'
+                                   f'<label for=a_{esc(mo)}>{esc(mo)} monthly allocation (ceiling)</label>'
+                                   f'<input id=a_{esc(mo)} name="alloc_{esc(mo)}" type=number min=0 '
+                                   f'style="max-width:120px" value="{esc(alloc.get(mo, ""))}">',
+                                   csrf=s.csrf_token, submit="Save ceiling"))
+            block = [f'<div class="card"><h2 style="margin-top:4px">{esc(mo)}</h2>{hero}{edit}']
+
+            # work queue: unresolved recommendations first; resolved recede to the bottom
+            ordered = sorted(enumerate(shown, 1),
+                             key=lambda t: (lines.get(t[1]["combo"]) in ("confirmed", "not_ordered"), t[0]))
+            block.append('<div class="queue">'
+                         + "".join(_cpo_rec_card(s, b, rank, lines.get(b["combo"]), month, promoted=b in promoted)
+                                   for rank, b in ordered)
+                         + '</div>')
+
+            # intentionally-open capacity — a positive Elite judgment (restraint), not leftover work
             if open_cap:
-                block += (f'<p class="muted">Why open: only {len(recs)} combination(s) for {esc(mo)} are '
-                          f'economically justified this month; {open_cap} allocation left open rather than '
-                          'manufacturing a weak order.</p>')
+                block.append(restraint_note(safe(
+                    f'<strong>Elite is holding {open_cap} of your {cap} {esc(mo)} slots open on purpose.</strong> '
+                    f'Only {len(recs)} combination(s) are economically justified for {esc(_month_label(month))}; '
+                    'the rest stay open rather than manufacturing a weak order. This is restraint, not unfinished '
+                    'work. <span class="muted">Why open: demand and coverage do not support consuming the full '
+                    'ceiling.</span>')))
+
             if nextbest[len(promoted):]:
-                nb = table(["Combination", "Order now", "Current", f"Relevant Future (by {esc(month)})"],
-                           [[safe(f'<a href="/combination/{esc(b["pid"])}?month={esc(month)}">{esc(b["identity"])}</a>'),
-                             esc(b["order"]), esc(b["current"]), esc(b["future"])]
-                            for b in nextbest[len(promoted):]])
-                block += f'<details><summary style="cursor:pointer">Next best (reserves)</summary>{nb}</details>'
-            block += (form(f"/ordering/cpo/revert", f'<input type=hidden name=month value="{esc(month)}">'
-                           f'<input type=hidden name=model value="{esc(mo)}">',
-                           csrf=s.csrf_token, submit="Revert this model", ) )
-            parts.append(block + '</div>')
-        if not models:
-            parts.append('<div class="card"><p class="muted">No certified ACQUIRE recommendations are issued '
-                         'for this store. Load/refresh the New-Inventory plan to populate CPO.</p></div>')
-        return _resp(app, s, "CPO Ordering", "".join(parts), "/ordering")
+                nb = "".join(
+                    f'<div class="pos" style="padding:2px 0">'
+                    f'<a href="/combination/{esc(b["pid"])}?month={esc(month)}">{esc(b["identity"])}</a> — '
+                    f'ORDER {esc(b["order"])} · Current {esc(b["current"])} · By {esc(month)} {esc(b["future"])}</div>'
+                    for b in nextbest[len(promoted):])
+                block.append(disclosure(f"Next best reserves ({len(nextbest[len(promoted):])})", safe(nb)))
+
+            block.append(form("/ordering/cpo/revert", f'<input type=hidden name=month value="{esc(month)}">'
+                              f'<input type=hidden name=model value="{esc(mo)}">',
+                              csrf=s.csrf_token, submit="Revert this model", ))
+            parts.append("".join(block) + '</div>')
+        return Response(page("CPO Ordering", "".join(parts), ctx=app.ctx(s), active_path="/ordering",
+                             flash=_flash(s), wide=True, hide_title=True))
 
     @app.post("/ordering/cpo/allocation")
     def cpo_allocation(app, req):
@@ -979,19 +1001,62 @@ def register(app):
         return _resp(app, s, "Admin", body, "/admin")
 
 
-def _cpo_line(s, b, rank, state, *, promoted=False):
-    _mq = f'?month={esc(b.get("month", ""))}' if b.get("month") else ""
-    ident = safe(f'<a href="/combination/{esc(b["pid"])}{_mq}">{esc(b["identity"])}</a>'
+def _flash(s):
+    f = s.flash
+    s.flash = None
+    return f
+
+
+def _num(v):
+    return round(v, 2) if isinstance(v, (int, float)) and not isinstance(v, bool) else (v if v is not None else "—")
+
+
+def _month_neighbours(app, month):
+    """Adjacent selectable months (prev, next) within the selector window (current-1 .. current+12),
+    or None at an edge. Used to build deterministic prev/next month links."""
+    now = app.stack.clock.now()
+    cur = now.year * 12 + (now.month - 1)
+    lo, hi = cur - 1, cur + 12
+    try:
+        y, m = month.split("-")
+        mi = int(y) * 12 + (int(m) - 1)
+    except Exception:   # noqa: BLE001
+        return (None, None)
+    def ym(i):
+        return f"{i // 12:04d}-{i % 12 + 1:02d}"
+    return (ym(mi - 1) if mi - 1 >= lo else None, ym(mi + 1) if mi + 1 <= hi else None)
+
+
+def _cpo_rec_card(s, b, rank, state, month, *, promoted=False):
+    """One CPO recommendation as an actionable card: the ORDER call is the hero, position is secondary, a
+    month-specific Why drawer discloses the certified reasoning, and the action group works the item.
+    Confirmed / Not-ordering cards visibly recede."""
+    ident = safe(f'<a href="/combination/{esc(b["pid"])}?month={esc(month)}">{esc(b["identity"])}</a>'
                  + (' ' + badge("completed", "promoted") if promoted else ''))
-    if state == "confirmed":
-        action = safe(badge("completed", "Confirmed") + " " + _line_btn(s, b, "clear", "Revert", "secondary"))
-    elif state == "not_ordered":
-        action = safe(badge("stale", "Not Ordered") + " " + _line_btn(s, b, "clear", "Revert", "secondary"))
+    call = f'ORDER {b["order"]}'
+    pos = safe(f'Current <strong>{esc(b["current"])}</strong> · By {esc(month)} <strong>{esc(b["future"])}</strong>')
+    if b.get("m_present"):
+        why_body = kv([("Why now", f"ranked by the {_month_label(month)} coverage condition"),
+                       (f"Projected shortage — {month}", _num(b.get("m_shortage"))),
+                       (f"Expected demand — {month}", _num(b.get("m_demand"))),
+                       (f"Supply position by {month}", b.get("m_cum_supply")),
+                       (f"Confidence — {month}", b.get("m_confidence") or "—"),
+                       ("Order now (certified action)", b["order"])])
     else:
-        action = safe(_line_btn(s, b, "confirmed", "Confirm") + " " + _line_btn(s, b, "not_ordered", "Not Ordered", "secondary")
-                      + " " + _bench_button(s, b["identity"], f"/ordering/cpo?month={b.get('month','')}"))
-    label = ident if state != "not_ordered" else safe(f'<span style="opacity:.55">{ident}</span>')
-    return [esc(rank), label, esc(b["order"]), esc(b["current"]), esc(b["future"]), action]
+        why_body = kv([("Why", "certified acquire-now decision for this combination"),
+                       (f"Planning month {month}", "outside the certified planning horizon for this combination"),
+                       ("Order now (certified action)", b["order"])])
+    why = disclosure(f"Why #{rank}", why_body)
+    if state == "confirmed":
+        return rec_card(rank, ident, call, pos, why, action_group(_line_btn(s, b, "clear", "Undo", "secondary")),
+                        resolved=True, chip_html=chip("done", "Confirmed"))
+    if state == "not_ordered":
+        return rec_card(rank, ident, call, pos, why, action_group(_line_btn(s, b, "clear", "Undo", "secondary")),
+                        resolved=True, chip_html=chip("skip", "Not ordering"))
+    actions = action_group(_line_btn(s, b, "confirmed", "Confirm order")
+                           + _line_btn(s, b, "not_ordered", "Not ordering", "secondary")
+                           + _bench_button(s, b["identity"], f"/ordering/cpo?month={month}"))
+    return rec_card(rank, ident, call, pos, why, actions, resolved=False, chip_html=chip("need", "Needs decision"))
 
 
 def _line_btn(s, b, state, text, cls="primary"):

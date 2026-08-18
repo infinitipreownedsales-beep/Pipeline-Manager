@@ -78,6 +78,46 @@ input,select,textarea{width:100%;max-width:520px;padding:7px;border:1px solid va
 .dist .iqr{position:absolute;top:0;height:100%;background:var(--accent);opacity:.35}
 .dist .med{position:absolute;top:0;width:2px;height:100%;background:var(--accent)}
 .dist .cap{position:absolute;top:50%;width:1px;height:10px;transform:translateY(-50%);background:var(--muted)}
+/* --- workflow cockpit components --- */
+main.wide{max-width:1320px}
+.wshead{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:2px 0 6px}
+.wshead h1{margin:0}
+.mnav{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+.mnav a,.mnav span.cur{padding:6px 12px;border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--fg);font-size:14px;background:var(--card)}
+.mnav a:hover{background:var(--bg)}
+.mnav .cur{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:700}
+.mnav form.mut{display:inline-flex;gap:6px;align-items:center;margin-left:4px}
+.mnav select{max-width:180px;padding:6px}
+.stat{display:flex;flex-wrap:wrap;gap:10px;margin:8px 0}
+.metric{border:1px solid var(--line);border-radius:9px;padding:8px 12px;min-width:96px;background:var(--card)}
+.metric .v{font-size:20px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums}
+.metric .l{font-size:12px;color:var(--muted);margin-top:2px}
+.metric.attn .v{color:var(--accent)}
+.progress{height:10px;border-radius:6px;background:var(--bg);border:1px solid var(--line);overflow:hidden;margin:8px 0 4px;max-width:360px}
+.progress .p{height:100%;background:#1f9d4d}
+.chip{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:20px;font-size:12px;border:1px solid var(--line);white-space:nowrap}
+.chip.need{background:#eef4fb;border-color:#bcd6f2;color:var(--accent);font-weight:600}
+.chip.done{background:#e9f6ee;border-color:#bfe4cc;color:#1f7a44}
+.chip.skip{background:#f3f4f6;color:var(--muted)}
+.chip.bench{background:#fff6e6;border-color:#e7cf98;color:#8a6d1f}
+.queue{display:grid;gap:10px;margin:10px 0}
+.rec{border:1px solid var(--line);border-radius:11px;padding:12px 14px;background:var(--card);display:grid;grid-template-columns:auto 1fr auto;gap:6px 16px;align-items:start}
+.rec.resolved{opacity:.62;background:var(--bg)}
+.rec .rank{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;padding-top:4px}
+.rec .body{min-width:0}
+.rec .ident{font-weight:600;font-size:15px}
+.rec .call{font-size:22px;font-weight:800;letter-spacing:.01em;margin:2px 0 4px}
+.rec .pos{color:var(--muted);font-size:13px}
+.rec .side{text-align:right;display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+.rec details{margin-top:6px}
+.rec details>summary{cursor:pointer;color:var(--accent);font-size:13px}
+.rec .why{margin-top:6px;font-size:13px}
+.actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.actions form.mut{display:inline}
+.actions button{padding:6px 12px;font-size:13px}
+.restraint{border-left:4px solid #1f9d4d;background:#eef8f1;padding:10px 14px;border-radius:8px;margin:10px 0}
+.restraint strong{color:#1f7a44}
+@media(max-width:720px){.rec{grid-template-columns:1fr}.rec .side{text-align:left;align-items:flex-start}.actions{justify-content:flex-start}}
 ol.timeline{list-style:none;padding-left:0}ol.timeline li{padding:6px 0 6px 16px;border-left:2px solid var(--line);margin-left:6px}
 @media(max-width:640px){.kv{grid-template-columns:1fr}main{padding:10px}}
 """
@@ -114,8 +154,10 @@ def _trust_strip(ctx):
             f'<a class="upd" href="/data">Update Data →</a></div>')
 
 
-def page(title, body, *, ctx=None, active_path="/", flash=None):
-    """Render the full operator shell around `body` (already-safe HTML)."""
+def page(title, body, *, ctx=None, active_path="/", flash=None, wide=False, hide_title=False):
+    """Render the full operator shell around `body` (already-safe HTML). `wide` widens the work area for
+    desktop cockpit screens; `hide_title` omits the default <h1> when `body` provides its own workspace
+    header (title + context navigator)."""
     ctx = ctx or {}
     nav = "".join(
         f'<a href="{esc(p)}"{" aria-current=page" if p == active_path else ""}>{esc(label)}</a>'
@@ -136,12 +178,14 @@ def page(title, body, *, ctx=None, active_path="/", flash=None):
         '<a class="ctx" href="/logout">Sign out</a>'
         '</header>')
     flash_html = f'<div class="callout" role="status">{esc(flash)}</div>' if flash else ""
+    title_html = "" if hide_title else f'<h1>{esc(title)}</h1>'
+    main_cls = "wide" if wide else ""
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<title>{esc(title)} — Elite Pipeline</title><style>{_CSS}</style></head>'
             f'<body>{header}{_trust_strip(ctx)}'
             f'<nav class="primary" role="navigation" aria-label="Primary">{nav}</nav>'
-            f'<main role="main"><h1>{esc(title)}</h1>{flash_html}{body}</main></body></html>')
+            f'<main role="main" class="{main_cls}">{title_html}{flash_html}{body}</main></body></html>')
 
 
 def empty(msg):
@@ -211,6 +255,75 @@ class _Html(str):
 
 def safe(s):
     return _Html(s)
+
+
+# --- canonical workflow-cockpit components (reusable across domains) -------------------------------------
+def workspace_header(title, right_html=""):
+    """Page title paired with a strong context control (e.g. a month navigator) on the right."""
+    return (f'<div class="wshead"><h1>{esc(title)}</h1>'
+            f'<div class="mnav">{right_html if _is_html(right_html) else esc(right_html)}</div></div>')
+
+
+def month_nav(base_path, prev, cur, nxt, *, jump_html=""):
+    """Deterministic server-backed month navigator. `prev`/`cur`/`nxt` are (ym, label); prev/nxt may be
+    None to disable an edge. Current month is a plain highlighted label; neighbours are GET links carrying
+    ?month=… (no JS, cannot regress a submit-dependent selector). `jump_html` is the secondary jump control."""
+    out = []
+    if prev:
+        out.append(f'<a href="{esc(base_path)}?month={esc(prev[0])}" rel="prev" title="{esc(prev[1])}">‹ {esc(prev[1])}</a>')
+    out.append(f'<span class="cur">{esc(cur[1])}</span>')
+    if nxt:
+        out.append(f'<a href="{esc(base_path)}?month={esc(nxt[0])}" rel="next" title="{esc(nxt[1])}">{esc(nxt[1])} ›</a>')
+    if jump_html:
+        out.append(jump_html if _is_html(jump_html) else esc(jump_html))
+    return safe("".join(out))
+
+
+def metric(value, label, *, attn=False):
+    return f'<div class="metric{" attn" if attn else ""}"><div class="v">{esc(value)}</div><div class="l">{esc(label)}</div></div>'
+
+
+def stat_row(metrics):
+    return f'<div class="stat">{"".join(metrics)}</div>'
+
+
+def progress(done, total):
+    total = max(0, int(total or 0))
+    done = max(0, min(int(done or 0), total))
+    pct = (done / total * 100.0) if total else 0.0
+    return (f'<div class="progress" role="progressbar" aria-valuenow="{done}" aria-valuemin="0" '
+            f'aria-valuemax="{total}"><span class="p" style="width:{pct:.0f}%"></span></div>'
+            f'<div class="muted" style="font-size:12px">{done} of {total} reviewed</div>')
+
+
+def chip(kind, text):
+    k = {"need": "need", "done": "done", "skip": "skip", "bench": "bench"}.get(kind, "")
+    return f'<span class="chip {k}">{esc(text)}</span>'
+
+
+def disclosure(summary, body_html):
+    return f'<details><summary>{esc(summary)}</summary><div class="why">{body_html}</div></details>'
+
+
+def action_group(buttons_html):
+    return f'<div class="actions">{buttons_html}</div>'
+
+
+def rec_card(rank, ident_html, call, pos_html, why_html, actions_html, *, resolved=False, chip_html=""):
+    """A recommendation as an actionable unit: dominant call, secondary position, a Why disclosure, and an
+    action group. Resolved (confirmed / not-ordering / benched) cards visibly recede."""
+    return (f'<div class="rec{" resolved" if resolved else ""}">'
+            f'<div class="rank">{esc(rank)}</div>'
+            f'<div class="body"><div class="ident">{ident_html if _is_html(ident_html) else esc(ident_html)}</div>'
+            f'<div class="call">{esc(call)}</div>'
+            f'<div class="pos">{pos_html if _is_html(pos_html) else esc(pos_html)}</div>'
+            f'{why_html}</div>'
+            f'<div class="side">{chip_html}{actions_html}</div></div>')
+
+
+def restraint_note(html):
+    """Intentionally-open capacity presented as a positive Elite judgment (restraint), not leftover work."""
+    return f'<div class="restraint">{html if _is_html(html) else esc(html)}</div>'
 
 
 def form(action, fields_html, *, csrf, idem=None, submit="Submit", method="post", confirm=None,

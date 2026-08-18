@@ -65,14 +65,14 @@ class TestCpoPpo(unittest.TestCase):
         self.assertIn("CPO", b)
         self.assertIn("QX65 8501 QBE/G", b)
         self.assertIn("Confirm", b)
-        self.assertIn("Not Ordered", b)
+        self.assertIn("Not ordering", b)
 
     def test_allocation_persists(self):
         r = self.full.post("/ordering/cpo/allocation", {"month": self.m, "alloc_QX60": "8", "alloc_QX65": "5"})
         self.assertEqual(r.status, 303)
         b = self.full.get("/ordering/cpo", month=self.m).body
         self.assertIn('value="8"', b)
-        self.assertIn("Allocation 8", b)
+        self.assertIn("Allocation ceiling", b)
 
     def test_line_confirm_persists_and_reverts(self):
         combo_id = self.conn.execute("SELECT id FROM sellable_combination WHERE canonical_identity LIKE ?",
@@ -86,7 +86,7 @@ class TestCpoPpo(unittest.TestCase):
         # QX65 has 1 justified combo; allocate 4 -> 3 intentionally open with a Why
         self.full.post("/ordering/cpo/allocation", {"month": self.m, "alloc_QX65": "4"})
         b = self.full.get("/ordering/cpo", month=self.m).body
-        self.assertIn("intentionally open", b)
+        self.assertIn("open on purpose", b)
         self.assertIn("Why open", b)
 
     def test_combination_detail_clickable(self):

@@ -82,22 +82,25 @@ class TestCpoMonthRoute(unittest.TestCase):
         return self.full.get(action.lstrip("/") and action or "/ordering/cpo", month=month).body
 
     # 1 + 2. selecting a near and a far month yields that operative month in the rendered page
+    def _mlabel(self, ym):
+        from elite.ui.views.operator import _month_label
+        return _month_label(ym)
+
     def test_selection_binds_operative_month(self):
         near = self._select_month(NEAR)
-        self.assertIn(f"CPO — {NEAR}", near)
+        self.assertIn(f'<span class="cur">{self._mlabel(NEAR)}</span>', near)   # current-month context chip
         far = self._select_month(FAR)
-        self.assertIn(f"CPO — {FAR}", far)
-        self.assertNotIn(f"CPO — 2026-01", far)         # not stuck on the default month
+        self.assertIn(f'<span class="cur">{self._mlabel(FAR)}</span>', far)
+        self.assertNotIn(f'<span class="cur">{self._mlabel("2026-01")}</span>', far)  # not stuck on default month
 
-    # 3. Relevant-Future column header reflects the selected canonical month
-    def test_relevant_future_header_tracks_month(self):
-        self.assertIn(f"Relevant Future (by {NEAR})", self._select_month(NEAR))
-        self.assertIn(f"Relevant Future (by {FAR})", self._select_month(FAR))
+    # 3. the selected canonical month drives the per-recommendation Relevant-Future ("By <month>")
+    def test_relevant_future_tracks_month(self):
+        self.assertIn(f"By {NEAR}", self._select_month(NEAR))
+        self.assertIn(f"By {FAR}", self._select_month(FAR))
 
     # 4. underlying month-plan inputs change the board when source rows differ (ranking flips)
     def test_board_inputs_change_with_month(self):
         def first_combo(body):
-            # first combination link in the ranked table
             return re.search(r'/combination/[^"?]+\?month=[^"]*">([^<]+)</a>', body).group(1)
         self.assertEqual(first_combo(self._select_month(NEAR)), "QX60 8481 XKJ/K")   # short 3.0 in Sep
         self.assertEqual(first_combo(self._select_month(FAR)), "QX60 8481 QBE/G")     # short 9.0 by Jan
@@ -112,10 +115,18 @@ class TestCpoMonthRoute(unittest.TestCase):
     # 6. ORDER-now stays the certified discrete action; later shortage is not converted to an order quantity
     def test_order_now_is_certified(self):
         far = self._select_month(FAR)
-        # QX60 8481 QBE/G shows the worst month shortage (9) but ORDER-now is the certified 1
-        row = re.search(r'QX60 8481 QBE/G.*?</td><td>(\d+)</td>', far, re.S)
-        self.assertIsNotNone(row)
-        self.assertEqual(row.group(1), "1")
+        # locate the QBE/G recommendation card and read its ORDER call (worst month shortage is 9)
+        card = re.search(r'QX60 8481 QBE/G.*?<div class="call">ORDER (\d+)</div>', far, re.S)
+        self.assertIsNotNone(card)
+        self.assertEqual(card.group(1), "1")               # certified acquire_units, not the month shortage
+
+    # 7. the primary month navigation is deterministic server-backed prev/next LINKS carrying ?month=
+    def test_month_nav_links_are_server_backed(self):
+        body = self.full.get("/ordering/cpo", month="2026-10").body
+        self.assertIn('href="/ordering/cpo?month=2026-09"', body)   # prev
+        self.assertIn('href="/ordering/cpo?month=2026-11"', body)   # next
+        # following the next link binds that month (no JS / form submit needed)
+        self.assertIn(self._mlabel("2026-11"), self.full.get("/ordering/cpo", month="2026-11").body)
 
 
 if __name__ == "__main__":
