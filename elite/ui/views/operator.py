@@ -422,7 +422,7 @@ def register(app):
         s = req.session
         app.require(s, "workspace.view")
         app.ensure_inventory_published(s.scope)
-        month = req.q("month") or _default_month(app)
+        month = _cpo_resolve_month(app, s, req)
         alloc = _ws_get(app, s.scope, f"cpo_alloc::{month}", {}) or {}
         lines = _ws_get(app, s.scope, f"cpo_line::{month}", {}) or {}
         board = _acquire_board(app, s.scope, month)
@@ -1125,6 +1125,37 @@ def _month_neighbours(app, month):
     def ym(i):
         return f"{i // 12:04d}-{i % 12 + 1:02d}"
     return (ym(mi - 1) if mi - 1 >= lo else None, ym(mi + 1) if mi + 1 <= hi else None)
+
+
+def _month_in_window(app, month):
+    """True iff `month` (YYYY-MM) parses and falls inside the CPO selector window (current-1 .. current+12).
+    A remembered month that has fallen out of the window (e.g. stale from a prior run) is treated as invalid."""
+    now = app.stack.clock.now()
+    cur = now.year * 12 + (now.month - 1)
+    try:
+        y, m = str(month).split("-")
+        mi = int(y) * 12 + (int(m) - 1)
+    except Exception:   # noqa: BLE001
+        return False
+    return cur - 1 <= mi <= cur + 12
+
+
+def _cpo_resolve_month(app, s, req):
+    """Resolve the CPO working month with per-principal, store-scoped memory. Presentation state ONLY — it
+    never feeds the certified plan calculation (the resolved month is bound exactly as an explicit ?month
+    always was). An explicit ?month overrides and updates the memory; otherwise the last remembered month is
+    restored; an invalid / out-of-window value (explicit or remembered) falls back to the default current
+    month. Store-scoped (keyed under scope::<scope>) so one store's memory can never leak into another; the
+    pref key is principal-qualified so operators do not overwrite each other."""
+    key = f"cpo_last_month::{s.principal_id}"
+    explicit = req.q("month")
+    if explicit:
+        month = explicit if _month_in_window(app, explicit) else _default_month(app)
+    else:
+        remembered = _ws_get(app, s.scope, key, None)
+        month = remembered if (remembered and _month_in_window(app, remembered)) else _default_month(app)
+    _ws_put(app, s.scope, key, month)          # heal to a valid value; record explicit overrides
+    return month
 
 
 def _cpo_rec_pieces(s, b, rank, state, month, promoted):
