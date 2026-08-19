@@ -83,7 +83,8 @@ class TestPhase10SecurityA11y(unittest.TestCase):
     def test_99_empty_states_usable(self):
         self.full.post("/scope", {"scope": "store:EMPTY"})
         r = self.full.get("/")
-        self.assertIn("Nothing here", r.body)              # a usable empty state, not a blank page
+        # a usable, informative empty state (not a blank page): the Pipeline home explains WHY it is empty
+        self.assertIn("No certified inventory plan is loaded", r.body)
 
     def test_100_failure_states_usable(self):
         r = self.full.get("/item/does-not-exist")

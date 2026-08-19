@@ -1,7 +1,7 @@
 """Login / logout / help / health — the authenticated operator context."""
 from __future__ import annotations
 
-from ..render import esc, page
+from ..render import esc, page, auth_page
 from ..http import Response
 
 
@@ -12,13 +12,17 @@ def register(app):
         # a default sign-in authenticates at exactly that scope, so the operator never types or misremembers
         # the dealership string and can never land in the wrong scope from this form.
         scope = esc(app.pilot_scope)
-        body = ('<div class="card"><form method="post" action="/login">'
-                '<label for="pid">Operator ID</label><input id="pid" name="principal_id" required>'
-                '<label for="sec">Password</label><input id="sec" name="secret" type="password" required>'
+        body = ('<h1>Sign in</h1>'
+                '<p class="lede">Authenticating at your configured store — you never have to type it.</p>'
+                '<form method="post" action="/login">'
+                '<label for="pid">Operator ID</label>'
+                '<input id="pid" name="principal_id" autocomplete="username" autofocus required>'
+                '<label for="sec">Password</label>'
+                '<input id="sec" name="secret" type="password" autocomplete="current-password" required>'
                 '<label for="scope">Store / scope</label>'
                 f'<input id="scope" name="scope" value="{scope}" readonly required>'
-                '<div style="margin-top:10px"><button type="submit">Sign in</button></div></form></div>')
-        return Response(page("Sign in", body, ctx={"environment": app.environment}))
+                '<button type="submit">Sign in</button></form>')
+        return Response(auth_page("Sign in", body, ctx={"environment": app.environment}))
 
     @app.post("/login")
     def do_login(app, req):
@@ -27,9 +31,18 @@ def register(app):
             token = app.login(req.f("principal_id", ""), req.f("secret", ""),
                               req.f("scope", app.pilot_scope) or app.pilot_scope)
         except Exception:
-            return Response(page("Sign in", '<div class="err" role="alert">Sign-in failed. Check your '
-                                 'operator ID and password.</div>', ctx={"environment": app.environment}),
-                            status=403)
+            body = ('<h1>Sign in</h1>'
+                    '<div class="err" role="alert">Sign-in failed. Check your operator ID and password.</div>'
+                    '<form method="post" action="/login">'
+                    '<label for="pid">Operator ID</label>'
+                    f'<input id="pid" name="principal_id" value="{esc(req.f("principal_id", ""))}" '
+                    'autocomplete="username" autofocus required>'
+                    '<label for="sec">Password</label>'
+                    '<input id="sec" name="secret" type="password" autocomplete="current-password" required>'
+                    '<label for="scope">Store / scope</label>'
+                    f'<input id="scope" name="scope" value="{esc(app.pilot_scope)}" readonly required>'
+                    '<button type="submit">Sign in</button></form>')
+            return Response(auth_page("Sign in", body, ctx={"environment": app.environment}), status=403)
         return Response.redirect("/", cookies={"elite_session": token})
 
     @app.get("/logout")

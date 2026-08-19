@@ -34,79 +34,152 @@ ADMIN_NAV = [
 ]
 
 _CSS = """
-:root{--fg:#1a1d21;--muted:#5a6470;--line:#d5dbe2;--bg:#f6f8fa;--card:#fff;--accent:#0b5cad}
-*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}
-a{color:var(--accent)}header.shell{display:flex;align-items:center;gap:16px;padding:10px 18px;background:var(--card);border-bottom:2px solid var(--line);flex-wrap:wrap}
-header.shell .brand{font-weight:700}header.shell .ctx{color:var(--muted);font-size:13px}
-header.shell .spacer{flex:1}.attention{font-weight:700}
-nav.primary{display:flex;flex-wrap:wrap;gap:4px;padding:8px 16px;background:var(--card);border-bottom:1px solid var(--line);align-items:center}
-nav.primary a{padding:8px 14px;border-radius:8px;text-decoration:none;color:var(--fg);font-weight:600;letter-spacing:.01em}
-nav.primary a:hover{background:var(--bg)}
+/* ============================================================================================
+   ELITE PIPELINE — DESIGN TOKEN SYSTEM  (Slice 1: global system + shell + login)
+   One coherent visual language for every operator screen. Status is conveyed by TEXT + shape,
+   never by color alone; semantic color (ready / timing / danger) is separate from the command
+   accent. Fonts are LOCAL-SAFE stacks (no runtime/CDN dependency): the intended faces are named
+   first and picked up automatically if the Windows deployment installs them, otherwise the app
+   falls back to Segoe UI / Consolas which carry the same hierarchy fully offline.
+   ============================================================================================ */
+:root{
+  /* type — intended character first, local-safe Windows fallback second (offline-proof) */
+  --font-display:"Archivo","Segoe UI Variable Display","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  --font-body:"IBM Plex Sans","Segoe UI","Segoe UI Variable Text",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono","Cascadia Code",Consolas,"SF Mono",Menlo,"Liberation Mono",monospace;
+  /* reading surfaces (cool-biased neutrals — chosen, not default grey) */
+  --fg:#171b22;--muted:#4c5663;--faint:#6b7684;
+  --line:#dbe1e9;--line-2:#eceff4;--bg:#f3f6f9;--card:#ffffff;--raise:#fbfcfe;
+  /* command surface (graphite) — where the operator acts (top command bar) */
+  --cmd:#10151d;--cmd-2:#19212c;--cmd-line:#2b3542;--cmd-fg:#eef2f7;--cmd-muted:#94a2b4;
+  /* semantic palette (independent of the command accent) */
+  --accent:#2f6fed;--accent-fg:#ffffff;--accent-weak:#eaf1fe;--accent-line:#c3d8fb;
+  --ready:#17936a;--ready-weak:#e6f4ee;--ready-line:#bfe3d3;
+  --timing:#c07d18;--timing-weak:#fbf1dd;--timing-line:#ecd3a0;
+  --danger:#c8443c;--danger-weak:#fbeceb;--danger-line:#eec4c1;
+  --slate:#5d6775;
+  --focus:#7db3f0;
+  --r-sm:6px;--r:9px;--r-lg:12px;
+  --shadow:0 1px 2px rgba(16,21,29,.05),0 2px 8px rgba(16,21,29,.04);
+}
+@media (prefers-color-scheme: dark){
+  /* restrained dark — legible on a dark OS, NOT a fashion statement. Command bar stays graphite;
+     only reading surfaces flip. */
+  :root:not([data-theme="light"]){
+    --fg:#e6eaf1;--muted:#a5b0be;--faint:#8390a0;
+    --line:#2a333f;--line-2:#222a34;--bg:#0d1117;--card:#161c25;--raise:#1c232d;
+    --accent:#5b8cf5;--accent-weak:#182335;--accent-line:#294067;
+    --ready:#3bb488;--ready-weak:#12241d;--ready-line:#254a3b;
+    --timing:#dc9a3a;--timing-weak:#2a2213;--timing-line:#4d3c1c;
+    --danger:#e06a62;--danger-weak:#2a1716;--danger-line:#4d2622;
+    --shadow:0 1px 2px rgba(0,0,0,.4);
+  }
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;font:15px/1.55 var(--font-body);color:var(--fg);background:var(--bg);
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+a{color:var(--accent)}
+h1,h2,h3{font-family:var(--font-display);letter-spacing:-.01em;text-wrap:balance}
+h1{font-size:23px;font-weight:700;margin:6px 0 12px}
+h2{font-size:17px;font-weight:600;margin:20px 0 8px}
+.skip{position:absolute;left:-9999px;top:0;z-index:50;background:var(--accent);color:#fff;
+  padding:8px 14px;border-radius:0 0 var(--r) 0;font-weight:600}
+.skip:focus{left:0}
+/* ---- command bar (top navigation — chosen over a left rail to preserve work-surface width) ---- */
+header.shell{background:var(--cmd);color:var(--cmd-fg);border-bottom:1px solid #05080c}
+.shell-in{display:flex;align-items:center;gap:18px;padding:9px 20px;flex-wrap:wrap;
+  max-width:1600px;margin:0 auto}
+.shell .brand{display:inline-flex;align-items:center;gap:9px;font-family:var(--font-display);
+  font-weight:700;letter-spacing:-.01em;color:var(--cmd-fg);font-size:15.5px;white-space:nowrap}
+.shell .mark{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:7px;
+  background:linear-gradient(160deg,var(--accent),#1d4fbf);color:#fff;font-size:12px;font-weight:800;letter-spacing:.02em}
+.shell .ctx{color:var(--cmd-muted);font-size:12.5px;white-space:nowrap}
+.shell .ctx b,.shell .ctx strong{color:var(--cmd-fg);font-weight:600}
+.shell .spacer{flex:1}
+.shell .shell-ctx{display:inline-flex;align-items:center;gap:14px;flex-wrap:wrap}
+.shell .shell-ctx a{color:var(--cmd-muted);text-decoration:none;font-size:12.5px}
+.shell .shell-ctx a:hover{color:var(--cmd-fg)}
+.shell .env{border:1px solid var(--cmd-line);border-radius:20px;padding:1px 9px;font-size:11.5px;
+  color:var(--cmd-muted);text-transform:lowercase}
+/* primary nav lives inside the command bar (compact, horizontal) */
+nav.primary{display:flex;flex-wrap:wrap;gap:2px;align-items:center}
+nav.primary a{padding:6px 12px;border-radius:7px;text-decoration:none;color:#cfd7e2;
+  font-weight:600;font-size:13.5px;letter-spacing:.005em;white-space:nowrap}
+nav.primary a:hover{background:rgba(255,255,255,.08);color:#fff}
 nav.primary a[aria-current=page]{background:var(--accent);color:#fff}
-nav.primary .navspacer{flex:1}
-nav.primary a.admin{font-weight:500;color:var(--muted);font-size:13px}
-.trust{display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:6px 16px;background:var(--card);border-bottom:1px solid var(--line);font-size:13px;color:var(--muted)}
-.trust .date{font-weight:600;color:var(--fg)}
-.trust .src{display:inline-flex;align-items:center;gap:5px}
-.trust .dot{width:9px;height:9px;border-radius:50%;display:inline-block;border:1px solid rgba(0,0,0,.15)}
-.dot.green{background:#1f9d4d}.dot.yellow{background:#e0a400}.dot.red{background:#c0392b}.dot.gray{background:#b8c0c8}
-.trust .upd{margin-left:auto}
-main{max-width:1180px;margin:0 auto;padding:22px}
-h1{font-size:22px;margin:6px 0 12px}h2{font-size:17px;margin:20px 0 8px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin:10px 0}
-table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line)}
-th{color:var(--muted);font-weight:600}
-.badge{display:inline-block;padding:1px 8px;border:1px solid var(--line);border-radius:20px;font-size:12px;white-space:nowrap}
-.scenario{border-style:dashed}.stale{background:#fff6e6}.muted{color:var(--muted)}
-.callout{border-left:4px solid var(--accent);padding:8px 12px;background:#eef4fb}
+nav.primary .navspacer{width:1px;align-self:stretch;background:var(--cmd-line);margin:3px 7px}
+nav.primary a.admin{font-weight:500;color:var(--cmd-muted);font-size:12.5px}
+nav.primary a.admin:hover{color:var(--cmd-fg)}
+/* ---- trust strip (honest source-health ribbon) ---- */
+.trust{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding:7px 20px;
+  background:var(--card);border-bottom:1px solid var(--line);font-size:12.5px;color:var(--muted)}
+.trust .date{font-weight:600;color:var(--fg);font-variant-numeric:tabular-nums}
+.trust .src{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.trust .dot{width:8px;height:8px;border-radius:50%;display:inline-block;box-shadow:0 0 0 1px rgba(0,0,0,.08) inset}
+.dot.green{background:var(--ready)}.dot.yellow{background:var(--timing)}.dot.red{background:var(--danger)}.dot.gray{background:#aab4c0}
+.trust .upd{margin-left:auto;font-weight:600;text-decoration:none;white-space:nowrap}
+.trust .upd:hover{text-decoration:underline}
+/* ---- work area ---- */
+main{max-width:1180px;margin:0 auto;padding:24px 22px 48px}
+main.wide{max-width:1360px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);padding:15px;margin:12px 0;box-shadow:var(--shadow)}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:600;font-size:12.5px;letter-spacing:.02em}
+td{font-variant-numeric:tabular-nums}
+.badge{display:inline-block;padding:1px 9px;border:1px solid var(--line);border-radius:20px;font-size:12px;white-space:nowrap;color:var(--muted)}
+.scenario{border-style:dashed}.stale{background:var(--timing-weak)}.muted{color:var(--muted)}
+.callout{border-left:3px solid var(--accent);padding:9px 13px;background:var(--accent-weak);border-radius:0 var(--r) var(--r) 0}
 form.mut{display:inline}button,input,select,textarea{font:inherit}
-button{padding:7px 12px;border:1px solid var(--accent);background:var(--accent);color:#fff;border-radius:7px;cursor:pointer}
-button.secondary{background:#fff;color:var(--accent)}
-label{display:block;font-size:13px;color:var(--muted);margin:8px 0 2px}
-input,select,textarea{width:100%;max-width:520px;padding:7px;border:1px solid var(--line);border-radius:7px}
-:focus{outline:3px solid #7db3f0;outline-offset:1px}
-.err{border-left:4px solid #b00020;background:#fdecef;padding:10px 12px;border-radius:6px}
-.empty{color:var(--muted);padding:24px;text-align:center;border:1px dashed var(--line);border-radius:10px}
-.kv{display:grid;grid-template-columns:200px 1fr;gap:2px 12px}.kv dt{color:var(--muted)}.kv dd{margin:0}
+button{padding:7px 13px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-fg);border-radius:var(--r-sm);cursor:pointer;font-weight:600}
+button:hover{filter:brightness(1.05)}
+button.secondary{background:var(--card);color:var(--accent)}
+label{display:block;font-size:12.5px;color:var(--muted);margin:9px 0 3px;font-weight:500}
+input,select,textarea{width:100%;max-width:520px;padding:8px 9px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--card);color:var(--fg)}
+:focus-visible{outline:3px solid var(--focus);outline-offset:1px}
+:focus{outline:3px solid var(--focus);outline-offset:1px}
+.err{border-left:3px solid var(--danger);background:var(--danger-weak);padding:11px 13px;border-radius:0 var(--r) var(--r) 0}
+.empty{color:var(--muted);padding:26px;text-align:center;border:1px dashed var(--line);border-radius:var(--r-lg)}
+.kv{display:grid;grid-template-columns:200px 1fr;gap:3px 14px}.kv dt{color:var(--muted)}.kv dd{margin:0}
 .bars{display:grid;gap:7px;margin:8px 0}
 .bars .brow{display:grid;grid-template-columns:150px 1fr auto;gap:10px;align-items:center;font-size:13px}
 .bars .blabel{color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.bars .track{background:var(--bg);border:1px solid var(--line);border-radius:6px;height:16px;position:relative;overflow:hidden}
+.bars .track{background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);height:16px;position:relative;overflow:hidden}
 .bars .fill{position:absolute;left:0;top:0;height:100%;background:var(--accent);opacity:.85}
 .bars .bval{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
-.dist .track{background:var(--bg);border:1px solid var(--line);border-radius:6px;height:18px;position:relative;overflow:hidden}
-.dist .iqr{position:absolute;top:0;height:100%;background:var(--accent);opacity:.35}
+.dist .track{background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);height:18px;position:relative;overflow:hidden}
+.dist .iqr{position:absolute;top:0;height:100%;background:var(--accent);opacity:.32}
 .dist .med{position:absolute;top:0;width:2px;height:100%;background:var(--accent)}
 .dist .cap{position:absolute;top:50%;width:1px;height:10px;transform:translateY(-50%);background:var(--muted)}
-/* --- workflow cockpit components --- */
-main.wide{max-width:1320px}
+/* --- workflow cockpit components (structure unchanged this slice; retuned to the token palette) --- */
 .wshead{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:2px 0 6px}
 .wshead h1{margin:0}
 .mnav{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
-.mnav a,.mnav span.cur{padding:6px 12px;border:1px solid var(--line);border-radius:8px;text-decoration:none;color:var(--fg);font-size:14px;background:var(--card)}
+.mnav a,.mnav span.cur{padding:6px 12px;border:1px solid var(--line);border-radius:var(--r-sm);text-decoration:none;color:var(--fg);font-size:14px;background:var(--card)}
 .mnav a:hover{background:var(--bg)}
 .mnav .cur{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:700}
 .mnav form.mut{display:inline-flex;gap:6px;align-items:center;margin-left:4px}
 .mnav select{max-width:180px;padding:6px}
 .stat{display:flex;flex-wrap:wrap;gap:10px;margin:8px 0}
-.metric{border:1px solid var(--line);border-radius:9px;padding:8px 12px;min-width:96px;background:var(--card)}
-.metric .v{font-size:20px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums}
+.metric{border:1px solid var(--line);border-radius:var(--r);padding:9px 13px;min-width:96px;background:var(--card)}
+.metric .v{font-family:var(--font-display);font-size:21px;font-weight:700;line-height:1.05;font-variant-numeric:tabular-nums}
 .metric .l{font-size:12px;color:var(--muted);margin-top:2px}
 .metric.attn .v{color:var(--accent)}
-.progress{height:10px;border-radius:6px;background:var(--bg);border:1px solid var(--line);overflow:hidden;margin:8px 0 4px;max-width:360px}
-.progress .p{height:100%;background:#1f9d4d}
+.progress{height:10px;border-radius:var(--r-sm);background:var(--bg);border:1px solid var(--line);overflow:hidden;margin:8px 0 4px;max-width:360px}
+.progress .p{height:100%;background:var(--ready)}
 .chip{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:20px;font-size:12px;border:1px solid var(--line);white-space:nowrap}
-.chip.need{background:#eef4fb;border-color:#bcd6f2;color:var(--accent);font-weight:600}
-.chip.done{background:#e9f6ee;border-color:#bfe4cc;color:#1f7a44}
-.chip.skip{background:#f3f4f6;color:var(--muted)}
-.chip.bench{background:#fff6e6;border-color:#e7cf98;color:#8a6d1f}
+.chip.need{background:var(--accent-weak);border-color:var(--accent-line);color:var(--accent);font-weight:600}
+.chip.done{background:var(--ready-weak);border-color:var(--ready-line);color:var(--ready)}
+.chip.skip{background:var(--line-2);color:var(--muted)}
+.chip.bench{background:var(--timing-weak);border-color:var(--timing-line);color:var(--timing)}
 .queue{display:grid;gap:10px;margin:10px 0}
-.rec{border:1px solid var(--line);border-radius:11px;padding:12px 14px;background:var(--card);display:grid;grid-template-columns:auto 1fr auto;gap:6px 16px;align-items:start}
-.rec.resolved{opacity:.62;background:var(--bg)}
+.rec{border:1px solid var(--line);border-radius:var(--r-lg);padding:13px 15px;background:var(--card);display:grid;grid-template-columns:auto 1fr auto;gap:6px 16px;align-items:start;box-shadow:var(--shadow)}
+.rec.resolved{opacity:.62;background:var(--bg);box-shadow:none}
 .rec .rank{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;padding-top:4px}
 .rec .body{min-width:0}
 .rec .ident{font-weight:600;font-size:15px}
-.rec .call{font-size:22px;font-weight:800;letter-spacing:.01em;margin:2px 0 4px}
+.rec .call{font-family:var(--font-display);font-size:22px;font-weight:800;letter-spacing:-.01em;margin:2px 0 4px}
 .rec .pos{color:var(--muted);font-size:13px}
 .rec .side{text-align:right;display:flex;flex-direction:column;gap:6px;align-items:flex-end}
 .rec details{margin-top:6px}
@@ -115,11 +188,31 @@ main.wide{max-width:1320px}
 .actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 .actions form.mut{display:inline}
 .actions button{padding:6px 12px;font-size:13px}
-.restraint{border-left:4px solid #1f9d4d;background:#eef8f1;padding:10px 14px;border-radius:8px;margin:10px 0}
-.restraint strong{color:#1f7a44}
-@media(max-width:720px){.rec{grid-template-columns:1fr}.rec .side{text-align:left;align-items:flex-start}.actions{justify-content:flex-start}}
+.restraint{border-left:3px solid var(--ready);background:var(--ready-weak);padding:11px 14px;border-radius:0 var(--r) var(--r) 0;margin:10px 0}
+.restraint strong{color:var(--ready)}
 ol.timeline{list-style:none;padding-left:0}ol.timeline li{padding:6px 0 6px 16px;border-left:2px solid var(--line);margin-left:6px}
-@media(max-width:640px){.kv{grid-template-columns:1fr}main{padding:10px}}
+/* ---- login / auth experience (chrome-free; no operator nav) ---- */
+body.auth{background:linear-gradient(180deg,var(--cmd) 0,var(--cmd) 210px,var(--bg) 210px,var(--bg) 100%);min-height:100vh}
+.authwrap{max-width:420px;margin:0 auto;padding:56px 20px 40px}
+.authbrand{display:inline-flex;align-items:center;gap:10px;color:var(--cmd-fg);font-family:var(--font-display);
+  font-weight:700;font-size:19px;letter-spacing:-.01em;margin-bottom:4px}
+.authbrand .mark{width:30px;height:30px;font-size:13px}
+.authsub{color:var(--cmd-muted);font-size:13px;margin:0 0 26px}
+.authcard{background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);padding:22px;box-shadow:0 8px 30px rgba(16,21,29,.12)}
+.authcard h1{font-size:18px;margin:0 0 4px}
+.authcard .lede{color:var(--muted);font-size:13px;margin:0 0 12px}
+.authcard input{max-width:none}
+.authcard button{width:100%;padding:10px;font-size:15px;margin-top:14px}
+.authfoot{color:var(--muted);font-size:12px;text-align:center;margin-top:18px}
+/* ---- responsive shell ---- */
+@media(max-width:900px){
+  .shell-in{gap:10px 14px}
+  .shell .shell-ctx{gap:10px}
+  nav.primary{order:3;width:100%}
+}
+@media(max-width:720px){.rec{grid-template-columns:1fr}.rec .side{text-align:left;align-items:flex-start}.actions{justify-content:flex-start}}
+@media(max-width:640px){.kv{grid-template-columns:1fr}main{padding:14px 12px 32px}.shell .spacer{display:none}}
+@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 """
 
 
@@ -149,7 +242,7 @@ def _trust_strip(ctx):
     for label, word, tone in srcs:
         chips += (f'<span class="src" title="{esc(label)}: {esc(word)}">'
                   f'<span class="dot {esc(tone)}" aria-hidden="true"></span>{esc(label)}: {esc(word)}</span>')
-    return (f'<div class="trust" role="contentinfo">'
+    return (f'<div class="trust" role="contentinfo" aria-label="Source data health">'
             f'<span class="date">{date}</span>{chips}'
             f'<a class="upd" href="/data">Update Data →</a></div>')
 
@@ -162,30 +255,50 @@ def page(title, body, *, ctx=None, active_path="/", flash=None, wide=False, hide
     nav = "".join(
         f'<a href="{esc(p)}"{" aria-current=page" if p == active_path else ""}>{esc(label)}</a>'
         for p, label in NAV)
-    nav += '<span class="navspacer"></span>'
+    nav += '<span class="navspacer" aria-hidden="true"></span>'
     nav += "".join(
         f'<a href="{esc(p)}"{" aria-current=page" if p == active_path else ""}>{esc(label)}</a>'
         for p, label in NAV_END)
     nav += '<a class="admin" href="/admin">Admin</a>'
+    # Compact top command bar (graphite): brand + inline primary nav + operator context on one line.
+    # Chosen over a left rail so wide work surfaces (Pipeline / CPO / Dealer Trade) keep full width.
     header = (
-        '<header class="shell" role="banner">'
-        f'<span class="brand">Elite Pipeline</span>'
-        f'<span class="ctx">{esc(ctx.get("principal_name", "—"))}</span>'
-        f'<span class="ctx">Store: <strong>{esc(ctx.get("scope", "—"))}</strong></span>'
+        '<header class="shell" role="banner"><div class="shell-in">'
+        '<span class="brand"><span class="mark" aria-hidden="true">EP</span>Elite Pipeline</span>'
+        f'<nav class="primary" role="navigation" aria-label="Primary">{nav}</nav>'
         '<span class="spacer"></span>'
-        f'<span class="badge">env: {esc(ctx.get("environment", "?"))}</span>'
-        '<a class="ctx" href="/help">Help</a>'
-        '<a class="ctx" href="/logout">Sign out</a>'
-        '</header>')
+        '<span class="shell-ctx">'
+        f'<span class="ctx">{esc(ctx.get("principal_name", "—"))}</span>'
+        f'<span class="ctx">Store <b>{esc(ctx.get("scope", "—"))}</b></span>'
+        f'<span class="badge env">{esc(ctx.get("environment", "?"))}</span>'
+        '<a href="/help">Help</a>'
+        '<a href="/logout">Sign out</a>'
+        '</span></div></header>')
     flash_html = f'<div class="callout" role="status">{esc(flash)}</div>' if flash else ""
     title_html = "" if hide_title else f'<h1>{esc(title)}</h1>'
     main_cls = "wide" if wide else ""
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<title>{esc(title)} — Elite Pipeline</title><style>{_CSS}</style></head>'
-            f'<body>{header}{_trust_strip(ctx)}'
-            f'<nav class="primary" role="navigation" aria-label="Primary">{nav}</nav>'
-            f'<main role="main" class="{main_cls}">{title_html}{flash_html}{body}</main></body></html>')
+            f'<body><a class="skip" href="#work">Skip to work area</a>{header}{_trust_strip(ctx)}'
+            f'<main id="work" role="main" class="{main_cls}">{title_html}{flash_html}{body}</main></body></html>')
+
+
+def auth_page(title, body, *, ctx=None, subtitle="Dealership inventory operating system"):
+    """The sign-in experience — deliberately chrome-free: no operator navigation, no trust strip, no
+    store/principal context (there is no authenticated operator yet). A graphite brand band tops a single
+    focused card. `body` is already-safe HTML (the form or an error)."""
+    ctx = ctx or {}
+    env = esc(ctx.get("environment", "?"))
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            f'<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f'<title>{esc(title)} — Elite Pipeline</title><style>{_CSS}</style></head>'
+            f'<body class="auth"><main id="work" role="main"><div class="authwrap">'
+            f'<div class="authbrand"><span class="mark" aria-hidden="true">EP</span>Elite Pipeline</div>'
+            f'<p class="authsub">{esc(subtitle)} · <span style="opacity:.8">{env}</span></p>'
+            f'<div class="authcard">{body}</div>'
+            f'<p class="authfoot">Runs locally · your session never leaves this store</p>'
+            f'</div></main></body></html>')
 
 
 def empty(msg):

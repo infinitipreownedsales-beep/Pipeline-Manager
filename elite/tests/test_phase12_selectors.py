@@ -72,7 +72,10 @@ class TestSelectors(unittest.TestCase):
     def test_selector_posts_still_persist(self):
         # a month chosen from the picker still drives allocation persistence
         self.full.post("/ordering/cpo/allocation", {"month": "2026-08", "alloc_QX65": "3"})
-        self.assertIn("Allocation 3", self.full.get("/ordering/cpo", month="2026-08").body)
+        b = self.full.get("/ordering/cpo", month="2026-08").body
+        # the CPO cockpit surfaces the saved ceiling as a metric and pre-fills the edit control with it
+        self.assertIn("Allocation ceiling", b)
+        self.assertIn('value="3"', b)
 
 
 if __name__ == "__main__":
