@@ -54,6 +54,13 @@ def build_app(db_path=None):
     app.single_operator_pilot = _truthy(env.get("ELITE_SINGLE_OPERATOR_PILOT"))
     app._pilot_stack = pilot                               # keep the wired stack (live executor + services) referenced
     app._p11 = getattr(pilot, "p11", None)                 # Phase 11 ops stack (import orchestrator) for Data uploads
+    # Idempotent capability backfill: managers already authorized to govern (authority.grant) receive the newer
+    # identity.govern capability, so the governed Translation bootstrap is not blocked on already-provisioned DBs.
+    try:
+        from ..identity.provision import ensure_identity_governance_grants
+        ensure_identity_governance_grants(app.stack)
+    except Exception:   # noqa: BLE001 — provisioning must never prevent the app from starting
+        pass
     return app
 
 
