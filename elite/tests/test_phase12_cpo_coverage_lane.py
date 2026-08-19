@@ -96,6 +96,18 @@ class TestCoverageLane(unittest.TestCase):
         self.assertRegex(b, r'<div class="covcell [a-z]+ sel">\s*<span class="cm">Oct')
         self.assertIn(f'href="/ordering/cpo?month={SEP}"', b)   # Sep now a neighbour link
 
+    def test_rich_card_horizon_strip(self):
+        # each top-3 rich card carries a per-combination horizon sparkline: on-lot-now anchor + one cell per
+        # surrounding month showing this combination's certified supply position, selected month emphasised
+        b = self._body(SEP)
+        self.assertIn('class="hstrip"', b)                  # the per-combination horizon strip exists
+        self.assertIn("On lot now", b)                      # current stock anchor (legacy IN STOCK)
+        # the strip covers the surrounding months and marks the selected one
+        strip = re.search(r'<div class="hstrip".*?</div>\s*</div>', b, re.S).group(0)
+        for mon in ("Aug", "Sep", "Oct"):
+            self.assertIn(f'>{mon}<', strip)
+        self.assertRegex(strip, r'<span class="hc short sel"')   # selected Sep cell is short + highlighted
+
     def test_presentation_only_certified_unchanged(self):
         self._body(SEP)
         self.assertEqual(current_version(self.conn), 12)

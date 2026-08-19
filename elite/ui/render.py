@@ -223,6 +223,20 @@ a.covcell:hover{border-color:var(--accent);background:var(--raise)}
 .covcell.over .cst{color:var(--slate)}
 .covcell.covered .cst{color:var(--ready)}
 .covcell.none .cst{color:var(--muted)}
+/* per-recommendation horizon sparkline inside a rich card (legacy 'read across the row') */
+.hstrip{display:flex;align-items:stretch;gap:5px;margin:7px 0 2px;flex-wrap:wrap}
+.hnow{display:flex;flex-direction:column;justify-content:center;padding:3px 9px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg);font-size:11px;color:var(--muted);white-space:nowrap;line-height:1.2}
+.hnow b{font-family:var(--font-display);font-size:15px;color:var(--fg)}
+.hcells{display:flex;gap:4px;overflow-x:auto;padding-bottom:2px}
+.hc{min-width:46px;border:1px solid var(--line);border-radius:var(--r-sm);padding:3px 6px 2px;display:flex;flex-direction:column;align-items:center;gap:0;background:var(--card)}
+.hc.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset;background:var(--accent-weak)}
+.hc .hm{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.02em}
+.hc .hv{font-family:var(--font-display);font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2}
+.hc .hd{font-size:10px;line-height:1}
+.hc.short .hd,.hc.short .hv{color:var(--timing)}
+.hc.over .hd{color:var(--slate)}
+.hc.covered .hd{color:var(--ready)}
+.hc.none .hv,.hc.none .hd{color:var(--muted)}
 /* collapsed, receded group for handled/worked items */
 .workgroup{margin:10px 0}
 .workgroup>summary{cursor:pointer;color:var(--muted);font-size:13px;font-weight:600;padding:6px 2px}
@@ -526,6 +540,32 @@ def coverage_lane(cells, *, caption=None):
             f'<span class="cst"><span aria-hidden="true">{gly.get(st, "·")}</span> {word.get(st, "—")}{extra}</span>'
             f'</{tag}>')
     out.append("</div></div>")
+    return "".join(out)
+
+
+def horizon_strip(now_html, cells):
+    """A COMPACT per-combination horizon sparkline — the legacy planning grid's strongest habit ("read one
+    row left-to-right: on-lot now, then the position each month across the horizon") brought inside a single
+    recommendation. Left anchor = current on-lot; then one tiny cell per surrounding month showing the
+    certified supply position and coverage state (glyph, not colour-alone), with the selected month
+    emphasised. All values are certified inventory_plan_month for THIS combination — nothing recomputed."""
+    gly = {"short": "▲", "over": "▼", "covered": "●", "none": "·"}
+    word = {"short": "short", "over": "over", "covered": "covered", "none": "no plan"}
+    out = ['<div class="hstrip" role="img" aria-label="This combination across the planning horizon">']
+    if now_html:
+        out.append(f'<span class="hnow">{now_html if _is_html(now_html) else esc(now_html)}</span>')
+    out.append('<span class="hcells">')
+    for c in cells:
+        st = c.get("state", "none")
+        sel = " sel" if c.get("selected") else ""
+        have = "—" if c.get("supply") is None else f'{round(float(c["supply"]), 1):g}'
+        need = "—" if c.get("demand") is None else f'{round(float(c["demand"]), 1):g}'
+        out.append(f'<span class="hc {esc(st)}{sel}" title="{esc(c.get("label"))} — need {esc(need)} · '
+                   f'have {esc(have)} · {esc(word.get(st, ""))}">'
+                   f'<span class="hm">{esc_text(c.get("label"))}</span>'
+                   f'<span class="hv">{esc(have)}</span>'
+                   f'<span class="hd" aria-hidden="true">{gly.get(st, "·")}</span></span>')
+    out.append("</span></div>")
     return "".join(out)
 
 

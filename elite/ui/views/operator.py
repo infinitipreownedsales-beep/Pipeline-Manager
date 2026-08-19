@@ -14,7 +14,8 @@ import json
 
 from ..render import (ADMIN_NAV, badge, esc, page, safe, table, kv, empty, form,
                       workspace_header, month_nav, metric, stat_row, progress, chip, disclosure,
-                      action_group, rec_card, rec_row, work_group, restraint_note, coverage_lane)
+                      action_group, rec_card, rec_row, work_group, restraint_note, coverage_lane,
+                      horizon_strip)
 from ..http import Response
 from .domains import _readable, _resp, _conn
 
@@ -426,6 +427,7 @@ def register(app):
         lines = _ws_get(app, s.scope, f"cpo_line::{month}", {}) or {}
         board = _acquire_board(app, s.scope, month)
         coverage = _model_coverage(app, s.scope, month)
+        pmonths = _plan_months(app, s.scope)     # certified per-plan month rows (for the horizon sparkline)
         models = {}
         for b in board:
             b["month"] = month
@@ -471,6 +473,11 @@ def register(app):
             cov = coverage.get(mo) or []
             lane = coverage_lane(cov, caption="Coverage by month — expected need vs certified supply "
                                  "position (selected month centred)") if cov else ""
+            window_months = [c["month"] for c in cov]
+
+            def _strip(b):
+                hz = _combo_horizon(pmonths, b["pid"], window_months, month) if window_months else []
+                return horizon_strip(safe(f'On lot now <b>{esc(b["current"])}</b>'), hz) if hz else ""
             edit = disclosure("Edit allocation ceiling",
                               form("/ordering/cpo/allocation",
                                    f'<input type=hidden name=month value="{esc(month)}">'
@@ -488,8 +495,11 @@ def register(app):
             worked = [(r, b) for r, b in ranked if lines.get(b["combo"]) in ("confirmed", "not_ordered")]
             queue = []
             for i, (r, b) in enumerate(unresolved):
-                render = _cpo_rec_card if i < 3 else _cpo_rec_row
-                queue.append(render(s, b, r, lines.get(b["combo"]), month, promoted=b in promoted))
+                if i < 3:
+                    queue.append(_cpo_rec_card(s, b, r, lines.get(b["combo"]), month,
+                                               promoted=b in promoted, horizon_html=_strip(b)))
+                else:
+                    queue.append(_cpo_rec_row(s, b, r, lines.get(b["combo"]), month, promoted=b in promoted))
             if queue:
                 block.append('<div class="queue">' + "".join(queue) + '</div>')
             elif worked:
@@ -1148,10 +1158,31 @@ def _cpo_rec_pieces(s, b, rank, state, month, promoted):
                 actions=actions)
 
 
-def _cpo_rec_card(s, b, rank, state, month, *, promoted=False):
-    """A rich recommendation card (top 1-3 of a model): the ORDER call is the hero."""
+def _combo_horizon(pmonths, pid, window_months, month):
+    """Per-combination certified horizon cells for the sparkline: for each window month, this combination's
+    certified supply position + expected demand + coverage state from inventory_plan_month (no recompute)."""
+    rows = pmonths.get(pid) or {}
+    cells = []
+    for m in window_months:
+        mr = rows.get(m)
+        if mr is None:
+            state, sup, dem = "none", None, None
+        else:
+            sup, dem = mr["cumulative_supply"], mr["expected_demand"]
+            state = ("short" if (mr["shortage"] or 0) > 1e-9 else "over" if (mr["excess"] or 0) > 1e-9
+                     else "covered")
+        cells.append({"month": m, "label": _month_short(m).split(" ")[0], "selected": (m == month),
+                      "supply": sup, "demand": dem, "state": state})
+    return cells
+
+
+def _cpo_rec_card(s, b, rank, state, month, *, promoted=False, horizon_html=""):
+    """A rich recommendation card (top 1-3 of a model): the ORDER call is the hero, and — when available —
+    a compact certified horizon sparkline lets the operator read this combination's whole-horizon position
+    on one line (the legacy planning grid's strongest habit), without opening Why."""
     p = _cpo_rec_pieces(s, b, rank, state, month, promoted)
-    return rec_card(rank, p["ident"], p["call"], p["pos"], p["why"], p["actions"],
+    pos = safe(p["pos"] + horizon_html) if horizon_html else p["pos"]
+    return rec_card(rank, p["ident"], p["call"], pos, p["why"], p["actions"],
                     resolved=p["resolved"], chip_html=p["chip"])
 
 
