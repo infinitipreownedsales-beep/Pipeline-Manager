@@ -59,15 +59,17 @@ class TestCpoCockpit(unittest.TestCase):
         self.assertIn('<div class="call">ORDER 1</div>', b)  # the call is the hero
 
     def test_resolved_cards_recede_and_sort_below_unresolved(self):
-        # confirm the #1 (QX60 8481 XKJ/K) -> it should become resolved and drop below the unresolved #2
+        # confirm the #1 (QX60 8481 XKJ/K) -> it leaves the active queue and collapses into the receded,
+        # still-undoable Worked group, below the unresolved #2
         combo_a = self.conn.execute("SELECT id FROM sellable_combination WHERE canonical_identity LIKE ?",
                                     ("%model_code=8481|exterior=XKJ|interior=K",)).fetchone()["id"]
         self.full.post("/ordering/cpo/line", {"month": M, "combo": combo_a, "state": "confirmed"})
         b = self._body()
         self.assertIn("Confirmed", b)                      # status chip
-        self.assertIn("rec resolved", b)                   # resolved card visibly recedes
+        self.assertIn("Worked —", b)                       # handled items collapse into a receded group
+        self.assertIn("recrow resolved", b)                # the worked item recedes (compact, receded row)
         self.assertIn("Undo", b)                           # completed item remains undoable
-        # unresolved QBE/G now appears before the resolved XKJ/K in the queue
+        # unresolved QBE/G (active queue) appears before the resolved XKJ/K (Worked group)
         self.assertLess(b.index("QX60 8481 QBE/G"), b.index("QX60 8481 XKJ/K"))
 
     def test_intentionally_open_reads_as_restraint(self):

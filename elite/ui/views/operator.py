@@ -14,7 +14,7 @@ import json
 
 from ..render import (ADMIN_NAV, badge, esc, page, safe, table, kv, empty, form,
                       workspace_header, month_nav, metric, stat_row, progress, chip, disclosure,
-                      action_group, rec_card, restraint_note)
+                      action_group, rec_card, rec_row, work_group, restraint_note)
 from ..http import Response
 from .domains import _readable, _resp, _conn
 
@@ -407,13 +407,28 @@ def register(app):
                                    csrf=s.csrf_token, submit="Save ceiling"))
             block = [f'<div class="card"><h2 style="margin-top:4px">{esc(mo)}</h2>{hero}{edit}']
 
-            # work queue: unresolved recommendations first; resolved recede to the bottom
-            ordered = sorted(enumerate(shown, 1),
-                             key=lambda t: (lines.get(t[1]["combo"]) in ("confirmed", "not_ordered"), t[0]))
-            block.append('<div class="queue">'
-                         + "".join(_cpo_rec_card(s, b, rank, lines.get(b["combo"]), month, promoted=b in promoted)
-                                   for rank, b in ordered)
-                         + '</div>')
+            # work queue: unresolved recommendations, in certified rank order. The top 3 get the rich card;
+            # ranks 4..N compress to compact rows so a whole model stays scannable in ~one viewport. Handled
+            # (worked) items leave the active queue and collapse into a receded, still-undoable group.
+            ranked = list(enumerate(shown, 1))     # (certified rank, rec)
+            unresolved = [(r, b) for r, b in ranked if lines.get(b["combo"]) not in ("confirmed", "not_ordered")]
+            worked = [(r, b) for r, b in ranked if lines.get(b["combo"]) in ("confirmed", "not_ordered")]
+            queue = []
+            for i, (r, b) in enumerate(unresolved):
+                render = _cpo_rec_card if i < 3 else _cpo_rec_row
+                queue.append(render(s, b, r, lines.get(b["combo"]), month, promoted=b in promoted))
+            if queue:
+                block.append('<div class="queue">' + "".join(queue) + '</div>')
+            elif worked:
+                block.append('<p class="muted" style="margin:8px 0">Every recommendation for this model is '
+                             'handled — see the worked items below.</p>')
+            if worked:
+                n_conf = sum(1 for _r, b in worked if lines.get(b["combo"]) == "confirmed")
+                n_not = len(worked) - n_conf
+                bits = ([f"{n_conf} confirmed"] if n_conf else []) + ([f"{n_not} not ordering"] if n_not else [])
+                rows = "".join(_cpo_rec_row(s, b, r, lines.get(b["combo"]), month, promoted=b in promoted)
+                               for r, b in worked)
+                block.append(work_group(f"Worked — {len(worked)} · {' · '.join(bits)}", safe(rows)))
 
             # intentionally-open capacity — a positive Elite judgment (restraint), not leftover work
             if open_cap:
@@ -1027,10 +1042,10 @@ def _month_neighbours(app, month):
     return (ym(mi - 1) if mi - 1 >= lo else None, ym(mi + 1) if mi + 1 <= hi else None)
 
 
-def _cpo_rec_card(s, b, rank, state, month, *, promoted=False):
-    """One CPO recommendation as an actionable card: the ORDER call is the hero, position is secondary, a
-    month-specific Why drawer discloses the certified reasoning, and the action group works the item.
-    Confirmed / Not-ordering cards visibly recede."""
+def _cpo_rec_pieces(s, b, rank, state, month, promoted):
+    """Compute the shared parts of a CPO recommendation (identity, hero call, position, month-specific Why
+    drawer, status chip, action group, resolved flag) once, so the rich card and the compact row present the
+    SAME information and the SAME actions — only the density differs."""
     ident = safe(f'<a href="/combination/{esc(b["pid"])}?month={esc(month)}">{esc(b["identity"])}</a>'
                  + (' ' + badge("completed", "promoted") if promoted else ''))
     call = f'ORDER {b["order"]}'
@@ -1048,15 +1063,31 @@ def _cpo_rec_card(s, b, rank, state, month, *, promoted=False):
                        ("Order now (certified action)", b["order"])])
     why = disclosure(f"Why #{rank}", why_body)
     if state == "confirmed":
-        return rec_card(rank, ident, call, pos, why, action_group(_line_btn(s, b, "clear", "Undo", "secondary")),
-                        resolved=True, chip_html=chip("done", "Confirmed"))
+        return dict(ident=ident, call=call, pos=pos, why=why, resolved=True, chip=chip("done", "Confirmed"),
+                    actions=action_group(_line_btn(s, b, "clear", "Undo", "secondary")))
     if state == "not_ordered":
-        return rec_card(rank, ident, call, pos, why, action_group(_line_btn(s, b, "clear", "Undo", "secondary")),
-                        resolved=True, chip_html=chip("skip", "Not ordering"))
+        return dict(ident=ident, call=call, pos=pos, why=why, resolved=True, chip=chip("skip", "Not ordering"),
+                    actions=action_group(_line_btn(s, b, "clear", "Undo", "secondary")))
     actions = action_group(_line_btn(s, b, "confirmed", "Confirm order")
                            + _line_btn(s, b, "not_ordered", "Not ordering", "secondary")
                            + _bench_button(s, b["identity"], f"/ordering/cpo?month={month}"))
-    return rec_card(rank, ident, call, pos, why, actions, resolved=False, chip_html=chip("need", "Needs decision"))
+    return dict(ident=ident, call=call, pos=pos, why=why, resolved=False, chip=chip("need", "Needs decision"),
+                actions=actions)
+
+
+def _cpo_rec_card(s, b, rank, state, month, *, promoted=False):
+    """A rich recommendation card (top 1-3 of a model): the ORDER call is the hero."""
+    p = _cpo_rec_pieces(s, b, rank, state, month, promoted)
+    return rec_card(rank, p["ident"], p["call"], p["pos"], p["why"], p["actions"],
+                    resolved=p["resolved"], chip_html=p["chip"])
+
+
+def _cpo_rec_row(s, b, rank, state, month, *, promoted=False):
+    """A compact recommendation row (ranks 4..N, and every worked item): same call, position, Why and
+    actions as the rich card, rendered on ~one line so the model stays scannable in a viewport."""
+    p = _cpo_rec_pieces(s, b, rank, state, month, promoted)
+    return rec_row(rank, p["ident"], p["call"], p["pos"], p["why"], p["actions"],
+                   resolved=p["resolved"], chip_html=p["chip"])
 
 
 def _line_btn(s, b, state, text, cls="primary"):

@@ -190,6 +190,25 @@ input,select,textarea{width:100%;max-width:520px;padding:8px 9px;border:1px soli
 .actions button{padding:6px 12px;font-size:13px}
 .restraint{border-left:3px solid var(--ready);background:var(--ready-weak);padding:11px 14px;border-radius:0 var(--r) var(--r) 0;margin:10px 0}
 .restraint strong{color:var(--ready)}
+/* compact recommendation row (ranks 4..N) — one-line-scannable sibling of the rich card */
+.recrow{display:flex;align-items:center;gap:6px 14px;flex-wrap:wrap;padding:8px 13px;border:1px solid var(--line);border-radius:var(--r);background:var(--card)}
+.recrow.resolved{opacity:.6;background:var(--bg)}
+.recrow .rrank{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:1.6em;text-align:right}
+.recrow .rcall{font-family:var(--font-display);font-weight:800;font-size:15px;letter-spacing:-.01em;white-space:nowrap;min-width:74px}
+.recrow .rmain{flex:1;min-width:170px;display:flex;gap:2px 10px;flex-wrap:wrap;align-items:baseline}
+.recrow .rident{font-weight:600;font-size:14px}
+.recrow .rident a{color:var(--accent);text-decoration:none}.recrow .rident a:hover{text-decoration:underline}
+.recrow .rpos{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums}
+.recrow .rside{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
+.recrow .rside .actions{gap:5px}.recrow .rside .actions button{padding:4px 9px;font-size:12.5px}
+.recrow .rwhy{flex-basis:100%;margin-top:1px}
+.recrow .rwhy>details>summary{cursor:pointer;color:var(--accent);font-size:12.5px}
+.recrow .rwhy .why{margin-top:6px;font-size:13px}
+/* collapsed, receded group for handled/worked items */
+.workgroup{margin:10px 0}
+.workgroup>summary{cursor:pointer;color:var(--muted);font-size:13px;font-weight:600;padding:6px 2px}
+.workgroup>summary:hover{color:var(--fg)}
+.worklist{display:grid;gap:6px;margin-top:6px}
 ol.timeline{list-style:none;padding-left:0}ol.timeline li{padding:6px 0 6px 16px;border-left:2px solid var(--line);margin-left:6px}
 /* ---- login / auth experience (chrome-free; no operator nav) ---- */
 body.auth{background:linear-gradient(180deg,var(--cmd) 0,var(--cmd) 210px,var(--bg) 210px,var(--bg) 100%);min-height:100vh}
@@ -432,6 +451,27 @@ def rec_card(rank, ident_html, call, pos_html, why_html, actions_html, *, resolv
             f'<div class="pos">{pos_html if _is_html(pos_html) else esc(pos_html)}</div>'
             f'{why_html}</div>'
             f'<div class="side">{chip_html}{actions_html}</div></div>')
+
+
+def rec_row(rank, ident_html, call, pos_html, why_html, actions_html, *, resolved=False, chip_html=""):
+    """A COMPACT actionable recommendation — the lower-priority sibling of rec_card. Same information and the
+    same actions (Confirm / Not ordering / Bench / Undo, Why on request), rendered on essentially one line so
+    ranks 4..N of a model stay scannable. Resolved rows recede. The call uses `.rcall` (NOT `.call`) so it is
+    never confused with a rich card by callers that key on the hero call."""
+    return (f'<div class="recrow{" resolved" if resolved else ""}">'
+            f'<span class="rrank">{esc(rank)}</span>'
+            f'<span class="rcall">{esc(call)}</span>'
+            f'<span class="rmain"><span class="rident">{ident_html if _is_html(ident_html) else esc(ident_html)}</span>'
+            f'<span class="rpos">{pos_html if _is_html(pos_html) else esc(pos_html)}</span></span>'
+            f'<span class="rside">{chip_html}{actions_html}</span>'
+            f'<div class="rwhy">{why_html}</div></div>')
+
+
+def work_group(summary, rows_html):
+    """A collapsed, visibly-receded group for handled/worked items — keeps them one click away (and undoable)
+    without letting completed work consume the model's vertical space."""
+    return (f'<details class="workgroup"><summary>{esc(summary)}</summary>'
+            f'<div class="worklist">{rows_html if _is_html(rows_html) else esc(rows_html)}</div></details>')
 
 
 def restraint_note(html):
