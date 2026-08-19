@@ -14,7 +14,7 @@ import json
 
 from ..render import (ADMIN_NAV, badge, esc, page, safe, table, kv, empty, form,
                       workspace_header, month_nav, metric, stat_row, progress, chip, disclosure,
-                      action_group, rec_card, rec_row, work_group, restraint_note)
+                      action_group, rec_card, rec_row, work_group, restraint_note, coverage_lane)
 from ..http import Response
 from .domains import _readable, _resp, _conn
 
@@ -48,6 +48,73 @@ def _month_label(ym):
         return f"{_MONTHS[int(m) - 1]} {y}"
     except Exception:   # noqa: BLE001
         return ym
+
+
+def _month_short(ym):
+    """Compact month label for the coverage lane, e.g. '2026-09' -> \"Sep '26\"."""
+    try:
+        y, m = ym.split("-")
+        return f"{_MONTHS[int(m) - 1][:3]} '{y[2:]}"
+    except Exception:   # noqa: BLE001
+        return ym
+
+
+def _model_coverage(app, scope, month, *, base_path="/ordering/cpo", window=3):
+    """Model-level certified month coverage from inventory_plan_month (AGGREGATION ONLY — no recompute). For
+    each model, sum the certified per-combination month rows (expected demand, supply position, shortage,
+    excess) to the model, then return a compact window of months centred on the selected month. Coverage
+    state is read straight from the certified summed shortage/excess signs. Non-selected cells carry a
+    server-backed ?month= link so the lane doubles as month navigation."""
+    conn = _conn(app)
+    ident = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
+        "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (scope,)).fetchall()}
+    plan_model = {}
+    for r in conn.execute("SELECT id, combination_id FROM inventory_plan_result "
+                          "WHERE store_scope=? AND status='issued'", (scope,)).fetchall():
+        plan_model[r["id"]] = _model_of(_readable(ident.get(r["combination_id"], r["combination_id"])))
+    agg = {}   # (model, month) -> summed certified quantities
+    try:
+        for mr in conn.execute(
+                "SELECT m.plan_id, m.month, m.expected_demand, m.cumulative_supply, m.shortage, m.excess "
+                "FROM inventory_plan_month m JOIN inventory_plan_result p ON m.plan_id=p.id "
+                "WHERE p.store_scope=? AND p.status='issued'", (scope,)).fetchall():
+            mdl = plan_model.get(mr["plan_id"])
+            if not mdl:
+                continue
+            d = agg.setdefault((mdl, mr["month"]),
+                               {"demand": 0.0, "supply": 0.0, "shortage": 0.0, "excess": 0.0})
+            d["demand"] += mr["expected_demand"] or 0.0
+            d["supply"] += mr["cumulative_supply"] or 0.0
+            d["shortage"] += mr["shortage"] or 0.0
+            d["excess"] += mr["excess"] or 0.0
+    except Exception:   # noqa: BLE001
+        return {}
+    months_by_model = {}
+    for (mdl, m) in agg:
+        months_by_model.setdefault(mdl, set()).add(m)
+    out = {}
+    for mdl, mset in months_by_model.items():
+        months = sorted(mset | ({month} if month else set()))
+        i = months.index(month) if month in months else len(months) // 2
+        lo, hi = max(0, i - window), min(len(months), i + window + 1)
+        cells = []
+        for m in months[lo:hi]:
+            a = agg.get((mdl, m))
+            if a is None:
+                state = "none"
+            elif a["shortage"] > 1e-9:
+                state = "short"
+            elif a["excess"] > 1e-9:
+                state = "over"
+            else:
+                state = "covered"
+            cells.append({"month": m, "label": _month_short(m), "selected": (m == month),
+                          "demand": (a["demand"] if a else None), "supply": (a["supply"] if a else None),
+                          "shortage": (a["shortage"] if a else None), "excess": (a["excess"] if a else None),
+                          "state": state,
+                          "href": None if m == month else f"{base_path}?month={m}"})
+        out[mdl] = cells
+    return out
 
 
 def _month_options(app, selected, *, back=1, fwd=12):
@@ -358,6 +425,7 @@ def register(app):
         alloc = _ws_get(app, s.scope, f"cpo_alloc::{month}", {}) or {}
         lines = _ws_get(app, s.scope, f"cpo_line::{month}", {}) or {}
         board = _acquire_board(app, s.scope, month)
+        coverage = _model_coverage(app, s.scope, month)
         models = {}
         for b in board:
             b["month"] = month
@@ -398,6 +466,11 @@ def register(app):
                              metric(remaining, "Remaining", attn=remaining > 0),
                              metric(cap, "Allocation ceiling")])
             hero += progress(worked, len(shown))
+            # compact horizontal time/coverage lane: the operator SEES the surrounding-month supply/need
+            # story (why these orders are recommended now) before opening any Why. Certified data only.
+            cov = coverage.get(mo) or []
+            lane = coverage_lane(cov, caption="Coverage by month — expected need vs certified supply "
+                                 "position (selected month centred)") if cov else ""
             edit = disclosure("Edit allocation ceiling",
                               form("/ordering/cpo/allocation",
                                    f'<input type=hidden name=month value="{esc(month)}">'
@@ -405,7 +478,7 @@ def register(app):
                                    f'<input id=a_{esc(mo)} name="alloc_{esc(mo)}" type=number min=0 '
                                    f'style="max-width:120px" value="{esc(alloc.get(mo, ""))}">',
                                    csrf=s.csrf_token, submit="Save ceiling"))
-            block = [f'<div class="card"><h2 style="margin-top:4px">{esc(mo)}</h2>{hero}{edit}']
+            block = [f'<div class="card"><h2 style="margin-top:4px">{esc(mo)}</h2>{hero}{lane}{edit}']
 
             # work queue: unresolved recommendations, in certified rank order. The top 3 get the rich card;
             # ranks 4..N compress to compact rows so a whole model stays scannable in ~one viewport. Handled

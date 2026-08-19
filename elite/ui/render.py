@@ -204,6 +204,25 @@ input,select,textarea{width:100%;max-width:520px;padding:8px 9px;border:1px soli
 .recrow .rwhy{flex-basis:100%;margin-top:1px}
 .recrow .rwhy>details>summary{cursor:pointer;color:var(--accent);font-size:12.5px}
 .recrow .rwhy .why{margin-top:6px;font-size:13px}
+/* compact horizontal month / coverage lane (per model): need vs certified supply position by month */
+.covwrap{margin:8px 0 2px}
+.covcap{font-size:12px;color:var(--muted);margin-bottom:5px}
+.covlane{display:flex;gap:6px;overflow-x:auto;padding-bottom:3px}
+.covcell{flex:1 0 96px;min-width:96px;max-width:150px;border:1px solid var(--line);border-radius:var(--r);padding:7px 9px;background:var(--card);display:flex;flex-direction:column;gap:4px;text-decoration:none;color:var(--fg)}
+a.covcell:hover{border-color:var(--accent);background:var(--raise)}
+.covcell.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset;background:var(--accent-weak)}
+.covcell .cm{font-family:var(--font-display);font-size:12.5px;font-weight:700;letter-spacing:-.01em;white-space:nowrap}
+.covcell .cbar{display:grid;gap:2px}
+.covcell .ctrack{height:5px;border-radius:3px;background:var(--bg);border:1px solid var(--line);position:relative;overflow:hidden}
+.covcell .cfill{position:absolute;left:0;top:0;height:100%}
+.covcell .cfill.need{background:var(--slate)}
+.covcell .cfill.sup{background:var(--accent);opacity:.9}
+.covcell .cnums{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.covcell .cst{font-size:11.5px;font-weight:600;display:inline-flex;gap:4px;align-items:center;white-space:nowrap}
+.covcell.short .cst{color:var(--timing)}
+.covcell.over .cst{color:var(--slate)}
+.covcell.covered .cst{color:var(--ready)}
+.covcell.none .cst{color:var(--muted)}
 /* collapsed, receded group for handled/worked items */
 .workgroup{margin:10px 0}
 .workgroup>summary{cursor:pointer;color:var(--muted);font-size:13px;font-weight:600;padding:6px 2px}
@@ -465,6 +484,49 @@ def rec_row(rank, ident_html, call, pos_html, why_html, actions_html, *, resolve
             f'<span class="rpos">{pos_html if _is_html(pos_html) else esc(pos_html)}</span></span>'
             f'<span class="rside">{chip_html}{actions_html}</span>'
             f'<div class="rwhy">{why_html}</div></div>')
+
+
+def coverage_lane(cells, *, caption=None):
+    """A COMPACT horizontal month/coverage lane for a model workspace. Each cell is one certified planning
+    month showing expected need vs the certified supply position and the resulting coverage state (Short /
+    Covered / Over / No plan). The selected month is visually central and highlighted; surrounding months
+    stay visible for context. Non-selected cells are server-backed month links (?month=…). Every value comes
+    straight from inventory_plan_month (summed to the model) — nothing is recomputed here."""
+    scale = 1.0
+    for c in cells:
+        scale = max(scale, float(c.get("demand") or 0), float(c.get("supply") or 0))
+    gly = {"short": "▲", "over": "▼", "covered": "●", "none": "·"}
+    word = {"short": "Short", "over": "Over", "covered": "Covered", "none": "No plan"}
+
+    def _pct(v):
+        return max(0.0, min(100.0, (float(v or 0) / scale) * 100.0))
+
+    def _g(v):
+        return "—" if v is None else f"{round(float(v), 1):g}"
+
+    out = ['<div class="covwrap">']
+    if caption:
+        out.append(f'<div class="covcap">{esc(caption)}</div>')
+    out.append('<div class="covlane" role="img"' + (f' aria-label="{esc(caption)}"' if caption else "") + ">")
+    for c in cells:
+        st = c.get("state", "none")
+        sel = " sel" if c.get("selected") else ""
+        href = c.get("href") if not c.get("selected") else None
+        tag, attrs = ("a", f' href="{esc(href)}"') if href else ("div", "")
+        extra = ("" if st not in ("short", "over") else
+                 " " + _g(c.get("shortage") if st == "short" else c.get("excess")))
+        out.append(
+            f'<{tag} class="covcell {esc(st)}{sel}"{attrs}>'
+            f'<span class="cm">{esc_text(c.get("label"))}</span>'
+            f'<span class="cbar" aria-hidden="true">'
+            f'<span class="ctrack" title="expected need"><span class="cfill need" style="width:{_pct(c.get("demand")):.0f}%"></span></span>'
+            f'<span class="ctrack" title="certified supply position"><span class="cfill sup" style="width:{_pct(c.get("supply")):.0f}%"></span></span>'
+            f'</span>'
+            f'<span class="cnums">need {_g(c.get("demand"))} · have {_g(c.get("supply"))}</span>'
+            f'<span class="cst"><span aria-hidden="true">{gly.get(st, "·")}</span> {word.get(st, "—")}{extra}</span>'
+            f'</{tag}>')
+    out.append("</div></div>")
+    return "".join(out)
 
 
 def work_group(summary, rows_html):
