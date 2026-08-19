@@ -31,6 +31,7 @@ ADMIN_NAV = [
     ("/scenarios", "Scenarios"), ("/calibration", "Learning & Calibration"),
     ("/approvals", "Approvals"), ("/execution", "Execution"), ("/exceptions", "Exceptions"),
     ("/audit", "Audit"), ("/authority", "Authority"), ("/readiness", "Readiness"),
+    ("/admin/translation", "Translation & Identity"),
 ]
 
 _CSS = """

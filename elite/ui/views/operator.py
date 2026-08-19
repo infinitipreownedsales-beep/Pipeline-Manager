@@ -987,8 +987,22 @@ def register(app):
                         '<label>Day cap</label><input name=day_cap type=number style="max-width:120px">'
                         '<label>Mileage cap</label><input name=mile_cap type=number style="max-width:140px">',
                         csrf=s.csrf_token, submit="Add Velocity terms")
+        # translation / identity health — unresolved source language surfaces here with a link to resolve it
+        from ...identity.translation import TranslationStore
+        _xlat = TranslationStore(app.prefs, s.scope)
+        _unresolved = _xlat.unresolved_translations() if _xlat.semantic_mappings() else []
+        if _unresolved:
+            xlat_card = ('<div class="card"><h2>Translation &amp; Identity</h2>'
+                         f'<p>{badge("attention", f"{len(_unresolved)} unresolved")} source value(s) have no '
+                         'approved translation yet. Resolve them so imports translate automatically. '
+                         '<a href="/admin/translation">Open Translation Center →</a></p></div>')
+        else:
+            xlat_card = ('<div class="card"><h2>Translation &amp; Identity</h2>'
+                         f'<p>{badge("healthy", "resolved")} All observed source language is translated. '
+                         '<a href="/admin/translation">Open Translation Center →</a></p></div>')
         body = ('<div class="card"><h2>Sources</h2>' + table(["Source", "State", "Age / status"], srows) + '</div>'
-                '<div class="card"><h2>Update data</h2><p class="muted">Place the export in the uploads folder and '
+                + xlat_card
+                + '<div class="card"><h2>Update data</h2><p class="muted">Place the export in the uploads folder and '
                 'enter its path; the import runs through the certified ingestion pipeline and updates freshness '
                 'above. Nothing is marked loaded unless the import actually succeeds.</p>' + imp + '</div>'
                 '<div class="card"><h2>Benched combinations</h2><p class="muted">A benched combination is no longer '
