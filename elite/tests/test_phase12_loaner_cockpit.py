@@ -66,9 +66,9 @@ class TestLoanerCockpit(unittest.TestCase):
         set_desired_fleet(MetaPrefs(self.p.app.prefs, SCOPE), 20)
         r = self.full.get("/service-loaner")
         self.assertEqual(r.status, 200)
-        self.assertIn("Fleet state", r.body)
+        self.assertIn("Program state", r.body)
         self.assertIn("Current fleet", r.body)
-        self.assertIn("Ideal fleet", r.body)
+        self.assertIn("Ideal (Pending Economics)", r.body)
         self.assertIn("Undetermined", r.body)                # Ideal stays Undetermined
         self.assertIn("20", r.body)                          # desired fleet shown
 

@@ -58,7 +58,7 @@ class TestOperatorShell(unittest.TestCase):
     # Service Loaner cockpit is reachable directly and preserves the three fleet counts
     def test_service_loaner_reachable(self):
         b = self.full.get("/service-loaner").body
-        self.assertIn("Fleet state", b)
+        self.assertIn("Program state", b)
         self.assertIn("Current fleet", b)
         self.assertIn("Undetermined", b)
 

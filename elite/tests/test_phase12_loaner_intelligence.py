@@ -87,21 +87,23 @@ class TestIntelligencePage(unittest.TestCase):
     def test_page_sections_and_boundary(self):
         with patch("elite.loaner.intelligence.build_intelligence", return_value=_fake_intel()):
             b = self.full.get("/service-loaner").body
-        # 5-section workflow-first architecture
-        for tok in ("Fleet state", "Operational attention", "What history says", "Active fleet"):
+        # command-board architecture (program state -> what needs me -> current fleet -> why)
+        for tok in ("Service Loaner Command Board", "Program state", "What needs me", "Current fleet", "Why —"):
             self.assertIn(tok, b)
-        # Current / Desired / Ideal distinct, Ideal Undetermined
-        self.assertIn("Current fleet (authoritative)", b)
+        # Current / Desired / Ideal distinct, Ideal Undetermined (Pending Economics)
+        self.assertIn("Ideal (Pending Economics)", b)
         self.assertIn("Undetermined", b)
-        # evidence exposes cohort / n / as-of and quality label
+        # A+B evidence moves behind Why but still exposes cohort / n / as-of and quality label
         self.assertIn("model-year 2023", b)
         self.assertIn("as-of 2026-08-15", b)
         self.assertIn("Evidence: Strong", b)
         self.assertIn("Model-year age at resale (maturity)", b)   # NOT "depreciation" / time-in-service
         self.assertNotIn("depreciation", b.lower())
-        # unit-level: age + mileage where available; data-quality gap surfaced (not vehicle performance)
-        self.assertIn("533d in service", b)
-        self.assertIn("mileage not reported", b)
+        # in-service age shown compactly in the fleet row; per-unit missing state moves to the unit page
+        self.assertIn("533d", b)
+        # 54 repeated alerts are consolidated into ONE data-health condition
+        self.assertIn("lack an authoritative in-service date", b)
+        self.assertNotIn("Operational attention (", b)
         # boundary: no economics leaked
         for banned in ("RETIRE NOW", "release-by", "ICV $", "Ideal Mix", "HOLD "):
             self.assertNotIn(banned, b)

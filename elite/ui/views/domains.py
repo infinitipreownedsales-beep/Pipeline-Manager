@@ -98,43 +98,118 @@ def _unit_card(u):
     return rec_card("", u.model or "loaner", "", pos, "", actions, chip_html=flags)
 
 
-def _loaner_intel_body(app, s, intel):
-    asof = (f'as of {esc(intel.retail_as_of)} · evidence only' if intel.retail_as_of
-            else 'no preowned history loaded · evidence only')
-    parts = [workspace_header("Service Loaners", safe(f'<span class="muted">{asof}</span>'))]
-    counts = stat_row([metric(intel.current_fleet, "Current fleet (authoritative)"),
-                       metric(intel.desired_fleet if intel.desired_fleet is not None else "not set", "Desired fleet"),
-                       metric("Undetermined", "Ideal fleet")])
-    comp = (bars([(m, n, f"{n} active") for m, n in intel.composition], caption="active fleet composition by model")
-            if intel.composition else empty("No active fleet models resolved."))
-    setf = form("/service-loaner/desired-fleet",
-                '<label for=df>Desired fleet size (optional operational target)</label>'
-                f'<input id=df name=desired type=number min=0 style="max-width:160px" '
-                f'value="{esc(intel.desired_fleet if intel.desired_fleet is not None else "")}">',
-                csrf=s.csrf_token, submit="Save desired fleet")
-    parts.append('<div class="card"><h2>Fleet state</h2>' + counts
-                 + '<div style="font-size:13px;color:var(--muted);margin:8px 0 2px">Composition</div>' + comp
-                 + '<p class="muted">Current, Desired and Ideal are distinct. Ideal fleet stays <strong>Undetermined</strong> '
-                 'until the gated Phase-4 economic inputs (ICV / Velocity / write-down) are authoritative.</p>'
-                 + disclosure("Set desired fleet target", setf) + '</div>')
-    if intel.attention:
-        items = "".join(f'<div style="padding:4px 0">{chip("need", a.kind.replace("_", " "))} {esc(a.message)}'
-                        + (f' <a href="/service-loaner/unit/{esc(a.unit_id)}">open unit</a>' if a.unit_id else "")
-                        + '</div>' for a in intel.attention)
-        parts.append(f'<div class="card"><h2>Operational attention ({len(intel.attention)})</h2>{items}'
-                     '<p class="muted">Operational and data-quality signals only — not an economic retire/hold call.</p></div>')
+def _placement_row(rank, c, *, compact=False):
+    """One physical ADD candidate — full unit identity so Kyle never leaves Elite to find the vehicle. The
+    economic RETIRE/HOLD/expected-cost call is a reserved Phase-4 slot (Pending Economics)."""
+    ident = (f'{esc(c.year)} {esc(c.model)}' + (f' {esc(c.trim)}' if c.trim else '')
+             + (f' {esc(c.drivetrain)}' if c.drivetrain else '')).strip()
+    colors = " / ".join(x for x in (c.exterior, c.interior) if x)
+    tone = {"EXCESS": "healthy", "COVERED": "ok", "UNKNOWN": "attention"}.get(c.new_retail_state, "attention")
+    econ = safe(f'{badge("pending", "Pending Economics")}')
+    return [esc(rank), esc(c.stock or "—"), esc((c.vin or "—")[-8:]), safe(esc(ident) or "—"),
+            esc(colors or "—"), safe(badge(tone, c.new_retail_state)), esc(c.rank_reason), econ]
+
+
+def _fleet_unit_row(u):
+    """Compact current-fleet row: identity + lifecycle facts we DO have; the economic call is Pending
+    Economics. Per-unit missing state stays visible when the unit is opened."""
+    age = f"{u.age_days}d" if u.age_days is not None else "—"
+    miles = f"{u.mileage:,}" if (u.mileage_available and u.mileage is not None) else "—"
+    src = esc(u.rental_state or u.membership_state or "—")
+    return [safe(f'<a href="/service-loaner/unit/{esc(u.id)}">{esc(u.stock if hasattr(u, "stock") else (u.vin or "")[-8:])}</a>'),
+            esc((u.vin or "—")[-8:]), esc(u.model or "—"), src, esc(age), esc(miles),
+            safe(badge("pending", "Pending Economics"))]
+
+
+def _loaner_command_body(app, s, intel, placement, add_n):
+    """Service Loaner Command Board — a premium program command surface, not an evidence report. It answers in
+    seconds: how many are active, what is my approved target, do I need to act, exactly which physical vehicles
+    to place first, why they are safer, and what remains unavailable while economics are pending."""
+    asof = (f'inventory + fleet evidence · as of {esc(intel.retail_as_of)}' if intel.retail_as_of
+            else 'inventory + fleet evidence')
+    parts = [workspace_header("Service Loaner Command Board", safe(f'<span class="muted">{asof}</span>'))]
+
+    # ---- PROGRAM STATE ----
+    blocked = sum(1 for u in intel.units if not u.in_service_date or not u.mileage_available)
+    dh_metric = metric(f"{blocked} blocked" if blocked else "OK", "Data Health", attn=bool(blocked))
+    parts.append('<div class="card"><h2>Program state</h2>'
+                 + stat_row([metric(intel.current_fleet, "Current fleet"),
+                             metric(intel.desired_fleet if intel.desired_fleet is not None else "not set", "Desired fleet"),
+                             metric("Undetermined", "Ideal (Pending Economics)"), dh_metric])
+                 + (bars([(m, n, f"{n}") for m, n in intel.composition], caption="active fleet by model")
+                    if intel.composition else "")
+                 + (f'<div class="callout" style="margin-top:8px">{blocked} unit(s) lack an authoritative '
+                    'in-service date and/or latest mileage — lifecycle timing is blocked until that data loads. '
+                    'Per-unit detail is on each unit.</div>' if blocked else "")
+                 + '<p class="muted">Current, Desired and Ideal are distinct. Ideal stays <strong>Undetermined</strong> '
+                 'until authoritative Phase-4 economics (ICV / Velocity / write-down) exist — no economics are invented.</p>'
+                 + disclosure("Set desired fleet target",
+                              form("/service-loaner/desired-fleet",
+                                   '<label for=df>Desired fleet size (optional operational target)</label>'
+                                   f'<input id=df name=desired type=number min=0 style="max-width:160px" '
+                                   f'value="{esc(intel.desired_fleet if intel.desired_fleet is not None else "")}">',
+                                   csrf=s.csrf_token, submit="Save desired fleet")) + '</div>')
+
+    # ---- WHAT NEEDS ME : ADD / placement ----
+    ask = form("/service-loaner", '<label for=addn>Need to add</label>'
+               f'<input id=addn name=add type=number min=1 max=20 value="{esc(add_n or "")}" '
+               'style="max-width:120px" placeholder="N units">', csrf=s.csrf_token, submit="Show best candidates",
+               method="get")
+    board = ['<div class="card"><h2>What needs me — add Service Loaners</h2>'
+             '<p class="muted">Operational placement shortlist — economic Ideal pending Phase 4. If management '
+             'asks you to add N loaners today, these are the safest physical New-Retail units to place first on '
+             'currently-certified evidence. This is not an economic optimum.</p>' + ask]
+    if not placement["loaded"]:
+        board.append(empty("No New-Retail inventory snapshot is loaded yet — load Inventory in Data to build the "
+                           "placement shortlist. No candidates are invented."))
+    elif add_n and placement["candidates"]:
+        rows = [_placement_row(i + 1, c) for i, c in enumerate(placement["candidates"])]
+        board.append('<h3 style="margin:10px 0 4px">Best available placement candidates</h3>'
+                     + table(["#", "Stock", "VIN", "Year / Model / Trim", "Ext / Int", "New-Retail", "Why safer",
+                              "Economic call"], rows))
+        if placement["next_best"]:
+            nb = [_placement_row("·", c, compact=True) for c in placement["next_best"]]
+            board.append(disclosure(f"Next-best alternatives ({len(placement['next_best'])})",
+                                    table(["#", "Stock", "VIN", "Year / Model / Trim", "Ext / Int", "New-Retail",
+                                           "Why safer", "Economic call"], nb)))
+        notes = []
+        if placement["protected"]:
+            notes.append(f'{placement["protected"]} eligible unit(s) were <strong>protected</strong> (their '
+                         'combination is short on New-Retail coverage — placing them would harm retail).')
+        if placement["unresolved"]:
+            notes.append(f'{placement["unresolved"]} unit(s) have unresolved New-Retail coverage (no issued plan).')
+        if notes:
+            board.append('<p class="muted">' + " ".join(notes) + '</p>')
+    elif add_n:
+        board.append(empty(f'No safe placement candidate is available for {add_n} — '
+                           f'{placement["eligible"]} eligible on-lot unit(s), '
+                           f'{placement["protected"]} protected for retail coverage.'))
     else:
-        parts.append('<div class="card"><h2>Operational attention</h2>'
-                     + empty("Nothing needs attention right now.") + '</div>')
+        board.append('<p class="muted">Enter how many loaners you need to add to see the safest physical '
+                     'candidates.</p>')
+    board.append('<div class="callout" style="margin-top:10px">'
+                 f'{badge("pending", "Pending Economics")} Economic retirement, retention and release-timing '
+                 'decisions (and expected cost) are reserved for Phase-4 authoritative economics — not shown as '
+                 'guesses. The board keeps a slot for each so Phase 4 fills them without a redesign.</div></div>')
+    parts.append("".join(board))
+
+    # ---- CURRENT FLEET ----
+    parts.append('<div class="card"><h2>Current fleet</h2>'
+                 + (table(["Stock", "VIN", "Model / trim", "Source state", "In-service age", "Mileage",
+                           "Economic call"], [_fleet_unit_row(u) for u in intel.units])
+                    if intel.units else empty("No active Service-Loaner units."))
+                 + '</div>')
+
+    # ---- WHY (A+B intelligence, behind the command surface) ----
+    why = []
     if intel.retail_loaded and intel.models:
-        parts.append('<h2>What history says</h2>' + "".join(_model_intel_card(m) for m in intel.models))
+        why.append("".join(_model_intel_card(m) for m in intel.models))
     elif not intel.retail_loaded:
-        parts.append('<div class="card"><h2>What history says</h2>'
-                     + empty("No completed preowned-history v3 import is available yet — no resale evidence invented.")
-                     + '</div>')
-    parts.append(f'<h2>Active fleet ({len(intel.units)})</h2>'
-                 + ('<div class="queue">' + "".join(_unit_card(u) for u in intel.units) + '</div>'
-                    if intel.units else empty("No active Service-Loaner units.")))
+        why.append(empty("No completed preowned-history v3 import is available yet — no resale evidence invented."))
+    parts.append(disclosure("Why — historical DTS / resale / gross / maturity (empirical evidence)",
+                            safe("".join(why)) if why else empty("No evidence yet.")))
+    parts.append('<p class="muted" style="margin-top:8px">Proof — cohorts, n, recency and provenance are on '
+                 'each model and unit page (open a model or unit above).</p>')
     return "".join(parts)
 
 
@@ -238,8 +313,15 @@ def register(app):
         s = req.session
         app.require(s, "workspace.view")
         from ...loaner.intelligence import build_intelligence
+        from ...loaner.placement import best_available_placement
         intel = build_intelligence(_conn(app), s.scope, app.prefs, app.stack.clock)
-        body = _loaner_intel_body(app, s, intel)
+        try:
+            add_n = max(0, min(20, int(req.q("add") or 0)))
+        except (TypeError, ValueError):
+            add_n = 0
+        loaner_vins = frozenset(u.vin for u in intel.units if u.vin)
+        placement = best_available_placement(app, _conn(app), s.scope, n=add_n, loaner_vins=loaner_vins)
+        body = _loaner_command_body(app, s, intel, placement, add_n)
         flash, s.flash = s.flash, None
         return Response(page("Service Loaners", body, ctx=app.ctx(s), active_path="/service-loaner",
                              flash=flash, wide=True, hide_title=True))
