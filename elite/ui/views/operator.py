@@ -987,18 +987,20 @@ def register(app):
                         '<label>Day cap</label><input name=day_cap type=number style="max-width:120px">'
                         '<label>Mileage cap</label><input name=mile_cap type=number style="max-width:140px">',
                         csrf=s.csrf_token, submit="Add Velocity terms")
-        # translation / identity health — unresolved source language surfaces here with a link to resolve it
+        # translation / identity health — unresolved source language actually observed from real sources
         from ...identity.translation import TranslationStore
         _xlat = TranslationStore(app.prefs, s.scope)
-        _unresolved = _xlat.unresolved_translations() if _xlat.semantic_mappings() else []
-        if _unresolved:
+        if not _xlat.is_initialized():
             xlat_card = ('<div class="card"><h2>Translation &amp; Identity</h2>'
-                         f'<p>{badge("attention", f"{len(_unresolved)} unresolved")} source value(s) have no '
-                         'approved translation yet. Resolve them so imports translate automatically. '
+                         f'<p>{badge("unresolved", "not initialized")} No identity mappings imported yet. '
                          '<a href="/admin/translation">Open Translation Center →</a></p></div>')
         else:
+            _unresolved = _xlat.unresolved_translations()
+            tone, word = ("attention", f"{len(_unresolved)} unresolved") if _unresolved else ("healthy", "resolved")
+            msg = ("source value(s) have no approved translation yet. Resolve them so imports translate "
+                   "automatically." if _unresolved else "All observed source language is translated.")
             xlat_card = ('<div class="card"><h2>Translation &amp; Identity</h2>'
-                         f'<p>{badge("healthy", "resolved")} All observed source language is translated. '
+                         f'<p>{badge(tone, word)} {msg} '
                          '<a href="/admin/translation">Open Translation Center →</a></p></div>')
         body = ('<div class="card"><h2>Sources</h2>' + table(["Source", "State", "Age / status"], srows) + '</div>'
                 + xlat_card

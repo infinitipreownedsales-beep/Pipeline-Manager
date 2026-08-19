@@ -98,17 +98,22 @@ class VariantRow:
     priced: bool = False
     orderability: str = "unresolved"
     proof_refs: tuple = ()
+    # The row's OBSERVED facts (raw_code/package/seen/priced) are source truth; but its INTERPRETATION —
+    # membership in this commercial family + generation segment, and treating a package as a variant — is a
+    # governed relationship and stays `proposed` until a person approves it.
+    approval: str = "proposed"
 
     def to_dict(self):
         return dict(family=self.family.as_str(), raw_code=self.raw_code, generation_id=self.generation_id,
                     package=self.package, is_base=self.is_base, seen_state=self.seen_state, priced=self.priced,
-                    orderability=self.orderability, proof_refs=list(self.proof_refs))
+                    orderability=self.orderability, proof_refs=list(self.proof_refs), approval=self.approval)
 
     @staticmethod
     def from_dict(d):
         return VariantRow(FamilyKey.parse(d["family"]), d["raw_code"], d["generation_id"], d["package"],
                           d["is_base"], d.get("seen_state", "seen_latest"), d.get("priced", False),
-                          d.get("orderability", "unresolved"), tuple(d.get("proof_refs", ())))
+                          d.get("orderability", "unresolved"), tuple(d.get("proof_refs", ())),
+                          d.get("approval", "proposed"))
 
 
 @dataclass
@@ -221,6 +226,7 @@ class TranslationStore:
     K_ROWS = "xlat_variant_rows"
     K_POLICY = "xlat_policy"
     K_OBS = "xlat_observation"
+    K_AUDIT = "xlat_audit"
 
     def __init__(self, prefs, scope):
         self.prefs = prefs
@@ -233,9 +239,22 @@ class TranslationStore:
     def _put(self, key, value):
         self.prefs.set_pref(self._sk, key, value)
 
+    # ---- append-only governed audit (who / when / before / after; never rewritten or deleted) ----
+    def _audit(self, actor, at, action, target, before=None, after=None):
+        log = self._get(self.K_AUDIT, []) or []
+        log.append({"at": at, "actor": actor or "system", "action": action, "target": target,
+                    "before": before, "after": after})
+        self._put(self.K_AUDIT, log)
+
+    def audit_log(self):
+        return list(self._get(self.K_AUDIT, []) or [])
+
+    def is_initialized(self):
+        return bool(self.observations() or self.semantic_mappings() or self.variant_rows())
+
     # ---- immutable raw observations ----
     def record_observation(self, source_system, semantic_type, raw_value, *, as_of, proof_ref="",
-                           seen_state="seen_latest"):
+                           seen_state="seen_latest", actor="system"):
         """Record (or refresh the last-seen of) an immutable raw observation. Never deletes or rewrites an
         existing raw value — only updates first/last-seen and seen-state."""
         obs = self._get(self.K_OBS, []) or []
@@ -252,6 +271,8 @@ class TranslationStore:
                "proof_refs": [proof_ref] if proof_ref else []}
         obs.append(rec)
         self._put(self.K_OBS, obs)
+        self._audit(actor, as_of, "observation.record", f"{source_system}/{semantic_type}/{raw_value}",
+                    after={"proof_ref": proof_ref})
         return rec
 
     def observations(self):
@@ -268,29 +289,67 @@ class TranslationStore:
         self._put(self.K_OBS, obs)
 
     # ---- SAME_AS semantic mappings ----
-    def upsert_semantic(self, m: SemanticMapping):
-        rows = self._get(self.K_SEM, []) or []
+    def _sem_index(self, rows, m_key):
         for i, r in enumerate(rows):
-            if (r["source_system"], r["semantic_type"], r["raw_value"], r.get("model_scope", "")) == \
-                    (m.source_system, m.semantic_type, m.raw_value, m.model_scope):
-                rows[i] = m.to_dict()
-                self._put(self.K_SEM, rows)
-                return
+            if (r["source_system"], r["semantic_type"], r["raw_value"], r.get("model_scope", "")) == m_key:
+                return i
+        return -1
+
+    def import_semantic(self, m: SemanticMapping, *, actor="system", at=""):
+        """INSERT-IF-ABSENT: used by the governed initialization import. Never overwrites an existing mapping
+        (so it can never silently revert a human's approve/edit/retire); returns True only when newly created."""
+        rows = self._get(self.K_SEM, []) or []
+        if self._sem_index(rows, (m.source_system, m.semantic_type, m.raw_value, m.model_scope)) >= 0:
+            return False
         rows.append(m.to_dict())
         self._put(self.K_SEM, rows)
+        self._audit(actor, at, "semantic.import", f"{m.semantic_type}/{m.raw_value}/{m.model_scope}",
+                    after={"display_name": m.display_name, "approval": m.approval})
+        return True
+
+    def upsert_semantic(self, m: SemanticMapping, *, actor="system", at=""):
+        """CREATE-OR-REPLACE: used by human resolve/edit in the Translation Center. Audited before/after."""
+        rows = self._get(self.K_SEM, []) or []
+        i = self._sem_index(rows, (m.source_system, m.semantic_type, m.raw_value, m.model_scope))
+        before = rows[i] if i >= 0 else None
+        if i >= 0:
+            rows[i] = m.to_dict()
+        else:
+            rows.append(m.to_dict())
+        self._put(self.K_SEM, rows)
+        self._audit(actor, at, "semantic.upsert", f"{m.semantic_type}/{m.raw_value}/{m.model_scope}",
+                    before=before, after=m.to_dict())
 
     def semantic_mappings(self):
         return [SemanticMapping.from_dict(d) for d in (self._get(self.K_SEM, []) or [])]
 
-    def approve_semantic(self, source_system, semantic_type, raw_value, model_scope=""):
+    def approve_semantic(self, source_system, semantic_type, raw_value, model_scope="", *, actor="system", at=""):
         rows = self._get(self.K_SEM, []) or []
-        for r in rows:
-            if (r["source_system"], r["semantic_type"], r["raw_value"], r.get("model_scope", "")) == \
-                    (source_system, semantic_type, raw_value, model_scope):
-                r["approval"] = "approved"
-                self._put(self.K_SEM, rows)
-                return True
-        return False
+        i = self._sem_index(rows, (source_system, semantic_type, raw_value, model_scope))
+        if i < 0:
+            return False
+        before = dict(rows[i])
+        rows[i]["approval"] = "approved"
+        self._put(self.K_SEM, rows)
+        self._audit(actor, at, "semantic.approve", f"{semantic_type}/{raw_value}/{model_scope}",
+                    before={"approval": before.get("approval")}, after={"approval": "approved"})
+        return True
+
+    def retire_semantic(self, source_system, semantic_type, raw_value, model_scope="", *, actor="system", at=""):
+        """Soft-retire: the mapping stops translating (active=False, approval=retired) but the row and its
+        history are PRESERVED — never hard-deleted."""
+        rows = self._get(self.K_SEM, []) or []
+        i = self._sem_index(rows, (source_system, semantic_type, raw_value, model_scope))
+        if i < 0:
+            return False
+        before = dict(rows[i])
+        rows[i]["active"] = False
+        rows[i]["approval"] = "retired"
+        self._put(self.K_SEM, rows)
+        self._audit(actor, at, "semantic.retire", f"{semantic_type}/{raw_value}/{model_scope}",
+                    before={"approval": before.get("approval"), "active": before.get("active")},
+                    after={"approval": "retired", "active": False})
+        return True
 
     def translate(self, source_system, semantic_type, raw_value, *, model=""):
         """Return the canonical (token, display_name) for a raw value, honouring APPROVED, ACTIVE mappings and
@@ -311,37 +370,85 @@ class TranslationStore:
         return best
 
     def unresolved_translations(self):
-        """Raw observations with no APPROVED active SAME_AS mapping — the Data-Health resolution queue."""
+        """Raw observations that still carry NO interpretation — the Data-Health resolution queue. Resolved =
+        either an approved active SAME_AS mapping, or (for a full order/model code) already placed into a family
+        as a variant row (its meaning is carried by family membership, not a display SAME_AS). Genuinely-new
+        language with neither surfaces here."""
         approved = {(m.source_system, m.semantic_type, m.raw_value)
                     for m in self.semantic_mappings() if m.active and m.approval == "approved"}
-        return [o for o in self.observations()
-                if (o["source_system"], o["semantic_type"], o["raw_value"]) not in approved]
+        placed = {r.raw_code for r in self.variant_rows()}
+        out = []
+        for o in self.observations():
+            if (o["source_system"], o["semantic_type"], o["raw_value"]) in approved:
+                continue
+            if o["semantic_type"] == "model_code" and o["raw_value"] in placed:
+                continue
+            out.append(o)
+        return out
 
-    # ---- variant rows (family + generation + package) ----
-    def add_variant_row(self, row: VariantRow):
-        rows = self._get(self.K_ROWS, []) or []
-        key = (row.family.as_str(), row.raw_code, row.generation_id, row.package)
+    # ---- variant rows (family + generation + package) — the governed INTERPRETATION layer ----
+    def _row_index(self, rows, key):
         for i, d in enumerate(rows):
             if (d["family"], d["raw_code"], d["generation_id"], d["package"]) == key:
-                rows[i] = row.to_dict()          # idempotent: refresh, never duplicate a chart row
-                self._put(self.K_ROWS, rows)
-                return
-        rows.append(row.to_dict())
+                return i
+        return -1
+
+    def add_variant_row(self, row: VariantRow, *, actor="system", at=""):
+        """INSERT-IF-ABSENT. On re-import, refresh only the OBSERVED fields (seen/priced/orderability/proof)
+        and PRESERVE the human approval state — so a governed re-import can never revert an approval. Returns
+        True only when the interpretation row is newly created (i.e. newly `proposed`)."""
+        rows = self._get(self.K_ROWS, []) or []
+        key = (row.family.as_str(), row.raw_code, row.generation_id, row.package)
+        i = self._row_index(rows, key)
+        if i >= 0:
+            d = rows[i]
+            d.update({"seen_state": row.seen_state, "priced": row.priced, "orderability": row.orderability,
+                      "proof_refs": list(row.proof_refs)})          # approval preserved
+            self._put(self.K_ROWS, rows)
+            return False
+        rows.append(row.to_dict())                                   # created as `proposed`
         self._put(self.K_ROWS, rows)
+        self._audit(actor, at, "variant.import", f"{row.family.as_str()}/{row.raw_code}/{row.package}",
+                    after={"generation": row.generation_id, "is_base": row.is_base, "approval": row.approval})
+        return True
 
-    def variant_rows(self, family: FamilyKey = None):
+    def approve_variant(self, family: FamilyKey, raw_code, generation_id, package, *, actor="system", at=""):
+        """Approve the INTERPRETATION (family + generation-segment + variant membership) of one row."""
+        rows = self._get(self.K_ROWS, []) or []
+        i = self._row_index(rows, (family.as_str(), raw_code, generation_id, package))
+        if i < 0:
+            return False
+        before = rows[i].get("approval")
+        rows[i]["approval"] = "approved"
+        self._put(self.K_ROWS, rows)
+        self._audit(actor, at, "variant.approve", f"{family.as_str()}/{raw_code}/{package}",
+                    before={"approval": before}, after={"approval": "approved"})
+        return True
+
+    def variant_rows(self, family: FamilyKey = None, *, approved_only=False):
         rows = [VariantRow.from_dict(d) for d in (self._get(self.K_ROWS, []) or [])]
-        return [r for r in rows if family is None or r.family.as_str() == family.as_str()]
+        out = [r for r in rows if family is None or r.family.as_str() == family.as_str()]
+        return [r for r in out if r.approval == "approved"] if approved_only else out
 
-    def segments(self, family: FamilyKey):
-        """Distinct generation/planning segments observed for a family (each keeps its own supply accounting)."""
-        return sorted({r.generation_id for r in self.variant_rows(family)}, key=_gen_rank)
+    def families(self, *, approved_only=False):
+        return sorted({r.family.as_str() for r in self.variant_rows(approved_only=approved_only)})
 
-    # ---- preferred-order policy ----
-    def set_policy(self, policy: PreferredOrderPolicy):
+    def segments(self, family: FamilyKey, *, approved_only=False):
+        """Distinct generation/planning segments for a family (each keeps its own supply accounting)."""
+        return sorted({r.generation_id for r in self.variant_rows(family, approved_only=approved_only)},
+                      key=_gen_rank)
+
+    # ---- preferred-order policy (governed) ----
+    def set_policy(self, policy: PreferredOrderPolicy, *, actor="system", at="", only_if_absent=False):
         pols = self._get(self.K_POLICY, {}) or {}
-        pols[policy.family.as_str()] = policy.to_dict()
+        key = policy.family.as_str()
+        if only_if_absent and key in pols:
+            return False
+        before = pols.get(key)
+        pols[key] = policy.to_dict()
         self._put(self.K_POLICY, pols)
+        self._audit(actor, at, "policy.set", key, before=before, after=policy.to_dict())
+        return True
 
     def policy(self, family: FamilyKey) -> PreferredOrderPolicy:
         pols = self._get(self.K_POLICY, {}) or {}
@@ -349,4 +456,6 @@ class TranslationStore:
         return PreferredOrderPolicy.from_dict(d) if d else PreferredOrderPolicy(family=family)
 
     def resolve_order(self, family: FamilyKey) -> dict:
-        return resolve_preferred_order(self.variant_rows(family), self.policy(family))
+        """Resolve the ORDER identity over APPROVED interpretation only — a proposed (unapproved) family/
+        segment membership never drives an order call."""
+        return resolve_preferred_order(self.variant_rows(family, approved_only=True), self.policy(family))

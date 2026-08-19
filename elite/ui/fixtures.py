@@ -23,7 +23,7 @@ OPERATOR_CAPS = [
     "scenario.promote", "scenario.policy_review_request", "calibration.workspace.review", "authority.view",
     "authority.grant", "authority.delegate", "authority.revoke", "authority.override_separation",
     "audit.view", "audit.exception.review", "readiness.assess", "readiness.approve",
-    "service_loaner.used_cars_receipt.confirm",
+    "service_loaner.used_cars_receipt.confirm", "identity.govern",
 ]
 
 

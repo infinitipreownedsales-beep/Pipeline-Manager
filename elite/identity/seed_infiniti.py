@@ -28,22 +28,42 @@ INTERIOR = [("G", "Graphite", ""), ("A", "Burgundy", "QX80"), ("P", "Sepia Brown
             ("P", "Saddle Brown", "QX60"), ("K", "Stone Gray", ""), ("N", "Vermilion Red", "QX65")]
 
 
-def seed(store: TranslationStore, *, as_of="2026-08-19"):
-    """Idempotently install the source-backed pilot mappings, families, variant rows and default BASE policies."""
+def seed(store: TranslationStore, *, as_of="2026-08-19", actor="system"):
+    """Governed, IDEMPOTENT initialization from the three reviewed charts. It runs from an authorized action,
+    NEVER from a page GET, and it distinguishes what it does:
+      * raw OBSERVATIONS (source truth) — every raw code/colour seen, immutable;
+      * literal SAME_AS mappings (colour/model-line display equivalence the chart itself shows) -> `approved`;
+      * INTERPRETATION (family + generation segment + variant membership, preferred order) -> `proposed`,
+        awaiting human approval — being source-backed does NOT make an interpretation auto-approved.
+    Returns counts so the UI can show observations-imported vs approved vs proposed distinctly. Insert-if-absent
+    everywhere, so re-running never reverts a human decision."""
+    counts = {"observations": 0, "approved_mappings": 0, "proposed_interpretations": 0}
+
+    def obs(stype, raw, chart):
+        store.record_observation(PORTAL, stype, raw, as_of=as_of, proof_ref=chart, actor=actor)
+        counts["observations"] += 1
+
     for code2, model in MODEL_LINE:
-        store.upsert_semantic(SemanticMapping(PORTAL, "model_code", code2, model, model, "", "approved",
-                                              (QX80_CHART,)))
+        if store.import_semantic(SemanticMapping(PORTAL, "model_code", code2, model, model, "", "approved",
+                                                 (QX80_CHART,)), actor=actor, at=as_of):
+            counts["approved_mappings"] += 1
     for raw, name in QX80_EXTERIOR:
-        store.upsert_semantic(SemanticMapping(PORTAL, "exterior", raw, raw, name, "QX80", "approved", (QX80_CHART,)))
+        obs("exterior", raw, QX80_CHART)
+        if store.import_semantic(SemanticMapping(PORTAL, "exterior", raw, raw, name, "QX80", "approved",
+                                                 (QX80_CHART,)), actor=actor, at=as_of):
+            counts["approved_mappings"] += 1
     for raw, name, scope in INTERIOR:
         proof = {"QX80": QX80_CHART, "QX60": QX60_CHART, "QX65": QX65_CHART}.get(scope, QX80_CHART)
-        store.upsert_semantic(SemanticMapping(PORTAL, "interior", raw, raw, name, scope, "approved", (proof,)))
+        obs("interior", raw, proof)
+        if store.import_semantic(SemanticMapping(PORTAL, "interior", raw, raw, name, scope, "approved", (proof,)),
+                                 actor=actor, at=as_of):
+            counts["approved_mappings"] += 1
 
     # ---- QX80 families with both generations (83 prior/current + 86 new, pending) ----
     def row(model, trim, drive, code, gen, pkg, base, priced, chart, seen="seen_latest"):
         fam = FamilyKey(FR, model, trim, drive)
         return VariantRow(fam, code, gen, pkg, base, seen, priced,
-                          derive_orderability(seen, priced), (chart,))
+                          derive_orderability(seen, priced), (chart,))    # approval defaults to `proposed`
 
     rows = [
         # QX80 LUXE 2WD — 86 new-gen pending ($0 -> unresolved); 83317 priced but only observed as PA1 (no BASE)
@@ -70,9 +90,12 @@ def seed(store: TranslationStore, *, as_of="2026-08-19"):
         row("QX60", "AUTOGRAPH", "AWD", "84617", "84", "TPA", False, True, QX60_CHART),
     ]
     for r in rows:
-        store.add_variant_row(r)
         store.record_observation(PORTAL, "model_code", r.raw_code, as_of=as_of, proof_ref=r.proof_refs[0],
-                                 seen_state=r.seen_state)
+                                 seen_state=r.seen_state, actor=actor)
+        counts["observations"] += 1
+        if store.add_variant_row(r, actor=actor, at=as_of):             # created as `proposed` interpretation
+            counts["proposed_interpretations"] += 1
 
     for fam in {r.family.as_str() for r in rows}:
-        store.set_policy(PreferredOrderPolicy(FamilyKey.parse(fam)))     # default: prefer BASE
+        store.set_policy(PreferredOrderPolicy(FamilyKey.parse(fam)), actor=actor, at=as_of, only_if_absent=True)
+    return counts
