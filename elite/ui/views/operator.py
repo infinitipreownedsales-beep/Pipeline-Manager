@@ -1825,7 +1825,28 @@ def _run_upload(app, scope, contract_key, upload):
                         f"Imported {safe} into {contract_key} - {state}, but the Service Loaner "
                         f"operating-fleet projection did not complete: {e}. Review required."
                     )
-            return f"Imported {safe} into {contract_key} - {state}."
+            # upload-resolution hook: record identity observations from the accepted rows; known vocabulary
+            # resolves automatically, only genuinely-new raw values surface for human resolution. This records
+            # observations only — it never interprets family/segment/order and never touches certified plans.
+            id_note = ""
+            try:
+                from ...identity.translation import TranslationStore
+                from ...identity.ingest import observe_source_rows
+                from ...clock import to_utc_iso
+                acc = [dict(o.raw_values or {}) for o in ops.data.list_observations(run["import_batch_id"])
+                       if o is not None and o.acceptance_status == "accepted"]
+                summ = observe_source_rows(TranslationStore(app.prefs, scope), contract_key, acc,
+                                           as_of=to_utc_iso(app.stack.clock.now())[:10],
+                                           proof_ref=f"{contract_key}:{safe}", actor="operator")
+                n_new = len(summ["new_unresolved"])
+                if n_new:
+                    id_note = (f" Identity: {n_new} new source value(s) need resolution — open the Translation "
+                               "Center from Data Health.")
+                elif summ["recorded"]:
+                    id_note = " Identity: all source values recognized."
+            except Exception:   # noqa: BLE001 — identity observation must never fail an accepted import
+                id_note = ""
+            return f"Imported {safe} into {contract_key} - {state}.{id_note}"
         return (f"Import of {safe} did not complete ({state}); previous data is unchanged and freshness "
                 "was not updated.")
     except Exception as e:   # noqa: BLE001
