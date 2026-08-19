@@ -134,13 +134,15 @@ class TestOperatorFunctional(unittest.TestCase):
         un = self.p.app.prefs.get_pref(f"scope::{SCOPE}", "unavailable", default=[])
         self.assertTrue(un[0]["end"])                                    # interval preserved with an end date
 
-        self.full.post("/data/program/icv", {"eff": "2026-01", "model": "QX60", "trim": "LUXE", "amount": "3500"})
-        self.full.post("/data/program/velocity", {"eff": "2026-01", "model": "QX60", "trim": "LUXE",
-                                                  "amount": "1500", "day_cap": "120", "mile_cap": "9000"})
-        icv = self.p.app.prefs.get_pref(f"scope::{SCOPE}", "icv_program", default=[])
-        vel = self.p.app.prefs.get_pref(f"scope::{SCOPE}", "velocity_program", default=[])
-        self.assertEqual(icv[0]["amount"], 3500)
-        self.assertEqual(vel[0]["mile_cap"], 9000)
+        # effective-dated program inputs (historical month; value + caps) via the durable Program Inputs page
+        self.full.post("/program-inputs/icv", {"effective_month": "2026-01", "model": "QX60", "trim": "LUXE",
+                                               "value": "3500"})
+        self.full.post("/program-inputs/velocity", {"effective_month": "2026-01", "model": "QX60", "trim": "LUXE",
+                                                    "value": "1500", "day_cap": "120", "mile_cap": "9000"})
+        from elite.loaner.program_inputs import ProgramInputsStore
+        st = ProgramInputsStore(self.p.app.prefs, SCOPE)
+        self.assertEqual(st.applicable("icv", "QX60", "2026-02", trim="LUXE").value, 3500)
+        self.assertEqual(st.entries("velocity")[0].mile_cap, 9000)
 
     def test_backend_unchanged(self):
         self.full.get("/"); self.full.get("/data"); self.full.get("/wholesale")

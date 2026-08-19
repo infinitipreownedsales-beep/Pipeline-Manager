@@ -966,27 +966,6 @@ def register(app):
                        + _select("reason", [(r, r) for r in ("body shop", "mechanical", "event damage", "other")])
                        + '<label>Unavailable start</label><input name=start type=date style="max-width:180px">',
                        csrf=s.csrf_token, submit="Mark unavailable")
-        icv = _ws_get(app, s.scope, "icv_program", []) or []
-        icv_rows = [[esc(p.get("eff", "")), esc(p.get("model", "")), esc(p.get("trim", "")), esc(p.get("amount", ""))]
-                    for p in icv]
-        models = _known_models(app, s.scope)
-        icv_form = form("/data/program/icv",
-                        '<label>Effective month</label>' + _month_select(app, "eff", _default_month(app))
-                        + '<label>Model</label>' + _select("model", [(m, m) for m in models])
-                        + '<label>Trim</label><input name=trim style="max-width:180px">'
-                        '<label>ICV $</label><input name=amount type=number style="max-width:140px">',
-                        csrf=s.csrf_token, submit="Add ICV value")
-        vel = _ws_get(app, s.scope, "velocity_program", []) or []
-        vel_rows = [[esc(p.get("eff", "")), esc(p.get("model", "")), esc(p.get("trim", "")), esc(p.get("amount", "")),
-                     esc(p.get("day_cap", "")), esc(p.get("mile_cap", ""))] for p in vel]
-        vel_form = form("/data/program/velocity",
-                        '<label>Effective month</label>' + _month_select(app, "eff", _default_month(app))
-                        + '<label>Model</label>' + _select("model", [(m, m) for m in models])
-                        + '<label>Trim</label><input name=trim style="max-width:180px">'
-                        '<label>Velocity $</label><input name=amount type=number style="max-width:140px">'
-                        '<label>Day cap</label><input name=day_cap type=number style="max-width:120px">'
-                        '<label>Mileage cap</label><input name=mile_cap type=number style="max-width:140px">',
-                        csrf=s.csrf_token, submit="Add Velocity terms")
         # translation / identity health — unresolved source language actually observed from real sources
         from ...identity.translation import TranslationStore
         _xlat = TranslationStore(app.prefs, s.scope)
@@ -1012,10 +991,11 @@ def register(app):
                 + table(["Combination", ""], brows) + bench_form + '</div>'
                 '<div class="card"><h2>Temporarily unavailable inventory</h2>'
                 + table(["VIN", "Reason", "Since", "Returned", ""], urows) + un_form + '</div>'
-                '<div class="card"><h2>Service-Loaner ICV program</h2>'
-                + table(["Effective", "Model", "Trim", "$"], icv_rows) + icv_form + '</div>'
-                '<div class="card"><h2>Service-Loaner Velocity program</h2>'
-                + table(["Effective", "Model", "Trim", "$", "Day cap", "Mile cap"], vel_rows) + vel_form + '</div>')
+                '<div class="card"><h2>Service-Loaner program inputs</h2>'
+                '<p class="muted">Effective-dated ICV / Velocity program values (durable historical months; '
+                'unresolved is never $0) are maintained on the dedicated Program Inputs page — reachable here '
+                'and from the Service Loaner board.</p>'
+                '<p><a href="/program-inputs"><button type=button>Open Program Inputs →</button></a></p></div>')
         return _resp(app, s, "Data", body, "/data")
 
     @app.post("/data/import")
@@ -1082,28 +1062,6 @@ def register(app):
             pass
         return Response.redirect("/data")
 
-    @app.post("/data/program/icv")
-    def data_icv(app, req):
-        s = req.session
-        app.require(s, "workspace.view")
-        icv = _ws_get(app, s.scope, "icv_program", []) or []
-        icv.append({"eff": (req.form.get("eff") or "").strip(), "model": (req.form.get("model") or "").strip().upper(),
-                    "trim": (req.form.get("trim") or "").strip(), "amount": _int_or0(req.form.get("amount"))})
-        _ws_put(app, s.scope, "icv_program", icv)
-        s.flash = "ICV program value added (history retained)."
-        return Response.redirect("/data")
-
-    @app.post("/data/program/velocity")
-    def data_velocity(app, req):
-        s = req.session
-        app.require(s, "workspace.view")
-        vel = _ws_get(app, s.scope, "velocity_program", []) or []
-        vel.append({"eff": (req.form.get("eff") or "").strip(), "model": (req.form.get("model") or "").strip().upper(),
-                    "trim": (req.form.get("trim") or "").strip(), "amount": _int_or0(req.form.get("amount")),
-                    "day_cap": _int_or0(req.form.get("day_cap")), "mile_cap": _int_or0(req.form.get("mile_cap"))})
-        _ws_put(app, s.scope, "velocity_program", vel)
-        s.flash = "Velocity terms added (history retained)."
-        return Response.redirect("/data")
 
     # ---- Admin index (secondary; gathers governance / engineering screens) ----------------------------
     @app.get("/admin")

@@ -51,9 +51,12 @@ class TestSelectors(unittest.TestCase):
         b = self.full.get("/data").body
         self.assertIn('<select name="combo"', b)               # bench = combination selector
         self.assertIn('list="un_vins"', b)                     # unavailable VIN selector
-        self.assertIn('<select name="eff"', b)                 # effective month picker
-        self.assertIn('<select name="model"', b)               # ICV/Velocity model selector
         self.assertIn('type=date', b)                          # unavailable start = date control
+        self.assertIn('/program-inputs', b)                    # effective-dated program inputs moved to its page
+        # the durable program-inputs page uses a month PICKER (any historical month) + model selector
+        pi = self.full.get("/program-inputs").body
+        self.assertIn('type=month', pi)                        # not a fixed recent-month dropdown window
+        self.assertIn('<select name="model"', pi)
 
     def test_dealer_trade_internal_is_selector(self):
         b = self.full.get("/dealer-trade").body

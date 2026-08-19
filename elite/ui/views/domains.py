@@ -121,6 +121,17 @@ def _fleet_unit_row(u):
             safe(badge("pending", "Pending Economics"))]
 
 
+def _program_coverage(app, scope):
+    """Read-only ICV/Velocity coverage banner + a clean link to the effective-dated Program Inputs page."""
+    try:
+        from .program_inputs import coverage_summary
+        return ('<div class="callout" style="margin:8px 0">' + coverage_summary(app, scope)
+                + '<p style="margin-top:6px"><a href="/program-inputs">Open Program Inputs (effective-dated '
+                'ICV / Velocity) →</a></p></div>')
+    except Exception:   # noqa: BLE001
+        return ''
+
+
 def _loaner_command_body(app, s, intel, placement, add_n):
     """Service Loaner Command Board — a premium program command surface, not an evidence report. It answers in
     seconds: how many are active, what is my approved target, do I need to act, exactly which physical vehicles
@@ -143,6 +154,7 @@ def _loaner_command_body(app, s, intel, placement, add_n):
                     'Per-unit detail is on each unit.</div>' if blocked else "")
                  + '<p class="muted">Current, Desired and Ideal are distinct. Ideal stays <strong>Undetermined</strong> '
                  'until authoritative Phase-4 economics (ICV / Velocity / write-down) exist — no economics are invented.</p>'
+                 + _program_coverage(app, s.scope)
                  + disclosure("Set desired fleet target",
                               form("/service-loaner/desired-fleet",
                                    '<label for=df>Desired fleet size (optional operational target)</label>'
