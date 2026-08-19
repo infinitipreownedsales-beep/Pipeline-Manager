@@ -424,7 +424,15 @@ export function decideShot(ctx) {
   // UP FRONT — regardless of where the loop stops — so the record shows every one of them.
   const ranked = candidates.map(c => ({ ...c, elim: c.preElim || null, executable: !c.preElim }));
   let selected = null;
+  // MANUAL OVERRIDE: the golfer insists on a specific club. The caddie still shows its
+  // real play + any distance/fit caution in the record, but honors the choice — a club
+  // is never locked out from a person who wants to hit it.
+  if (ctx.force) {
+    const forced = ranked.find(c => famOf(c.club) === famOf(ctx.force));
+    if (forced) { forced.executable = true; forced.elim = null; forced.manualForce = true; selected = forced; }
+  }
   for (const c of ranked) {
+    if (selected) break;
     if (!c.executable) continue;                                // already cut on distance fit
     const rel = c.rel != null ? c.rel : 60;
     if (rel < RELIABLE) { c.executable = false; c.elim = `club not trusted enough today (${round(rel)}/100)`; continue; }

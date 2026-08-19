@@ -12,7 +12,7 @@ const result = await esbuild.build({
   entryPoints: [path.join(root, "build/entry.jsx")],
   bundle: true, minify: true, format: "iife", target: ["es2018"],
   loader: { ".jsx": "jsx" }, jsx: "automatic",
-  define: { "process.env.NODE_ENV": '"production"' },
+  define: { "process.env.NODE_ENV": '"production"', "FIELD_BRIDGE": "false" },
   write: false,
 });
 const js = result.outputFiles[0].text;

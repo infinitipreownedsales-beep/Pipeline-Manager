@@ -7,7 +7,11 @@ import { centerX, holeContext, lieAt } from "./geometry.js";
 import { decideShot } from "./decision.js";
 
 // Visible build/version stamp — shown in the header so the running tool is identifiable.
-const BUILD = "v12.2 · distance-fit";
+// FIELD_BRIDGE is replaced at build time by esbuild `define` (false in the canonical
+// caddie.html/artifact.html builds, true only in CaddieOS_Field_Bridge_12_1.html). When
+// true it makes automatic in-round Bench inert and exposes a manual club override — a
+// temporary field workaround only; it changes NO canonical architecture.
+const BUILD = FIELD_BRIDGE ? "Field Bridge 12.1 · field-test" : "v12.2 · distance-fit";
 // CADDIE OS v10 — DYNAMIC ROUND ENGINE
 // Every shot logs the club actually used (tap to change, layups tappable).
 // Hot/cold detection per club · one-tap bench from the alert ·
@@ -631,7 +635,10 @@ export default function CaddieOS(){
   useEffect(()=>{(async()=>{
     const p=await store.get("caddie:profile"); if(p)setP({...DEF_PROFILE,...p,feels:{...DEF_PROFILE.feels,...(p.feels||{})}});
     const r=await store.get("caddie:rounds"); if(r)setRounds(r);
-    const l=await store.get("caddie:live"); if(l)setLive(l);
+    // FIELD BRIDGE: a resumed round loads normally, but any stale Bench/dismiss state is
+    // stripped (and persisted clean) so no prior-round suppression can poison today's play.
+    const l=await store.get("caddie:live");
+    if(l){ if(FIELD_BRIDGE){const lv={...l,bench:[],dismiss:[]}; setLive(lv); store.set("caddie:live",lv);} else setLive(l); }
     const h=await store.get("caddie:holes"); if(h)setImpCourses(h);
     setLoaded(true);})();},[]);
   // Import a hole or a whole course from a Shot Scope read (pasted/loaded JSON).
@@ -687,7 +694,8 @@ export default function CaddieOS(){
 
   const CH=(live&&courses[live.course]?courses[live.course]:courses[courseSel]).holes;
   const flags=clubFlags((live&&live.shots)||[],["52",...Object.keys(P.carries)]);
-  const E=engine(P,(live&&live.bench)||[],flags.adj);
+  // FIELD BRIDGE: automatic Bench is inert — no club is ever hard-locked out of the engine.
+  const E=engine(P,FIELD_BRIDGE?[]:((live&&live.bench)||[]),flags.adj);
   const chips=["52½","52¾","52FS",...Object.keys(P.carries).sort((a,b)=>P.carries[a]-P.carries[b]),"CHIP"];
   const allShots=[...rounds.flatMap(r=>r.shots||[]),...((live&&live.shots)||[])];
   // Real club data present → the live engine drives every call; the scripted book is retired.
@@ -736,8 +744,12 @@ export default function CaddieOS(){
   // The play-first engine's bag: today's effective carry + today's trust + benched flag,
   // straight from the Player Model so improvement, decline and benching all flow through.
   const decisionBag=(exclude=[])=>Object.keys(P.carries).map(k=>{const m=playerDaily[k];
+    // FIELD BRIDGE: ignore automatic Bench (round bench + model bench). `exclude` is the
+    // golfer's own in-the-moment "not comfortable" choice and stays honored — and is always
+    // overridable by the manual club override, so a club is never confiscated.
+    const autoBench=FIELD_BRIDGE?false:((live&&live.bench||[]).includes(k)||!!(m&&m.benched));
     return {k,carry:E.eff(k),rel:reliability(k),sd:(m&&m.sd)||(cstat(k)&&cstat(k).sd)||10,
-      benched:(live&&live.bench||[]).includes(k)||!!(m&&m.benched)||exclude.includes(k),state:m&&m.state};});
+      benched:autoBench||exclude.includes(k),state:m&&m.state};});
   const H=live?CH[live.hole]:null;
   // Live distances to key marks (carry hazard / dogleg corner) from the ball's spot.
   const holeMarks=(()=>{if(!H||!live)return [];const covered=H.y-live.rem;const m=[];
@@ -760,7 +772,8 @@ export default function CaddieOS(){
     const useLie=ov.lie||lie, useObs=ov.obsv!==undefined?ov.obsv:obsv, exclude=ov.exclude||objExclude;
     const ev=Math.round(v*windMul*lieFactor(useLie));
     const from=live.ballX!=null?{d:live.ballD,x:live.ballX}:null;
-    return decideShot({hole:H,from,rem:v,effRem:ev,lie:useLie,wind,strokes:live.strokes,
+    // ov.force = the golfer manually insists on a club (Field Bridge manual authority).
+    return decideShot({hole:H,from,rem:v,effRem:ev,lie:useLie,wind,strokes:live.strokes,force:ov.force,
       player:playerDaily,bag:decisionBag(exclude),wedgeDist,observation:useObs,scoreCeiling,
       scoring:(r)=>{const rr=E.rec(Math.round(r*windMul*lieFactor(useLie)));const chip=rr?rr.chip:"52½";return {chip,carry:E.chipCarry(chip)};}});
   };
@@ -868,7 +881,8 @@ export default function CaddieOS(){
   const dv=runTot-runPlan;
   const totalPlan=CH.reduce((a,h)=>a+h.tgt,0);
   // Cold clubs from the confidence engine (not the old clean-lie filter that hid failures).
-  const coldAlert=live?["52",...Object.keys(P.carries)].filter(f=>confOf(f).state==="cold"&&!live.bench.includes(f)&&!((live.dismiss||[]).includes(f))):[];
+  // FIELD BRIDGE: no auto-bench prompt at all (performance still shows via confidence/Why).
+  const coldAlert=(live&&!FIELD_BRIDGE)?["52",...Object.keys(P.carries)].filter(f=>confOf(f).state==="cold"&&!live.bench.includes(f)&&!((live.dismiss||[]).includes(f))):[];
   const inspecting=live&&viewHole!==null&&viewHole!==live.hole;
 
   return (
@@ -1136,6 +1150,11 @@ export default function CaddieOS(){
               const objectWith=(reason,ov)=>{buzz();if(!firstDecision)setFirstDecision(decision);setObjections(o=>[...o,reason]);
                 const dec=runDecision(live.rem,ov);setDecision(dec);if(dec)setSel(dec.club);setShowAlt(false);};
               const distrust=()=>{const nx=[...objExclude,fam];setObjExclude(nx);objectWith("distrust:"+fam,{exclude:nx});};
+              // FIELD BRIDGE manual authority: the golfer forces a specific club. The caddie's
+              // original call is preserved (firstDecision) and the override logged, so Player
+              // history stays honest and the club is never permanently redefined.
+              const forceClub=(k)=>{buzz();if(!firstDecision)setFirstDecision(decision);setObjections(o=>[...o,"force:"+k]);
+                const dec=runDecision(live.rem,{force:k});if(dec){setDecision(dec);setSel(dec.club);}setShowAlt(false);};
               const row=(lab,val)=><div style={{display:"flex",gap:8,marginBottom:6}}>
                 <div style={{color:"#9db8a6",fontSize:12,fontWeight:800,letterSpacing:.5,textTransform:"uppercase",width:52,flexShrink:0}}>{lab}</div>
                 <div style={{fontFamily:SERIF,fontSize:16,color:PAPER,lineHeight:1.35}}>{val}</div></div>;
@@ -1186,6 +1205,13 @@ export default function CaddieOS(){
                   return <div style={{marginTop:8,background:"#fff",borderRadius:16,padding:14,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
                     <div style={{color:MUTE,fontSize:13,marginBottom:10}}>Tell me what's off — I'll re-pick. You never have to choose the club.</div>
                     <button className="tapbtn" onClick={distrust} style={objBtn}>I don't trust that club</button>
+                    {FIELD_BRIDGE&&<div style={{margin:"2px 0 12px"}}>
+                      <div style={{fontSize:12,color:MUTE,marginBottom:5}}>Or just hit a club — your call, always available:</div>
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                        {Object.keys(P.carries).sort((a,b)=>P.carries[a]-P.carries[b]).map(k=>{const on=famOf(sel||"")===famOf(k);
+                          return <button key={k} className="tapbtn" onClick={()=>forceClub(k)} style={{border:on?"2px solid #1a3a2e":"1px solid #e7e2d8",borderRadius:10,padding:"9px 12px",background:on?"#eef1ea":"#fbfaf7",fontSize:14,fontWeight:800,color:INK,cursor:"pointer"}}>{on?"✓ ":""}{k}<span style={{opacity:.55,fontSize:10,fontWeight:600}}> {P.carries[k]}</span></button>;})}
+                      </div>
+                    </div>}
                     <div style={{display:"flex",gap:6,flexWrap:"wrap",margin:"0 0 8px"}}>
                       <div style={{fontSize:12,color:MUTE,width:"100%",marginBottom:2}}>The lie is worse —</div>
                       {[["ROUGH","Rough"],["DEEP","Deep"],["FBUNK","Bunker"],["TREES","Recovery"]].map(([v,lab])=>

@@ -19,7 +19,7 @@ const result = await esbuild.build({
   target: ["es2018"],
   loader: { ".jsx": "jsx" },
   jsx: "automatic",   // inject react/jsx-runtime per file — CaddieOS.jsx never imports React itself
-  define: { "process.env.NODE_ENV": '"production"' },
+  define: { "process.env.NODE_ENV": '"production"', "FIELD_BRIDGE": "false" },
   write: false,
 });
 const js = result.outputFiles[0].text;
