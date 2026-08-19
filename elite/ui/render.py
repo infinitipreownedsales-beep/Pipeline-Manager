@@ -228,11 +228,12 @@ a.covcell:hover{border-color:var(--accent);background:var(--raise)}
 .hnow{display:flex;flex-direction:column;justify-content:center;padding:3px 9px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg);font-size:11px;color:var(--muted);white-space:nowrap;line-height:1.2}
 .hnow b{font-family:var(--font-display);font-size:15px;color:var(--fg)}
 .hcells{display:flex;gap:4px;overflow-x:auto;padding-bottom:2px}
-.hc{min-width:46px;border:1px solid var(--line);border-radius:var(--r-sm);padding:3px 6px 2px;display:flex;flex-direction:column;align-items:center;gap:0;background:var(--card)}
+.hc{min-width:66px;border:1px solid var(--line);border-radius:var(--r-sm);padding:4px 7px;display:flex;flex-direction:column;align-items:flex-start;gap:1px;background:var(--card);line-height:1.2}
 .hc.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset;background:var(--accent-weak)}
-.hc .hm{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.02em}
-.hc .hv{font-family:var(--font-display);font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2}
-.hc .hd{font-size:10px;line-height:1}
+.hc .hm{font-family:var(--font-display);font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.03em}
+.hc .harr{font-size:10.5px;color:var(--slate);font-variant-numeric:tabular-nums}
+.hc .hv{font-family:var(--font-display);font-size:13.5px;font-weight:700;font-variant-numeric:tabular-nums}
+.hc .hd{font-size:10.5px;font-weight:600;white-space:nowrap}
 .hc.short .hd,.hc.short .hv{color:var(--timing)}
 .hc.over .hd{color:var(--slate)}
 .hc.covered .hd{color:var(--ready)}
@@ -546,11 +547,16 @@ def coverage_lane(cells, *, caption=None):
 def horizon_strip(now_html, cells):
     """A COMPACT per-combination horizon sparkline — the legacy planning grid's strongest habit ("read one
     row left-to-right: on-lot now, then the position each month across the horizon") brought inside a single
-    recommendation. Left anchor = current on-lot; then one tiny cell per surrounding month showing the
-    certified supply position and coverage state (glyph, not colour-alone), with the selected month
-    emphasised. All values are certified inventory_plan_month for THIS combination — nothing recomputed."""
+    recommendation. Left anchor = current on-lot; then one tiny cell per surrounding month showing, top to
+    bottom: the month, the certified ARRIVAL delta into that month (why the position changed), the certified
+    supply POSITION, and the coverage STATE (glyph, not colour-alone). The selected month is emphasised. Every
+    value is read straight from certified inventory_plan_month for THIS combination — nothing recomputed; the
+    arrival delta is the month-over-month change in the certified supply position, not a forward order."""
     gly = {"short": "▲", "over": "▼", "covered": "●", "none": "·"}
-    word = {"short": "short", "over": "over", "covered": "covered", "none": "no plan"}
+
+    def _g(v):
+        return "—" if v is None else f"{round(float(v), 1):g}"
+
     out = ['<div class="hstrip" role="img" aria-label="This combination across the planning horizon">']
     if now_html:
         out.append(f'<span class="hnow">{now_html if _is_html(now_html) else esc(now_html)}</span>')
@@ -558,13 +564,32 @@ def horizon_strip(now_html, cells):
     for c in cells:
         st = c.get("state", "none")
         sel = " sel" if c.get("selected") else ""
-        have = "—" if c.get("supply") is None else f'{round(float(c["supply"]), 1):g}'
-        need = "—" if c.get("demand") is None else f'{round(float(c["demand"]), 1):g}'
-        out.append(f'<span class="hc {esc(st)}{sel}" title="{esc(c.get("label"))} — need {esc(need)} · '
-                   f'have {esc(have)} · {esc(word.get(st, ""))}">'
+        have = _g(c.get("supply"))
+        arr = c.get("arrival")
+        if c.get("supply") is None or arr is None:
+            arr_txt = "—"
+        elif arr > 1e-9:
+            arr_txt = f"+{_g(arr)} in"
+        elif arr < -1e-9:
+            arr_txt = f"{_g(arr)} out"
+        else:
+            arr_txt = "—"
+        if st == "short":
+            state_txt = f"Short {_g(c.get('shortage'))}"
+        elif st == "over":
+            state_txt = f"Over {_g(c.get('excess'))}"
+        elif st == "covered":
+            state_txt = "Covered"
+        else:
+            state_txt = "No plan"
+        title = (f'{c.get("label")} — {"no arrival" if arr_txt == "—" else arr_txt} · '
+                 f'{have} supply · {state_txt}')
+        out.append(f'<span class="hc {esc(st)}{sel}" title="{esc(title)}">'
                    f'<span class="hm">{esc_text(c.get("label"))}</span>'
-                   f'<span class="hv">{esc(have)}</span>'
-                   f'<span class="hd" aria-hidden="true">{gly.get(st, "·")}</span></span>')
+                   f'<span class="harr">{esc(arr_txt)}</span>'
+                   f'<span class="hv">{esc(have)} sup</span>'
+                   f'<span class="hd"><span aria-hidden="true">{gly.get(st, "·")}</span> {esc(state_txt)}</span>'
+                   f'</span>')
     out.append("</span></div>")
     return "".join(out)
 

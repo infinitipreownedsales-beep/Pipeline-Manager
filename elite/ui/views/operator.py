@@ -476,7 +476,7 @@ def register(app):
             window_months = [c["month"] for c in cov]
 
             def _strip(b):
-                hz = _combo_horizon(pmonths, b["pid"], window_months, month) if window_months else []
+                hz = _combo_horizon(pmonths, b["pid"], window_months, month, b["current"]) if window_months else []
                 return horizon_strip(safe(f'On lot now <b>{esc(b["current"])}</b>'), hz) if hz else ""
             edit = disclosure("Edit allocation ceiling",
                               form("/ordering/cpo/allocation",
@@ -499,7 +499,8 @@ def register(app):
                     queue.append(_cpo_rec_card(s, b, r, lines.get(b["combo"]), month,
                                                promoted=b in promoted, horizon_html=_strip(b)))
                 else:
-                    queue.append(_cpo_rec_row(s, b, r, lines.get(b["combo"]), month, promoted=b in promoted))
+                    queue.append(_cpo_rec_row(s, b, r, lines.get(b["combo"]), month,
+                                              promoted=b in promoted, horizon_html=_strip(b)))
             if queue:
                 block.append('<div class="queue">' + "".join(queue) + '</div>')
             elif worked:
@@ -509,7 +510,8 @@ def register(app):
                 n_conf = sum(1 for _r, b in worked if lines.get(b["combo"]) == "confirmed")
                 n_not = len(worked) - n_conf
                 bits = ([f"{n_conf} confirmed"] if n_conf else []) + ([f"{n_not} not ordering"] if n_not else [])
-                rows = "".join(_cpo_rec_row(s, b, r, lines.get(b["combo"]), month, promoted=b in promoted)
+                rows = "".join(_cpo_rec_row(s, b, r, lines.get(b["combo"]), month,
+                                            promoted=b in promoted, horizon_html=_strip(b))
                                for r, b in worked)
                 block.append(work_group(f"Worked — {len(worked)} · {' · '.join(bits)}", safe(rows)))
 
@@ -1144,53 +1146,66 @@ def _cpo_rec_pieces(s, b, rank, state, month, promoted):
         why_body = kv([("Why", "certified acquire-now decision for this combination"),
                        (f"Planning month {month}", "outside the certified planning horizon for this combination"),
                        ("Order now (certified action)", b["order"])])
-    why = disclosure(f"Why #{rank}", why_body)
+    common = dict(ident=ident, call=call, pos=pos, why_body=why_body, rank=rank)
     if state == "confirmed":
-        return dict(ident=ident, call=call, pos=pos, why=why, resolved=True, chip=chip("done", "Confirmed"),
-                    actions=action_group(_line_btn(s, b, "clear", "Undo", "secondary")))
+        return dict(resolved=True, chip=chip("done", "Confirmed"),
+                    actions=action_group(_line_btn(s, b, "clear", "Undo", "secondary")), **common)
     if state == "not_ordered":
-        return dict(ident=ident, call=call, pos=pos, why=why, resolved=True, chip=chip("skip", "Not ordering"),
-                    actions=action_group(_line_btn(s, b, "clear", "Undo", "secondary")))
+        return dict(resolved=True, chip=chip("skip", "Not ordering"),
+                    actions=action_group(_line_btn(s, b, "clear", "Undo", "secondary")), **common)
     actions = action_group(_line_btn(s, b, "confirmed", "Confirm order")
                            + _line_btn(s, b, "not_ordered", "Not ordering", "secondary")
                            + _bench_button(s, b["identity"], f"/ordering/cpo?month={month}"))
-    return dict(ident=ident, call=call, pos=pos, why=why, resolved=False, chip=chip("need", "Needs decision"),
-                actions=actions)
+    return dict(resolved=False, chip=chip("need", "Needs decision"), actions=actions, **common)
 
 
-def _combo_horizon(pmonths, pid, window_months, month):
-    """Per-combination certified horizon cells for the sparkline: for each window month, this combination's
-    certified supply position + expected demand + coverage state from inventory_plan_month (no recompute)."""
+def _combo_horizon(pmonths, pid, window_months, month, current):
+    """Per-combination certified horizon cells for the sparkline. For each window month: this combination's
+    certified supply position + expected demand + coverage state, plus the certified ARRIVAL delta into that
+    month — the month-over-month change in the certified supply position (baselined to on-lot-now for the
+    plan's first month). All read straight from inventory_plan_month; the delta is not a forward order."""
     rows = pmonths.get(pid) or {}
+    prev_supply, base = {}, (current or 0)
+    for m in sorted(rows.keys()):                 # baseline each plan month against the one before it
+        prev_supply[m] = base
+        base = rows[m]["cumulative_supply"]
     cells = []
     for m in window_months:
         mr = rows.get(m)
         if mr is None:
-            state, sup, dem = "none", None, None
-        else:
-            sup, dem = mr["cumulative_supply"], mr["expected_demand"]
-            state = ("short" if (mr["shortage"] or 0) > 1e-9 else "over" if (mr["excess"] or 0) > 1e-9
-                     else "covered")
+            cells.append({"month": m, "label": _month_short(m).split(" ")[0], "selected": (m == month),
+                          "supply": None, "demand": None, "arrival": None, "shortage": None,
+                          "excess": None, "state": "none"})
+            continue
+        sup, dem = mr["cumulative_supply"], mr["expected_demand"]
+        arrival = None if sup is None else sup - prev_supply.get(m, current or 0)
+        state = ("short" if (mr["shortage"] or 0) > 1e-9 else "over" if (mr["excess"] or 0) > 1e-9
+                 else "covered")
         cells.append({"month": m, "label": _month_short(m).split(" ")[0], "selected": (m == month),
-                      "supply": sup, "demand": dem, "state": state})
+                      "supply": sup, "demand": dem, "arrival": arrival,
+                      "shortage": mr["shortage"], "excess": mr["excess"], "state": state})
     return cells
 
 
 def _cpo_rec_card(s, b, rank, state, month, *, promoted=False, horizon_html=""):
     """A rich recommendation card (top 1-3 of a model): the ORDER call is the hero, and — when available —
-    a compact certified horizon sparkline lets the operator read this combination's whole-horizon position
-    on one line (the legacy planning grid's strongest habit), without opening Why."""
+    the certified horizon sparkline is shown INLINE so the operator reads this combination's whole-horizon
+    position on one glance (the legacy planning grid's strongest habit), without opening Why."""
     p = _cpo_rec_pieces(s, b, rank, state, month, promoted)
     pos = safe(p["pos"] + horizon_html) if horizon_html else p["pos"]
-    return rec_card(rank, p["ident"], p["call"], pos, p["why"], p["actions"],
+    why = disclosure(f"Why #{rank}", p["why_body"])
+    return rec_card(rank, p["ident"], p["call"], pos, why, p["actions"],
                     resolved=p["resolved"], chip_html=p["chip"])
 
 
-def _cpo_rec_row(s, b, rank, state, month, *, promoted=False):
-    """A compact recommendation row (ranks 4..N, and every worked item): same call, position, Why and
-    actions as the rich card, rendered on ~one line so the model stays scannable in a viewport."""
+def _cpo_rec_row(s, b, rank, state, month, *, promoted=False, horizon_html=""):
+    """A compact recommendation row (ranks 4..N, and every worked item): compact by default. Expanding it
+    reveals the SAME certified horizon sparkline + Why in place, so every recommendation is equally
+    inspectable without permanently costing whole-model density."""
     p = _cpo_rec_pieces(s, b, rank, state, month, promoted)
-    return rec_row(rank, p["ident"], p["call"], p["pos"], p["why"], p["actions"],
+    inner = (horizon_html + p["why_body"]) if horizon_html else p["why_body"]
+    why = disclosure(f"Why & horizon #{rank}" if horizon_html else f"Why #{rank}", safe(inner))
+    return rec_row(rank, p["ident"], p["call"], p["pos"], why, p["actions"],
                    resolved=p["resolved"], chip_html=p["chip"])
 
 

@@ -107,6 +107,31 @@ class TestCoverageLane(unittest.TestCase):
         for mon in ("Aug", "Sep", "Oct"):
             self.assertIn(f'>{mon}<', strip)
         self.assertRegex(strip, r'<span class="hc short sel"')   # selected Sep cell is short + highlighted
+        self.assertIn("sup", strip)                              # supply position labelled
+
+    def test_horizon_strip_shows_arrival_delta(self):
+        # each month cell shows the certified arrival delta (month-over-month change in the certified supply
+        # position) so the operator can SEE why the position moves; no forward order schedule is invented.
+        b = self._body(OCT)
+        strip = re.search(r'<div class="hstrip".*?</div>\s*</div>', b, re.S).group(0)
+        # XKJ/K supply position: Aug 2 -> Sep 0 -> Oct 1, so the Oct cell shows a +1 arrival delta
+        self.assertIn("+1 in", strip)
+        # the selected Oct cell is present and its state reads from the certified shortage (1) as Short 1
+        self.assertRegex(strip, r'<span class="hc [a-z]+ sel"[^>]*>\s*<span class="hm">Oct')
+        self.assertIn("Short 1", strip)
+
+    def test_compact_rows_reveal_horizon_on_expand(self):
+        # add two more combos so ranks 4..N exist as compact rows; a compact row must be compact by default
+        # yet reveal the SAME horizon strip + Why in place when expanded (equal inspectability).
+        self._plan("QAB", "H", {AUG: (0.0, 1, 0.0), SEP: (3.0, 0, 0.0), OCT: (2.0, 1, 0.0)})
+        self._plan("QAC", "J", {AUG: (0.0, 1, 0.0), SEP: (4.0, 0, 0.0), OCT: (3.0, 1, 0.0)})
+        b = self._body(SEP)
+        self.assertIn('class="recrow"', b)                  # compact rows exist for ranks 4..N
+        # the compact row's disclosure is labelled for horizon + Why and carries the strip inside it
+        self.assertIn("Why &amp; horizon", b)
+        row = re.search(r'<div class="recrow">.*?</div>\s*</div>', b, re.S).group(0)
+        self.assertIn("rwhy", row)                          # inline expandable Why region
+        self.assertIn('class="hstrip"', row)                # the same horizon strip, revealed on expand
 
     def test_presentation_only_certified_unchanged(self):
         self._body(SEP)
