@@ -570,6 +570,12 @@ def register(app):
         from ...loaner.self_balancing import build_requirement
         sb = build_requirement(_conn(app), s.scope, app.prefs)
         parts.append(_cpo_sl_program_banner(sb))
+        directive_total = sum(ln.sl_planned for ln in deco.values())
+        if directive_total and sb.resolution != "resolved_need":
+            parts.append('<div class="callout"><strong>Management directive active.</strong> Elite\'s calculated '
+                         f'need is {sb.calculated_need if sb.resolution != "no_target" else "pending"}, and '
+                         f'management has directed <strong>+{directive_total}</strong> more — additive to the '
+                         'dealership order below, with certified Retail demand unchanged.</div>')
         parts.append(_cpo_dealership_total_card(deco, sb))
 
         # one physical supply truth: a committed SL/Demo VIN must never also count as free Retail supply

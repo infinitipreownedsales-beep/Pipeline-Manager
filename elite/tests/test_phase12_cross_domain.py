@@ -246,6 +246,17 @@ class TestCpoDecompositionView(unittest.TestCase):
         self.assertIn("Management directive", b)                       # separate, additive, model-level
         self.assertIn("Model total 4", b)                             # 2 retail + 2 directive for QX60
 
+    def test_directive_above_zero_calculated_is_explained_and_added(self):
+        # calculated need = 0 (fleet at/above target), but management directs +2 -> effective 2, additive to CPO
+        self._set_target(0)
+        PlannedRequirementStore(self.p.app.prefs, SCOPE).add(model="QX60", quantity=2, actor="k", recorded_at="t")
+        cpo = self._cpo()
+        self.assertIn("Management directive active", cpo)              # conflict explained on CPO
+        planning = self.full.get("/ordering/sl-requirements").body
+        self.assertIn("Effective requirement", planning)
+        self.assertIn("Directive above the calculated baseline", planning)
+        self.assertIn("Rank the safest 2 New-Retail candidate", planning)  # bridge into placement
+
     def test_certified_retail_not_mutated(self):
         self._set_target(0)
         self._cpo()

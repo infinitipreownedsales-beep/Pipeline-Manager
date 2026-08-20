@@ -102,12 +102,20 @@ def read_new_retail_units(app, scope):
     try:
         from ..ui.views.operator import _ops_stack
         from ..newinv.supply_bridge import read_latest_snapshot_rows
+        from ..newinv.snapshots import SnapshotReader
         ops = _ops_stack(app)
         if ops is None:
             return []
+        # read_latest_snapshot_rows needs a SnapshotReader (latest_snapshot + snapshot_rows) — NOT a bare
+        # DataStore. Passing ops.data raised AttributeError that was silently swallowed, which made placement
+        # report "no inventory loaded" even though the same store had a current snapshot the rest of Elite reads.
+        ops_store = getattr(ops, "ops", None)
+        if ops_store is None:
+            return []
+        reader = SnapshotReader(ops_store, ops.data)
         for key in INVENTORY_CONTRACTS:
             try:
-                rows = list(read_latest_snapshot_rows(ops.data, ops.source_id(key), scope) or [])
+                rows = list(read_latest_snapshot_rows(reader, ops.source_id(key), scope) or [])
             except Exception:   # noqa: BLE001
                 rows = []
             if rows:

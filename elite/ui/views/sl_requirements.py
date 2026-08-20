@@ -59,6 +59,39 @@ def _retire_form(s, req_id):
                 'Retire</button></form>')
 
 
+def _effective_requirement_card(app, scope, store):
+    """Reconcile the engine-calculated need with any management directive into ONE effective Service-Loaner
+    acquisition requirement, and explain the conflict when they differ (e.g. Elite would add 0 because the
+    fleet is above target, but management directed +3). The directive is additive — never a replacement — and
+    never touches certified Retail demand."""
+    from ...loaner.self_balancing import build_requirement
+    sb = build_requirement(app.stack.db.conn, scope, app.prefs)
+    calc = sb.calculated_need if sb.resolution == "resolved_need" else 0
+    by_model = store.by_model()
+    directive = sum(by_model.values())
+    effective = calc + directive
+    per = (" · ".join(f"{esc(m)} +{q}" for m, q in sorted(by_model.items()))) if by_model else "none"
+    rows = kv([("Elite calculated need", calc if sb.resolution != "no_target" else "— (set target)"),
+               ("Management directive (additive)", f"+{directive}" if directive else "0"),
+               ("By model", safe(per)),
+               ("Effective Service-Loaner acquisition requirement", effective)])
+    if directive and calc == 0:
+        note = ('<div class="callout"><strong>Directive above the calculated baseline.</strong> Elite would add '
+                f'<strong>0</strong> because the fleet is at or above target, but management has directed '
+                f'<strong>+{directive}</strong>. The effective requirement is <strong>{effective}</strong>; it is '
+                'added to the dealership order and Retail demand is unchanged. '
+                '<a href="/service-loaner?add=' + str(directive) + '">Rank the safest '
+                f'{directive} New-Retail candidate(s)</a>.</div>')
+    elif directive:
+        note = ('<div class="callout">Management directive of <strong>+' + str(directive) + '</strong> is added on '
+                'top of the calculated need of <strong>' + str(calc) + f'</strong> → effective <strong>{effective}'
+                '</strong>. <a href="/service-loaner?add=' + str(directive) + '">Rank the safest candidate(s)</a>.</div>')
+    else:
+        note = ('<p class="muted" style="font-size:12px">No management directive is active — the effective '
+                'requirement equals Elite’s calculated need.</p>')
+    return ('<div class="card"><h2 style="margin-top:4px">Effective requirement</h2>' + rows + note + '</div>')
+
+
 def register(app):
     def _model_options(app, scope):
         from .operator import _known_models
@@ -114,6 +147,7 @@ def register(app):
         parts = [workspace_header("Service Loaner — Planning & Directives",
                                   safe('<a href="/ordering/cpo">← CPO</a> · <a href="/service-loaner">Command Board</a>'))]
         parts.append(_sl_engine_card(app, s.scope))
+        parts.append(_effective_requirement_card(app, s.scope, store))
         parts.append('<div class="card"><p class="muted">Elite calculates the Service-Loaner requirement above from '
                      'authoritative fleet state. A <strong>management directive</strong> below is an additive '
                      'override for cases where management has decided to add specific units — it is governed and '
