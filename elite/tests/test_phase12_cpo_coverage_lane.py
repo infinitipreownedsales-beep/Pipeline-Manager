@@ -120,24 +120,22 @@ class TestCoverageLane(unittest.TestCase):
         self.assertRegex(strip, r'<span class="hc [a-z]+ sel"[^>]*>\s*<span class="hm">Oct')
         self.assertIn("Short 1", strip)
 
-    def test_compact_rows_reveal_horizon_on_expand(self):
-        # add two more combos so ranks 4..N exist as compact rows; a compact row must be compact by default
-        # yet reveal the SAME horizon strip + Why in place when expanded (equal inspectability).
+    def test_every_rank_is_uniform_and_information_complete(self):
+        # add more combos so ranks 4..N exist; under the uniform architecture EVERY rank uses the same
+        # information-complete row: the horizon strip is shown INLINE (never gated behind rank), plus a Why.
         self._plan("QAB", "H", {AUG: (0.0, 1, 0.0), SEP: (3.0, 0, 0.0), OCT: (2.0, 1, 0.0)})
         self._plan("QAC", "J", {AUG: (0.0, 1, 0.0), SEP: (4.0, 0, 0.0), OCT: (3.0, 1, 0.0)})
         b = self._body(SEP)
-        self.assertIn('class="recrow"', b)                  # compact rows exist for ranks 4..N
-        # the compact row's disclosure is labelled for horizon + Why and carries the strip inside it
-        self.assertIn("Why &amp; horizon", b)
-        row = re.search(r'<div class="recrow">.*?</div>\s*</div>', b, re.S).group(0)
-        self.assertIn("rwhy", row)                          # inline expandable Why region
-        self.assertIn('class="hstrip"', row)                # the same horizon strip, revealed on expand
+        self.assertIn('class="recrow', b)                   # uniform rows for every rank
+        self.assertIn("Why #", b)                           # human Why disclosure per row
+        # every row carries its horizon strip inline (equal information at every rank, not just the top)
+        self.assertGreaterEqual(b.count('class="hstrip"'), 4)
 
     def test_presentation_only_certified_unchanged(self):
         self._body(SEP)
         self.assertEqual(current_version(self.conn), 12)
-        # the certified discrete ORDER-now is still 1 for every rich card regardless of the month shortage
-        for m in re.findall(r'<div class="call">ORDER (\d+)</div>', self._body(SEP)):
+        # the certified discrete ORDER-now is still 1 for every uniform row regardless of the month shortage
+        for m in re.findall(r'<span class="rcall">ORDER (\d+)</span>', self._body(SEP)):
             self.assertEqual(m, "1")
 
 

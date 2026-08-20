@@ -8,7 +8,8 @@ from unittest.mock import patch
 from elite.ui.fixtures import Phase10
 from elite.workflow.fixtures import SCOPE
 from elite.db import current_version
-from elite.ordering.cross_domain import committed_vins, PlannedRequirementStore, decompose_orders
+from elite.ordering.cross_domain import (committed_vins, PlannedRequirementStore, decompose_orders,
+                                          supply_double_count_audit)
 
 
 class TestCommittedVins(unittest.TestCase):
@@ -139,6 +140,27 @@ class TestDecomposeOrders(unittest.TestCase):
         d = self._by_model(decompose_orders({"qx60": 1}, {"QX60": 1}, sl_relevant_models={"Qx60"}))
         self.assertEqual(set(d), {"QX60"})
         self.assertEqual(d["QX60"].total, 2)
+
+
+class TestSupplyDoubleCount(unittest.TestCase):
+    """One physical supply truth — a committed SL/Demo VIN that also shows up as free Retail supply is flagged."""
+
+    def _vin(self, r):
+        return r.get("vin")
+
+    def test_overlap_detected(self):
+        rows = [{"vin": "5N1AZ2CS0PC900001"}, {"vin": "5N1AZ2CS0PC900002"}]
+        committed = {"5N1AZ2CS0PC900001"}                               # committed to SL AND in retail supply
+        self.assertEqual(supply_double_count_audit(rows, committed, self._vin), ["5N1AZ2CS0PC900001"])
+
+    def test_no_overlap_is_clean(self):
+        rows = [{"vin": "5N1AZ2CS0PC900002"}]
+        self.assertEqual(supply_double_count_audit(rows, {"5N1AZ2CS0PC900001"}, self._vin), [])
+
+    def test_serial_only_rows_never_match(self):
+        # a serial-only supply row (no authoritative vin) can never create a false double-count
+        rows = [{"vin": None, "serial": "TC348756"}]
+        self.assertEqual(supply_double_count_audit(rows, {"5N1AZ2CS0PC900001"}, self._vin), [])
 
 
 def _board_row(model="QX60", order=2, pid="p1"):

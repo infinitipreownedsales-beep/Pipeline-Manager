@@ -200,6 +200,23 @@ class OrderSourceLine:
         return self.sl_state != "unresolved"
 
 
+def supply_double_count_audit(retail_rows, committed, vin_of):
+    """One physical supply truth. Given the New-Retail supply rows, the committed-VIN set (Service Loaner +
+    Demo), and a function that extracts a row's AUTHORITATIVE vin (never a serial), return the committed VINs
+    that ALSO appear as free Retail supply — each such VIN is one physical vehicle at risk of being counted
+    both as a non-Retail commitment and as available Retail supply. Pure; certified supply is not mutated —
+    the conflict is surfaced, not silently reconciled."""
+    supply_vins = set()
+    for r in retail_rows:
+        try:
+            v = vin_of(r)
+        except Exception:   # noqa: BLE001
+            v = None
+        if v:
+            supply_vins.add(str(v).strip().upper())
+    return sorted(v for v in committed if v in supply_vins)
+
+
 def decompose_orders(retail_by_model, planned_by_model, *, sl_relevant_models=(), acknowledged_models=(),
                      other_by_model=None):
     """Combine certified Retail acquire quantities with the approved additive Service-Loaner planned need and

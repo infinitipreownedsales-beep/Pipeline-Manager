@@ -55,8 +55,8 @@ class TestCpoCockpit(unittest.TestCase):
         for label in ("Recommended", "Worked", "Remaining", "Allocation ceiling"):
             self.assertIn(label, b)
         self.assertIn("reviewed", b)                       # work-progress indicator
-        self.assertIn('class="rec', b)                     # recommendation cards, not a table
-        self.assertIn('<div class="call">ORDER 1</div>', b)  # the call is the hero
+        self.assertIn('class="recrow', b)                  # uniform recommendation rows, not a table
+        self.assertIn('<span class="rcall">ORDER 1</span>', b)  # the call is present at every rank
 
     def test_resolved_cards_recede_and_sort_below_unresolved(self):
         # confirm the #1 (QX60 8481 XKJ/K) -> it leaves the active queue and collapses into the receded,
@@ -83,8 +83,10 @@ class TestCpoCockpit(unittest.TestCase):
     def test_presentation_only_certified_unchanged(self):
         self._body()
         self.assertEqual(current_version(self.conn), 12)
-        # ORDER-now stays certified 1 for every card regardless of month shortage
-        for m in re.findall(r'<div class="call">ORDER (\d+)</div>', self._body()):
+        # ORDER-now stays certified 1 for every uniform row regardless of month shortage
+        calls = re.findall(r'<span class="rcall">ORDER (\d+)</span>', self._body())
+        self.assertTrue(calls)
+        for m in calls:
             self.assertEqual(m, "1")
 
 

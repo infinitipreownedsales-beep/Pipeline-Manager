@@ -282,6 +282,25 @@ def _cpo_decomposition(app, scope, board):
     return {ln.model: ln for ln in lines}
 
 
+def _cpo_supply_integrity(app, scope):
+    """One physical supply truth: committed VINs (Service Loaner + Demo) that ALSO appear as free New-Retail
+    supply — a double-count risk. Best-effort and read-only; returns [] when inventory is unavailable."""
+    try:
+        from ...ordering.cross_domain import committed_vins, supply_double_count_audit
+        from ...loaner.placement import read_new_retail_units, _authoritative_vin
+        committed = set(committed_vins(_conn(app), scope, app.prefs).keys())
+        if not committed:
+            return []
+        rows = read_new_retail_units(app, scope)
+
+        def _vin(r):
+            v, ok, _serial = _authoritative_vin(r)
+            return v if ok else None
+        return supply_double_count_audit(rows, committed, _vin)
+    except Exception:   # noqa: BLE001 — supply integrity must never break the ordering page
+        return []
+
+
 def _decomposition_html(model, ln):
     """The order-source line for one model, plus the state-specific Service-Loaner disclosure. When a model's
     future SL requirement is unresolved this renders the fail-safe alert — a Retail-only figure must not be
@@ -520,6 +539,15 @@ def register(app):
                          '<a href="/ordering/sl-requirements">Resolve Service-Loaner requirements</a> before you '
                          'order for tomorrow.</div>')
 
+        # one physical supply truth: a committed SL/Demo VIN must never also count as free Retail supply
+        dbl = _cpo_supply_integrity(app, s.scope)
+        if dbl:
+            tails = ", ".join("…" + v[-6:] for v in dbl[:8]) + ("…" if len(dbl) > 8 else "")
+            parts.append('<div class="err" role="alert"><strong>Physical supply conflict.</strong> '
+                         f'{len(dbl)} vehicle(s) committed to Service&nbsp;Loaner / Demo still appear in '
+                         f'New-Retail supply ({esc(tails)}). One physical vehicle is one purpose — verify these are '
+                         'not being counted as free Retail supply before ordering against them.</div>')
+
         if not models:
             parts.append('<div class="card"><p class="muted">No certified ACQUIRE recommendations are issued '
                          'for this store yet. Load or refresh the New-Inventory plan to populate CPO.</p></div>')
@@ -564,20 +592,17 @@ def register(app):
             deco_html = _decomposition_html(mo, ln) if ln else ""
             block = [f'<div class="card"><h2 style="margin-top:4px">{esc(mo)}</h2>{hero}{deco_html}{lane}{edit}']
 
-            # work queue: unresolved recommendations, in certified rank order. The top 3 get the rich card;
-            # ranks 4..N compress to compact rows so a whole model stays scannable in ~one viewport. Handled
-            # (worked) items leave the active queue and collapse into a receded, still-undoable group.
+            # work queue: unresolved recommendations, in certified rank order. EVERY rank uses the same
+            # information-complete row — rank sets the order, never whether the call, position, inline horizon,
+            # human Why or actions are visible — so the whole allocation is scannable and #4..#N are not
+            # subconsciously overlooked. Handled (worked) items collapse into a receded, still-undoable group.
             ranked = list(enumerate(shown, 1))     # (certified rank, rec)
             unresolved = [(r, b) for r, b in ranked if lines.get(b["combo"]) not in ("confirmed", "not_ordered")]
             worked = [(r, b) for r, b in ranked if lines.get(b["combo"]) in ("confirmed", "not_ordered")]
             queue = []
             for i, (r, b) in enumerate(unresolved):
-                if i < 3:
-                    queue.append(_cpo_rec_card(s, b, r, lines.get(b["combo"]), month,
-                                               promoted=b in promoted, horizon_html=_strip(b)))
-                else:
-                    queue.append(_cpo_rec_row(s, b, r, lines.get(b["combo"]), month,
-                                              promoted=b in promoted, horizon_html=_strip(b)))
+                queue.append(_cpo_rec_row(s, b, r, lines.get(b["combo"]), month,
+                                          promoted=b in promoted, horizon_html=_strip(b), ln=ln))
             if queue:
                 block.append('<div class="queue">' + "".join(queue) + '</div>')
             elif worked:
@@ -588,7 +613,7 @@ def register(app):
                 n_not = len(worked) - n_conf
                 bits = ([f"{n_conf} confirmed"] if n_conf else []) + ([f"{n_not} not ordering"] if n_not else [])
                 rows = "".join(_cpo_rec_row(s, b, r, lines.get(b["combo"]), month,
-                                            promoted=b in promoted, horizon_html=_strip(b))
+                                            promoted=b in promoted, horizon_html=_strip(b), ln=ln)
                                for r, b in worked)
                 block.append(work_group(f"Worked — {len(worked)} · {' · '.join(bits)}", safe(rows)))
 
@@ -1209,25 +1234,63 @@ def _cpo_resolve_month(app, s, req):
     return month
 
 
-def _cpo_rec_pieces(s, b, rank, state, month, promoted):
-    """Compute the shared parts of a CPO recommendation (identity, hero call, position, month-specific Why
-    drawer, status chip, action group, resolved flag) once, so the rich card and the compact row present the
-    SAME information and the SAME actions — only the density differs."""
+def _cpo_human_why(b, month, ln):
+    """A concise managerial narrative generated ONLY from certified/available state — not a receipt. It says
+    what the position is, why the order quantity is what it is, names the approved Service-Loaner requirement
+    when present, and always carries a watch/counter-evidence condition. Raw figures live in Proof."""
+    ml = _month_label(month)
+    order = b["order"]
+    cur, fut = b.get("current"), b.get("future")
+    sent = []
+    if b.get("m_present"):
+        short = b.get("m_shortage")
+        dem = b.get("m_demand")
+        empty_now = (cur == 0 or cur is None)
+        arriving = (fut is not None and cur is not None and fut > cur)
+        lead = ("You're empty now" if empty_now else f"You have {cur} on the lot now")
+        arr = (f" and {fut} in position by {ml}" if arriving else
+               (f" with no additional {ml} arrival" if not arriving else ""))
+        gap = (f"the {ml} plan runs {_num(short)} short against {_num(dem)} expected demand"
+               if (short or 0) > 0 else f"the {ml} position covers expected demand")
+        sent.append(f"{lead}{arr}; {gap}.")
+    else:
+        sent.append(f"This is a certified acquire-now decision; {ml} is outside this combination's certified "
+                    "planning horizon.")
+    base = (f"Retail demand supports ordering {order}" if order else "Retail evidence does not yet support an order")
+    if ln is not None and getattr(ln, "sl_planned", 0):
+        sent.append(f"{base}, and an approved Service-Loaner requirement adds {ln.sl_planned} more "
+                    f"{ln.model} to the dealership's need — a separate obligation, not Retail demand.")
+    else:
+        sent.append(f"{base} now.")
+    # watch / counter-evidence — never fabricated; drawn from confidence or the restraint boundary
+    conf = (b.get("m_confidence") or "").strip() if b.get("m_present") else ""
+    if conf and conf.lower() not in ("high", "strong"):
+        sent.append(f"Watch: {ml} confidence is {conf} — treat the projection as directional.")
+    elif order:
+        sent.append("A larger order would outrun current certified evidence.")
+    return " ".join(sent)
+
+
+def _cpo_rec_pieces(s, b, rank, state, month, promoted, ln=None):
+    """Compute the shared parts of a CPO recommendation (identity, hero call, position, human Why + Proof,
+    status chip, action group, resolved flag) ONCE, so every ranked row presents the SAME information and the
+    SAME actions — rank sets order, never how much is visible."""
     ident = safe(f'<a href="/combination/{esc(b["pid"])}?month={esc(month)}">{esc(b["identity"])}</a>'
                  + (' ' + badge("completed", "promoted") if promoted else ''))
     call = f'ORDER {b["order"]}'
     pos = safe(f'Current <strong>{esc(b["current"])}</strong> · By {esc(month)} <strong>{esc(b["future"])}</strong>')
     if b.get("m_present"):
-        why_body = kv([("Why now", f"ranked by the {_month_label(month)} coverage condition"),
-                       (f"Projected shortage — {month}", _num(b.get("m_shortage"))),
-                       (f"Expected demand — {month}", _num(b.get("m_demand"))),
-                       (f"Supply position by {month}", b.get("m_cum_supply")),
-                       (f"Confidence — {month}", b.get("m_confidence") or "—"),
-                       ("Order now (certified action)", b["order"])])
+        proof = kv([(f"Projected shortage — {month}", _num(b.get("m_shortage"))),
+                    (f"Expected demand — {month}", _num(b.get("m_demand"))),
+                    (f"Supply position by {month}", b.get("m_cum_supply")),
+                    (f"Confidence — {month}", b.get("m_confidence") or "—"),
+                    ("Order now (certified action)", b["order"])])
     else:
-        why_body = kv([("Why", "certified acquire-now decision for this combination"),
-                       (f"Planning month {month}", "outside the certified planning horizon for this combination"),
-                       ("Order now (certified action)", b["order"])])
+        proof = kv([("Basis", "certified acquire-now decision for this combination"),
+                    (f"Planning month {month}", "outside the certified planning horizon for this combination"),
+                    ("Order now (certified action)", b["order"])])
+    why_body = safe(f'<p style="margin:2px 0 6px">{esc(_cpo_human_why(b, month, ln))}</p>'
+                    + disclosure("Proof — certified figures", proof))
     common = dict(ident=ident, call=call, pos=pos, why_body=why_body, rank=rank)
     if state == "confirmed":
         return dict(resolved=True, chip=chip("done", "Confirmed"),
@@ -1269,25 +1332,15 @@ def _combo_horizon(pmonths, pid, window_months, month, current):
     return cells
 
 
-def _cpo_rec_card(s, b, rank, state, month, *, promoted=False, horizon_html=""):
-    """A rich recommendation card (top 1-3 of a model): the ORDER call is the hero, and — when available —
-    the certified horizon sparkline is shown INLINE so the operator reads this combination's whole-horizon
-    position on one glance (the legacy planning grid's strongest habit), without opening Why."""
-    p = _cpo_rec_pieces(s, b, rank, state, month, promoted)
+def _cpo_rec_row(s, b, rank, state, month, *, promoted=False, horizon_html="", ln=None):
+    """The ONE CPO recommendation row used at every rank. Compact but information-complete: the ORDER call,
+    the position, the certified horizon sparkline shown INLINE (never buried), a human Why, and the full
+    action set. Rank determines order only — it never determines how much of this is visible, so #4..#N carry
+    exactly the same information as #1 and are not subconsciously overlooked."""
+    p = _cpo_rec_pieces(s, b, rank, state, month, promoted, ln)
     pos = safe(p["pos"] + horizon_html) if horizon_html else p["pos"]
     why = disclosure(f"Why #{rank}", p["why_body"])
-    return rec_card(rank, p["ident"], p["call"], pos, why, p["actions"],
-                    resolved=p["resolved"], chip_html=p["chip"])
-
-
-def _cpo_rec_row(s, b, rank, state, month, *, promoted=False, horizon_html=""):
-    """A compact recommendation row (ranks 4..N, and every worked item): compact by default. Expanding it
-    reveals the SAME certified horizon sparkline + Why in place, so every recommendation is equally
-    inspectable without permanently costing whole-model density."""
-    p = _cpo_rec_pieces(s, b, rank, state, month, promoted)
-    inner = (horizon_html + p["why_body"]) if horizon_html else p["why_body"]
-    why = disclosure(f"Why & horizon #{rank}" if horizon_html else f"Why #{rank}", safe(inner))
-    return rec_row(rank, p["ident"], p["call"], p["pos"], why, p["actions"],
+    return rec_row(rank, p["ident"], p["call"], pos, why, p["actions"],
                    resolved=p["resolved"], chip_html=p["chip"])
 
 

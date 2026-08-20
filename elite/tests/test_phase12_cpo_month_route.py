@@ -115,8 +115,9 @@ class TestCpoMonthRoute(unittest.TestCase):
     # 6. ORDER-now stays the certified discrete action; later shortage is not converted to an order quantity
     def test_order_now_is_certified(self):
         far = self._select_month(FAR)
-        # locate the QBE/G recommendation card and read its ORDER call (worst month shortage is 9)
-        card = re.search(r'QX60 8481 QBE/G.*?<div class="call">ORDER (\d+)</div>', far, re.S)
+        # locate the QBE/G uniform row and read its ORDER call (worst month shortage is 9). In the recrow the
+        # call precedes the identity, and both live in the SAME row (no intervening 'recrow').
+        card = re.search(r'<span class="rcall">ORDER (\d+)</span>(?:(?!recrow).)*?QX60 8481 QBE/G', far, re.S)
         self.assertIsNotNone(card)
         self.assertEqual(card.group(1), "1")               # certified acquire_units, not the month shortage
 
