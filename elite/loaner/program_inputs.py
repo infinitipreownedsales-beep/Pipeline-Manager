@@ -69,17 +69,22 @@ class ProgramEntry:
     provenance: str = ""
     day_cap: int | None = None
     mile_cap: int | None = None
+    model_year: str = ""     # MY like "2026"; "" = applies to all model years (ICV/Velocity can differ by MY)
+    status: str = "active"   # active | retired — retired entries never resolve as authoritative truth
+    correction_of: str = ""  # lineage: the entry this one supersedes/corrects
 
     def to_dict(self):
         return dict(id=self.id, kind=self.kind, effective_month=self.effective_month, model=self.model,
                     trim=self.trim, value=self.value, actor=self.actor, recorded_at=self.recorded_at,
-                    provenance=self.provenance, day_cap=self.day_cap, mile_cap=self.mile_cap)
+                    provenance=self.provenance, day_cap=self.day_cap, mile_cap=self.mile_cap,
+                    model_year=self.model_year, status=self.status, correction_of=self.correction_of)
 
     @staticmethod
     def from_dict(d):
         return ProgramEntry(d["id"], d["kind"], d["effective_month"], d.get("model", ""), d.get("trim", ""),
                             d.get("value"), d.get("actor", ""), d.get("recorded_at", ""),
-                            d.get("provenance", ""), d.get("day_cap"), d.get("mile_cap"))
+                            d.get("provenance", ""), d.get("day_cap"), d.get("mile_cap"),
+                            d.get("model_year", ""), d.get("status", "active"), d.get("correction_of", ""))
 
 
 class ProgramInputsStore:
@@ -127,7 +132,7 @@ class ProgramInputsStore:
         return out
 
     def add(self, kind, *, effective_month, model, value, actor, recorded_at, trim="", provenance="",
-            day_cap=None, mile_cap=None):
+            day_cap=None, mile_cap=None, model_year="", correction_of=""):
         """Append a governed effective-dated entry. `value` None is allowed (records UNRESOLVED coverage).
         Never rewrites a prior entry."""
         if kind not in KINDS:
@@ -136,27 +141,64 @@ class ProgramInputsStore:
             raise ValueError(f"invalid effective_month {effective_month!r}")
         e = ProgramEntry(new_id("pgm"), kind, effective_month, (model or "").upper(), (trim or "").strip(),
                          value, actor, recorded_at, provenance,
-                         day_cap if kind == "velocity" else None, mile_cap if kind == "velocity" else None)
+                         day_cap if kind == "velocity" else None, mile_cap if kind == "velocity" else None,
+                         (model_year or "").strip(), "active", correction_of)
         rows = [x.to_dict() for x in self.entries(kind)]
         rows.append(e.to_dict())
         self.prefs.set_pref(self._sk, self._key(kind), rows)
         return e
 
-    def applicable(self, kind, model, month, *, trim=""):
-        """The entry whose value applied to (model, trim) at `month`: the latest effective_month <= month with a
-        non-None value, scope-matching (a trim-specific entry or an all-trim entry). None when unresolved."""
+    def retire(self, kind, entry_id, *, actor, at):
+        """Retire an erroneous entry from active resolution — PRESERVED (status=retired), never deleted; a
+        retired entry never resolves as authoritative program truth."""
+        rows = [x.to_dict() for x in self.entries(kind)]
+        for r in rows:
+            if r["id"] == entry_id and r.get("status", "active") != "retired":
+                r["status"] = "retired"
+                r["provenance"] = (r.get("provenance") or "") + f" · retired by {actor} {at[:10]}"
+                self.prefs.set_pref(self._sk, self._key(kind), rows)
+                return True
+        return False
+
+    def correct(self, kind, entry_id, *, actor, recorded_at, **fields):
+        """Governed correction/supersession: retire the original and add a replacement that keeps a lineage
+        (correction_of). Corrected fields default to the original's values; the original is preserved."""
+        orig = next((e for e in self.entries(kind) if e.id == entry_id), None)
+        if orig is None:
+            return None
+        self.retire(kind, entry_id, actor=actor, at=recorded_at)
+        base = dict(effective_month=orig.effective_month, model=orig.model, trim=orig.trim, value=orig.value,
+                    provenance=orig.provenance, model_year=orig.model_year,
+                    day_cap=orig.day_cap, mile_cap=orig.mile_cap)
+        base.update({k: v for k, v in fields.items() if v is not None or k == "value"})
+        return self.add(kind, actor=actor, recorded_at=recorded_at, correction_of=entry_id, **base)
+
+    def active_entries(self, kind):
+        return [e for e in self.entries(kind) if e.status == "active"]
+
+    def applicable(self, kind, model, month, *, trim="", model_year=""):
+        """The entry whose value applied to (model, model_year, trim) at `month`: the latest effective_month
+        <= month with a non-None value, among ACTIVE (non-retired) entries, scope-matching. A more specific
+        entry (matching model_year and/or trim) wins over a broader all-MY / all-trim entry. None = unresolved."""
         model = (model or "").upper()
-        cands = [e for e in self.entries(kind)
+        my = (model_year or "").strip()
+        trim = (trim or "").strip()
+        cands = [e for e in self.active_entries(kind)
                  if e.model == model and e.value is not None and valid_month(e.effective_month)
-                 and _midx(e.effective_month) <= _midx(month) and (e.trim == "" or e.trim == (trim or "").strip())]
+                 and _midx(e.effective_month) <= _midx(month)
+                 and (e.model_year == "" or e.model_year == my)
+                 and (e.trim == "" or e.trim == trim)]
         if not cands:
             return None
-        cands.sort(key=lambda e: (_midx(e.effective_month), e.trim != "", e.recorded_at))
+        # order: latest effective month, then most specific (model-year match, then trim match), then recency
+        cands.sort(key=lambda e: (_midx(e.effective_month), e.model_year != "", e.trim != "", e.recorded_at))
         return cands[-1]
 
 
 def entry_status(entry, current_month):
-    """current / historical / future / unresolved — relative to the store's current month (presentation only)."""
+    """retired / current / historical / future / unresolved — relative to the current month (presentation)."""
+    if getattr(entry, "status", "active") == "retired":
+        return "retired"
     if entry.value is None:
         return "unresolved"
     if not valid_month(entry.effective_month):
@@ -166,12 +208,28 @@ def entry_status(entry, current_month):
     return "current" if _midx(entry.effective_month) == _midx(current_month) else "historical"
 
 
+def resolve_for_unit(store, kind, *, model, in_service_date, model_year="", trim=""):
+    """Resolve the program terms that apply to a PHYSICAL unit — driven by the unit's authoritative IN-SERVICE
+    date, never today's date. The in-service month selects the applicable effective period; a later program
+    term does not retroactively rewrite an earlier vehicle's applicable program. Returns
+    {"status": resolved|unresolved, "reason"?, "entry"?}. Never fabricates a date or a value."""
+    if not in_service_date or not isinstance(in_service_date, str) or len(in_service_date) < 7:
+        return {"status": "unresolved", "reason": "no authoritative in-service date"}
+    month = in_service_date[:7]
+    if not valid_month(month):
+        return {"status": "unresolved", "reason": "in-service date is not a valid month"}
+    e = store.applicable(kind, model, month, trim=trim, model_year=model_year)
+    if e is None:
+        return {"status": "unresolved", "reason": f"no applicable {kind} value at in-service month {month}"}
+    return {"status": "resolved", "in_service_month": month, "entry": e}
+
+
 def coverage(store, kind, earliest_active_month, current_month, *, models=()):
     """Read-only coverage of the active fleet's lifecycle by program history for `kind`:
         {"status": complete|incomplete|unknown, "earliest": <month|None>, "missing": [start, end] | []}.
     `earliest_active_month` is the earliest in-service month across the active fleet; `models` optionally scopes
     to the active fleet's models. Reports honestly — never claims coverage that does not exist."""
-    have = [e for e in store.entries(kind)
+    have = [e for e in store.active_entries(kind)
             if e.value is not None and valid_month(e.effective_month) and (not models or e.model in models)]
     if not earliest_active_month or not valid_month(earliest_active_month):
         return {"status": "unknown", "earliest": None, "missing": [],

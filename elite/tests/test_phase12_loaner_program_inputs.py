@@ -9,7 +9,8 @@ import unittest
 from elite.ui.fixtures import Phase10
 from elite.workflow.fixtures import SCOPE
 from elite.db import current_version
-from elite.loaner.program_inputs import (ProgramInputsStore, parse_value, entry_status, coverage, valid_month)
+from elite.loaner.program_inputs import (ProgramInputsStore, parse_value, entry_status, coverage, valid_month,
+                                         resolve_for_unit)
 
 
 class TestProgramInputs(unittest.TestCase):
@@ -95,6 +96,65 @@ class TestProgramInputs(unittest.TestCase):
         self.assertIn("re-enter", entries["QX80"].provenance)
         self.assertEqual(entries["QX60"].value, 1800)                  # positive legacy value preserved
 
+    # 1A: model year is part of the authoritative identity — MY2026 vs MY2027 differ in the SAME month
+    def test_model_year_distinguishes_values_same_month(self):
+        self.store.add("icv", effective_month="2026-08", model="QX60", model_year="2026", value=5000,
+                       actor="k", recorded_at="t")
+        self.store.add("icv", effective_month="2026-08", model="QX60", model_year="2027", value=4000,
+                       actor="k", recorded_at="t")
+        self.assertEqual(self.store.applicable("icv", "QX60", "2026-08", model_year="2026").value, 5000)
+        self.assertEqual(self.store.applicable("icv", "QX60", "2026-08", model_year="2027").value, 4000)
+
+    def test_model_year_distinguishes_velocity_same_month(self):
+        self.store.add("velocity", effective_month="2026-08", model="QX60", model_year="2026", value=1500,
+                       day_cap=120, mile_cap=9000, actor="k", recorded_at="t")
+        self.store.add("velocity", effective_month="2026-08", model="QX60", model_year="2027", value=1800,
+                       day_cap=100, mile_cap=8000, actor="k", recorded_at="t")
+        self.assertEqual(self.store.applicable("velocity", "QX60", "2026-08", model_year="2026").mile_cap, 9000)
+        self.assertEqual(self.store.applicable("velocity", "QX60", "2026-08", model_year="2027").mile_cap, 8000)
+
+    # 1B: a bad entry can be superseded/corrected; the original is preserved with lineage
+    def test_correction_supersedes_and_keeps_lineage(self):
+        e = self.store.add("icv", effective_month="2026-08", model="QX60", value=500, actor="k", recorded_at="t")
+        fixed = self.store.correct("icv", e.id, actor="kyle", recorded_at="t2", value=5000)
+        self.assertEqual(self.store.applicable("icv", "QX60", "2026-08").value, 5000)   # corrected value resolves
+        self.assertEqual(fixed.correction_of, e.id)                                     # lineage kept
+        orig = next(x for x in self.store.entries("icv") if x.id == e.id)
+        self.assertEqual(orig.status, "retired")                                        # original preserved, retired
+
+    # 1B: an erroneous entry can be retired from active resolution while audit remains
+    def test_retire_removes_from_resolution_but_preserves(self):
+        e = self.store.add("icv", effective_month="2026-08", model="QX55", value=9999, actor="k", recorded_at="t")
+        self.assertEqual(self.store.applicable("icv", "QX55", "2026-08").value, 9999)
+        self.store.retire("icv", e.id, actor="kyle", at="2026-08-19")
+        self.assertIsNone(self.store.applicable("icv", "QX55", "2026-08"))              # no longer resolves
+        self.assertTrue(any(x.id == e.id and x.status == "retired" for x in self.store.entries("icv")))  # preserved
+
+    # 1C: in-service date drives the applicable program period — today's date never substitutes
+    def test_in_service_date_drives_program_period(self):
+        self.store.add("icv", effective_month="2026-03", model="QX60", value=6500, actor="k", recorded_at="t")
+        self.store.add("icv", effective_month="2026-08", model="QX60", value=5000, actor="k", recorded_at="t")
+        march = resolve_for_unit(self.store, "icv", model="QX60", in_service_date="2026-03-14")
+        august = resolve_for_unit(self.store, "icv", model="QX60", in_service_date="2026-08-02")
+        self.assertEqual((march["status"], march["entry"].value), ("resolved", 6500))   # March unit -> March terms
+        self.assertEqual((august["status"], august["entry"].value), ("resolved", 5000)) # Aug unit -> Aug terms
+        # a later August term does NOT retroactively rewrite the March vehicle's applicable program
+        self.assertEqual(resolve_for_unit(self.store, "icv", model="QX60", in_service_date="2026-03-31")["entry"].value,
+                         6500)
+
+    def test_missing_in_service_date_is_unresolved_not_today(self):
+        self.store.add("icv", effective_month="2026-08", model="QX60", value=5000, actor="k", recorded_at="t")
+        r = resolve_for_unit(self.store, "icv", model="QX60", in_service_date=None)
+        self.assertEqual(r["status"], "unresolved")                                     # never falls back to today
+        self.assertIn("in-service date", r["reason"])
+
+    def test_broader_scope_only_when_no_specific_match(self):
+        self.store.add("icv", effective_month="2026-08", model="QX60", value=5000, actor="k", recorded_at="t")  # all
+        self.store.add("icv", effective_month="2026-08", model="QX60", trim="LUXE", value=5500, actor="k",
+                       recorded_at="t")
+        self.assertEqual(self.store.applicable("icv", "QX60", "2026-08", trim="LUXE").value, 5500)   # specific wins
+        self.assertEqual(self.store.applicable("icv", "QX60", "2026-08", trim="SPORT").value, 5000)  # falls back all
+
     def test_schema_unchanged(self):
         self.store.add("icv", effective_month="2026-03", model="QX80", value=1000, actor="k", recorded_at="t")
         self.assertEqual(current_version(self.p.stack.db.conn), 12)
@@ -143,6 +203,25 @@ class TestProgramInputsPage(unittest.TestCase):
 
     def test_reachable_from_data(self):
         self.assertIn("/program-inputs", self.full.get("/data").body)
+
+    def test_model_year_field_and_column_present(self):
+        self.full.post("/program-inputs/icv", {"effective_month": "2026-08", "model": "QX60",
+                                               "model_year": "2027", "value": "4000"})
+        b = self.full.get("/program-inputs").body
+        self.assertIn('name=model_year', b)                     # MY input on the form
+        self.assertIn(">MY<", b)                                # MY history column
+        self.assertIn("2027", b)
+
+    def test_retire_and_correct_via_route(self):
+        self.full.post("/program-inputs/icv", {"effective_month": "2026-08", "model": "QX55", "value": "9999"})
+        eid = self._store().entries("icv")[0].id
+        self.full.post("/program-inputs/correct", {"kind": "icv", "id": eid, "value": "5000"})
+        self.assertEqual(self._store().applicable("icv", "QX55", "2026-09").value, 5000)   # corrected resolves
+        # retire the corrected one -> nothing resolves, but both records preserved
+        cid = [e.id for e in self._store().active_entries("icv")][0]
+        self.full.post("/program-inputs/retire", {"kind": "icv", "id": cid})
+        self.assertIsNone(self._store().applicable("icv", "QX55", "2026-09"))
+        self.assertEqual(len(self._store().entries("icv")), 2)                             # history intact
 
     def test_certified_unchanged(self):
         self.full.get("/program-inputs")
