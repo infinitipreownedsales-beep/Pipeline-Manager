@@ -23,6 +23,35 @@ def _conn(app):
     return app.stack.db.conn
 
 
+def _loaner_store(app):
+    """A LoanerStore + DatingService over the live connection — the governed path to resolve an
+    authoritative in-service date / mileage when the fleet upload did not carry it."""
+    from ...loaner.store import LoanerStore
+    from ...loaner.dating import DatingService
+    store = LoanerStore(_conn(app), app.stack.clock)
+    return store, DatingService(store, app.stack.clock)
+
+
+def _dating_form(s, u, blocked):
+    """Governed manual entry for a unit's authoritative in-service date + last checkout mileage. This is the
+    fallback when the fleet upload did not supply them — it is an authoritative operator entry (verified),
+    never a guess, and it never substitutes an import/observation date."""
+    head = ('Resolve authoritative in-service date / mileage' if blocked
+            else 'Correct authoritative in-service date / mileage')
+    note = ('This unit is blocked: lifecycle timing needs an authoritative in-service date and latest mileage. '
+            'Enter them only from a verified source (never an estimate).' if blocked
+            else 'Record a verified correction. Prior values are preserved (history is kept).')
+    fields = (f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+              '<label>Authoritative in-service date (verified source only)</label>'
+              f'<input type=date name=in_service_date value="{esc(u.in_service_date or "")}" style="max-width:200px">'
+              '<label>Last checkout mileage (whole miles; leave blank if unknown — never guessed)</label>'
+              '<input type=number name=last_checkout_mileage min=0 style="max-width:160px" '
+              f'value="{esc(str(u.mileage) if u.mileage_available and u.mileage is not None else "")}">')
+    return (f'<div class="card"><h3>{head}</h3><p class="muted" style="font-size:13px">{note}</p>'
+            f'<form method="post" action="/service-loaner/unit/{esc(u.id)}/dating">{fields}'
+            '<div style="margin-top:8px"><button type=submit>Record authoritative values</button></div></form></div>')
+
+
 def _readable(canonical):
     """Render a planning identity 'dms_planning|model=QX65|model_code=8501|exterior=QBE|interior=G' as
     'QX65 8501 QBE/G'. Falls back to the raw string for any other identity form."""
@@ -372,13 +401,48 @@ def register(app):
         else:
             ev = '<div class="card"><p class="muted">No source-backed resale evidence for this unit\'s model yet.</p></div>'
         flags = ("".join(f'<p>{chip("skip", f)}</p>' for f in u.quality_flags)) or '<p class="muted">No data-quality gaps.</p>'
+        blocked = (not u.in_service_date) or (not u.mileage_available)
+        dating = _dating_form(s, u, blocked)
         body = (f'<p><a href="/service-loaner">← Service Loaners</a></p>'
                 f'<div class="card"><h2>{esc(u.model or "Loaner unit")} — VIN …{esc(u.vin[-6:])}</h2>{facts}</div>'
-                f'<div class="card"><h3>Data quality</h3>{flags}</div>' + ev
+                f'<div class="card"><h3>Data quality</h3>{flags}</div>' + dating + ev
                 + '<p class="muted">Operational + source-backed evidence only. No economic retire/hold/release-by '
                 'call is produced — those remain Undetermined until Phase-4 inputs are authoritative.</p>')
+        fl, s.flash = getattr(s, "flash", None), None
         return Response(page(f"Loaner {u.vin[-6:]}", body, ctx=app.ctx(s), active_path="/service-loaner",
-                             flash=None, wide=True, hide_title=True))
+                             flash=fl, wide=True, hide_title=True))
+
+    @app.post("/service-loaner/unit/{unit_id}/dating")
+    def service_loaner_unit_dating(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        from ...loaner.snapshot import _clean_in_service_date
+        store, dating = _loaner_store(app)
+        uid = req.params["unit_id"]
+        unit = store.get_unit(uid)
+        if unit is None or unit.store_scope != s.scope:
+            return app._safe_page(s, "Not found", "That loaner unit is not in this store.", 404)
+        did = []
+        isd = _clean_in_service_date(req.f("in_service_date", ""))
+        if isd:
+            if unit.accepted_in_service_date:
+                if isd != unit.accepted_in_service_date:
+                    dating.correct_in_service_date(unit, isd, source="operator_entry")  # preserves prior lineage
+                    did.append("in-service date corrected")
+            else:
+                dating.resolve_in_service_date(unit, [{"value": isd, "source": "operator_entry",
+                                                       "authority": "verified"}])
+                did.append("in-service date resolved")
+        raw_mi = (req.f("last_checkout_mileage", "") or "").strip()
+        if raw_mi != "":
+            m = dating.record_mileage(store.get_unit(uid), raw_mi, source="operator_entry")
+            if m.value_kind in ("value", "zero"):
+                with store.conn:
+                    store.set_unit_field(store.conn, uid, last_checkout_mileage=str(m.value))
+                did.append("mileage recorded")
+        s.flash = ("Recorded authoritative " + " · ".join(did) + " (verified; history preserved)."
+                   if did else "Nothing recorded — enter a verified in-service date and/or a whole-mile value.")
+        return Response.redirect(f"/service-loaner/unit/{uid}")
 
     @app.get("/service-loaner/model/{model}")
     def service_loaner_model(app, req):
