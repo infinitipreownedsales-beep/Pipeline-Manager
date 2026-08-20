@@ -83,21 +83,27 @@ def _coverage_state(app, scope):
 
 
 def _used_evidence_defensible(app, scope):
+    """True when the dealership's preowned evidence has a defensible gross sample for at least one active
+    model (used to project expected used gross)."""
     try:
-        from .preowned_evidence import build_preowned_evidence
-        pe = build_preowned_evidence(app.stack.db.conn, scope)
-        return any(getattr(c, "defensible", False) for m in getattr(pe, "models", []) for c in getattr(m, "resale_years", []))
+        from .intelligence import build_intelligence
+        intel = build_intelligence(app.stack.db.conn, scope, app.prefs, app.stack.clock)
+        return any(getattr(mi, "gross_model", None) is not None and getattr(mi.gross_model, "gated", False)
+                   for mi in intel.models)
     except Exception:   # noqa: BLE001
         return False
 
 
 def phase4_gates(app, scope):
-    """Live Phase-4 readiness gates for this store."""
+    """Live Phase-4 readiness gates for this store — the write-down and protection-buffer gates read the
+    GOVERNED policy store, so entering those policies flips the gate to present."""
     icv_ok, vel_ok, icv_st, vel_st = _coverage_state(app, scope)
     used_ok = _used_evidence_defensible(app, scope)
     try:
-        wd = bool(app.prefs.get_pref(f"scope::{scope}", _WRITEDOWN_KEY, default=None))
-        buf = bool(app.prefs.get_pref(f"scope::{scope}", _BUFFER_KEY, default=None))
+        from .sl_policy import SLPolicyStore
+        pol = SLPolicyStore(app.prefs, scope)
+        wd = bool(pol.all_writedowns())          # at least one model's write-down policy recorded
+        buf = pol.buffer() is not None
     except Exception:   # noqa: BLE001
         wd, buf = False, False
     return assess_gates(icv_complete=icv_ok, velocity_complete=vel_ok, used_evidence_defensible=used_ok,

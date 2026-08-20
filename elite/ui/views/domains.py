@@ -190,6 +190,46 @@ def _fleet_position_card(app, scope):
             + '<p style="margin-top:6px"><a href="/ordering/sl-requirements">Open planning &amp; directives →</a></p></div>')
 
 
+def _economic_ranking_card(app, scope, add_n):
+    """When the authoritative economic inputs exist, this is the REAL answer to 'which N should we place' —
+    ranked by total-dealership net (via the certified ideal_mix), with a human Why and a per-term Proof. Units
+    whose economics are unknown are listed as excluded (never guessed into the ranking). Returns '' when no
+    unit is economically rankable yet (the caller then shows the Retail-harm fallback)."""
+    from ...loaner.unit_econ import build_placement_econ
+    from ...clock import to_utc_iso
+    month = to_utc_iso(app.stack.clock.now())[:7]
+    try:
+        res = build_placement_econ(app, scope, month, n=add_n or 0)
+    except Exception:   # noqa: BLE001
+        return ""
+    if not res.get("have_economics"):
+        return ""
+    body = ['<div class="card"><h2>Economic placement ranking '
+            '<span class="badge">total-dealership net</span></h2>'
+            '<p class="muted" style="font-size:12px">Ranked by total-dealership economic net (ICV + Velocity + '
+            'expected used gross − write-down − protection buffer − Retail opportunity cost) via the certified '
+            'ideal-mix. This is the economic answer, not just lowest Retail-harm.</p>']
+    show = res["ranked"] or [{"econ": pe, "net": pe.net(), "identity": pe.identity}
+                             for pe in res["all_econ"][:max(1, add_n or 3)]]
+    rows = []
+    for i, item in enumerate(show, 1):
+        pe = item["econ"]
+        proof = kv([(f"{t.label} ({t.role})",
+                     ("Unknown" if t.value is None else f"${int(t.value):,}")) for t in pe.terms]
+                   + [("Net (in − cost)", f"${pe.net():,.0f}")])
+        rows.append([esc(str(i)), esc(pe.stock or pe.unit_id[-8:]), esc(pe.identity),
+                     safe(f'<strong>${pe.net():,.0f}</strong>'), safe(disclosure("Proof — terms", proof))])
+    body.append(table(["#", "Stock/VIN", "Model / trim", "Net", "Proof"], rows))
+    if res["excluded"]:
+        ex = "; ".join(f'{esc(e["identity"])} (missing {esc(", ".join(e["missing"]))})' for e in res["excluded"][:6])
+        body.append('<p class="muted" style="font-size:12px">Excluded — economics unknown, never guessed: '
+                    + ex + '.</p>')
+    body.append('<p class="muted" style="font-size:12px">Why: Elite prefers the highest-net surplus units — a '
+                'high write-down (value lost as a loaner) can make an older/excess unit rank BELOW a newer model '
+                'with better retained value, even though it looks attractive on age alone.</p>')
+    return "".join(body) + '</div>'
+
+
 def _phase4_gates_html(app, scope):
     """Compact list of Phase-4 economic-readiness gates (present vs the actual missing inputs) — so the
     operator sees EXACTLY what remains before the economic placement ranking can run, not a static claim."""
@@ -300,6 +340,9 @@ def _loaner_command_body(app, s, intel, placement, add_n):
                  'reserved for Phase-4 authoritative economics — not guessed. Missing inputs before it can run:'
                  + _phase4_gates_html(app, s.scope) + '</div></div>')
     parts.append("".join(board))
+
+    # ---- ECONOMIC PLACEMENT RANKING (only when authoritative economics exist; else the fallback above) ----
+    parts.append(_economic_ranking_card(app, s.scope, add_n))
 
     # ---- CURRENT FLEET (cascade) ----
     from .program_inputs import ProgramInputsStore

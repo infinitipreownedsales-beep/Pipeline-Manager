@@ -55,5 +55,59 @@ class TestBoardAndEngine(unittest.TestCase):
         self.assertIn("PC900002", b)                  # unit 2 present too
 
 
+class TestEconomicRankingSurface(unittest.TestCase):
+    """The economic ranking must reach the operator surface (not stay in a module) when economics are ready."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.p = Phase10(os.path.join(self.tmp, "elite.db"))
+        self.full = self.p.login(self.p.op_full)
+
+    def tearDown(self):
+        self.p.close()
+
+    def test_board_renders_economic_ranking_when_ready(self):
+        from unittest.mock import patch
+        from elite.loaner.unit_econ import compute_placement_econ
+        qx60, _ = compute_placement_econ(unit_id="V60", identity="2026 QX60 LUXE AWD", model="QX60", stock="S60",
+                                         icv=6500, velocity=2500, used_gross=3000, writedown=3000, buffer=500)
+        qx80, _ = compute_placement_econ(unit_id="V80", identity="2026 QX80 LUXE AWD", model="QX80", stock="S80",
+                                         icv=9000, velocity=2500, used_gross=3500, writedown=9000, buffer=500)
+        res = {"loaded": True, "ready": True, "have_economics": True,
+               "ranked": [{"econ": qx60, "net": qx60.net(), "identity": qx60.identity},
+                          {"econ": qx80, "net": qx80.net(), "identity": qx80.identity}],
+               "all_econ": [qx60, qx80], "excluded": [], "mix": None}
+        import elite.tests.test_phase12_loaner_intelligence as INTEL
+        with patch("elite.loaner.intelligence.build_intelligence", return_value=INTEL._fake_intel()), \
+             patch("elite.loaner.unit_econ.build_placement_econ", return_value=res):
+            b = self.full.get("/service-loaner", add="2").body
+        self.assertIn("Economic placement ranking", b)     # the real answer is on the surface
+        self.assertIn("2026 QX60 LUXE AWD", b)
+        self.assertIn("Proof — terms", b)                  # per-term Proof drilldown
+        self.assertLess(b.index("2026 QX60 LUXE AWD"), b.index("2026 QX80 LUXE AWD"))  # QX60 ranked above QX80
+
+
+class TestPolicyStore(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.p = Phase10(os.path.join(self.tmp, "elite.db"))
+        from elite.loaner.sl_policy import SLPolicyStore
+        self.pol = SLPolicyStore(self.p.app.prefs, SCOPE)
+
+    def tearDown(self):
+        self.p.close()
+
+    def test_set_get_and_explicit_zero(self):
+        self.pol.set_writedown("qx60", 0, actor="k", at="t")       # a real $0 policy
+        self.assertEqual(self.pol.writedown("QX60"), 0)            # 0, not None
+        self.assertIsNone(self.pol.writedown("QX80"))             # unset stays UNKNOWN, never 0
+        self.pol.set_buffer(500, actor="k", at="t")
+        self.assertEqual(self.pol.buffer(), 500)
+
+    def test_blank_rejected(self):
+        with self.assertRaises(ValueError):
+            self.pol.set_writedown("QX60", "", actor="k", at="t")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -171,9 +171,42 @@ def register(app):
                      + disclosure("Add ICV value", icv_form) + '</div>')
         parts.append('<div class="card"><h2>Velocity program history</h2>' + _history_table(store, "velocity", cur, s)
                      + disclosure("Add Velocity terms", vel_form) + '</div>')
+        parts.append(_policy_card(app, s))
         flash, s.flash = s.flash, None
         return Response(page("Program Inputs", "".join(parts), ctx=app.ctx(s), active_path="/service-loaner",
                              flash=flash, wide=True, hide_title=True))
+
+    def _policy_card(app, s):
+        """Governed Service-Loaner economic POLICY — the only two economic inputs Elite cannot derive: the
+        per-model write-down and a flat protection buffer. Saving is the explicit apply (no scenario writes)."""
+        from ...loaner.sl_policy import SLPolicyStore
+        from .operator import _known_models, _select
+        pol = SLPolicyStore(app.prefs, s.scope)
+        wds = pol.all_writedowns()
+        buf = pol.buffer()
+        rows = [[esc(m), f"${v:,}"] for m, v in sorted(wds.items())] or None
+        wtable = table(["Model", "Write-down"], rows) if rows else empty("No per-model write-down policy recorded.")
+        model_opts = _select("model", [(m, m) for m in (_known_models(app, s.scope) or [])])
+        wform = form("/program-inputs/writedown",
+                     '<label>Model</label>' + model_opts
+                     + '<label>Write-down $ (value the store books as lost over the loaner program; a real 0 is '
+                       'allowed)</label><input name=amount type=number min=0 style="max-width:160px" required>',
+                     csrf=s.csrf_token, submit="Save write-down policy")
+        bform = form("/program-inputs/buffer",
+                     '<label>Protection / risk buffer $ (flat governed margin applied per placement)</label>'
+                     f'<input name=amount type=number min=0 style="max-width:160px" '
+                     f'value="{esc(buf if buf is not None else "")}" required>',
+                     csrf=s.csrf_token, submit="Save protection buffer")
+        return ('<div class="card"><h2>Service-Loaner economic policy</h2>'
+                '<p class="muted">These two governed inputs are true dealership policy — Elite derives everything '
+                'else (ICV / Velocity are above; used gross / DTS come from your preowned evidence). Once both '
+                'exist, the economic placement ranking can run under its certified contract. Saving applies '
+                'immediately; scenario what-ifs never overwrite policy.</p>'
+                + '<h3 style="margin:8px 0 4px">Per-model write-down</h3>' + wtable
+                + disclosure("Set a model write-down", wform)
+                + f'<h3 style="margin:12px 0 4px">Protection buffer</h3><p style="margin:2px 0">'
+                + (f'<strong>${buf:,}</strong>' if buf is not None else safe(badge("unresolved", "not set")))
+                + '</p>' + disclosure("Set protection buffer", bform) + '</div>')
 
     def _add(app, req, kind):
         s = req.session
@@ -201,6 +234,32 @@ def register(app):
     @app.post("/program-inputs/velocity")
     def program_velocity(app, req):
         return _add(app, req, "velocity")
+
+    @app.post("/program-inputs/writedown")
+    def program_writedown(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        from ...loaner.sl_policy import SLPolicyStore
+        model = (req.f("model", "") or "").strip()
+        try:
+            SLPolicyStore(app.prefs, s.scope).set_writedown(model, req.f("amount", ""),
+                                                            actor=s.principal_id, at=_now(app))
+            s.flash = f"Write-down policy saved for {model.upper()} (applied)."
+        except ValueError as e:
+            s.flash = f"Not saved — {e}."
+        return Response.redirect("/program-inputs")
+
+    @app.post("/program-inputs/buffer")
+    def program_buffer(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        from ...loaner.sl_policy import SLPolicyStore
+        try:
+            SLPolicyStore(app.prefs, s.scope).set_buffer(req.f("amount", ""), actor=s.principal_id, at=_now(app))
+            s.flash = "Protection buffer saved (applied)."
+        except ValueError as e:
+            s.flash = f"Not saved — {e}."
+        return Response.redirect("/program-inputs")
 
     @app.post("/program-inputs/retire")
     def program_retire(app, req):
