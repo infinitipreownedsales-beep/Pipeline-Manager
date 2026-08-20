@@ -111,6 +111,10 @@ def build_placement_econ(app, scope, planning_month, *, n=0, scenario=None):
     pol = SLPolicyStore(app.prefs, scope)
     scenario = scenario or {}
     scen_wd = {(k or "").upper(): v for k, v in (scenario.get("writedown") or {}).items()}   # {model: spec}
+    # projected program tenure (months) — scenario overrides the governed default; drives the MONTHLY % write-down
+    tenure_months = scenario.get("tenure_months")
+    if tenure_months is None:
+        tenure_months = pol.projected_tenure_months()
 
     rows = read_new_retail_units(app, scope)
     loaded = bool(rows)
@@ -131,7 +135,8 @@ def build_placement_econ(app, scope, planning_month, *, n=0, scenario=None):
         icv_e = pis.applicable("icv", model, planning_month, model_year=c.year or "")
         vel_e = pis.applicable("velocity", model, planning_month, model_year=c.year or "")
         icv_v = icv_e.value if icv_e else None
-        wd_dollars, wd_explain = pol.resolve_writedown_dollars(model, icv=icv_v, spec=scen_wd.get(model))
+        wd_dollars, wd_explain = pol.resolve_writedown_dollars(model, icv=icv_v, spec=scen_wd.get(model),
+                                                               tenure_months=tenure_months)
         pe, missing = compute_placement_econ(
             unit_id=uid, identity=ident, model=model, stock=c.stock or "",
             icv=icv_v, velocity=(vel_e.value if vel_e else None),

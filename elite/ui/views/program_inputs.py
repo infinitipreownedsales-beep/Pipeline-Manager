@@ -184,20 +184,29 @@ def register(app):
         pol = SLPolicyStore(app.prefs, s.scope)
         wds = pol.all_writedowns()
         buf_days = pol.protection_buffer_days()
+        tenure = pol.projected_tenure_months()
 
         def _wd_disp(spec):
-            return f"${int(spec['value']):,} (flat)" if spec["kind"] == "amount" else f"{spec['value']:g}% of ICV"
+            return f"${int(spec['value']):,} (flat, one-time)" if spec["kind"] == "amount" else f"{spec['value']:g}% of ICV / month"
         rows = [[esc(m), _wd_disp(spec)] for m, spec in sorted(wds.items())] or None
         wtable = table(["Model", "Write-down policy"], rows) if rows else empty("No per-model write-down policy recorded.")
         model_opts = _select("model", [(m, m) for m in (_known_models(app, s.scope) or [])])
-        kind_opts = _select("kind", [("amount", "Dollar amount ($)"), ("percent_icv", "Percent of ICV (%)")])
+        kind_opts = _select("kind", [("percent_icv", "Monthly percent of ICV (%/month)"),
+                                     ("amount", "Flat dollar amount ($, one-time)")])
         wform = form("/program-inputs/writedown",
                      '<label>Model</label>' + model_opts
-                     + '<label>Write-down type (units are explicit — a $ amount, or a % of the unit\'s ICV)</label>'
+                     + '<label>Write-down type — units are explicit. A monthly % of ICV accrues over program '
+                       'tenure (longer tenure = more write-down); a flat $ is one-time.</label>'
                      + kind_opts
-                     + '<label>Value (dollars, or percent — a real 0 is allowed)</label>'
+                     + '<label>Value (percent-per-month, or dollars — a real 0 is allowed)</label>'
                        '<input name=value type=number min=0 step="0.01" style="max-width:160px" required>',
                      csrf=s.csrf_token, submit="Save write-down policy")
+        tform = form("/program-inputs/tenure",
+                     '<label>Projected loaner-program tenure (MONTHS) — turns a monthly % write-down into a '
+                     'cumulative dollar figure. This is program tenure, NOT the 240-day total-to-retail deadline.'
+                     f'</label><input name=months type=number min=1 style="max-width:160px" '
+                     f'value="{esc(tenure if tenure is not None else "")}" required>',
+                     csrf=s.csrf_token, submit="Save projected tenure (months)")
         bform = form("/program-inputs/buffer",
                      '<label>Protection buffer — DAYS (release-timing reserve protecting the 240-day '
                      'total-to-retail deadline; this is a day count, never dollars)</label>'
@@ -211,8 +220,13 @@ def register(app):
                 'buffer</strong> is a DAY count that feeds the release-timing backsolve — the two live in '
                 'different dimensions and are never mixed. Saving applies immediately; scenario what-ifs never '
                 'overwrite policy.</p>'
-                + '<h3 style="margin:8px 0 4px">Per-model write-down (dollars)</h3>' + wtable
+                + '<h3 style="margin:8px 0 4px">Per-model write-down</h3>' + wtable
                 + disclosure("Set a model write-down", wform)
+                + '<h3 style="margin:12px 0 4px">Projected program tenure (months)</h3><p style="margin:2px 0">'
+                + (f'<strong>{tenure} months</strong>' if tenure is not None else safe(badge("unresolved", "not set")))
+                + ' <span class="muted" style="font-size:12px">— a monthly % write-down needs this to become a '
+                'cumulative dollar figure; changing it re-computes the economics. Scenario what-ifs never overwrite '
+                'it.</span></p>' + disclosure("Set projected tenure (months)", tform)
                 + '<h3 style="margin:12px 0 4px">Protection buffer (days · release-timing)</h3><p style="margin:2px 0">'
                 + (f'<strong>{buf_days} days</strong>' if buf_days is not None else safe(badge("unresolved", "not set")))
                 + '</p>' + disclosure("Set protection buffer (days)", bform) + '</div>')
@@ -255,6 +269,19 @@ def register(app):
             SLPolicyStore(app.prefs, s.scope).set_writedown(model, req.f("value", ""), kind=kind,
                                                             actor=s.principal_id, at=_now(app))
             s.flash = f"Write-down policy saved for {model.upper()} (applied)."
+        except ValueError as e:
+            s.flash = f"Not saved — {e}."
+        return Response.redirect("/program-inputs")
+
+    @app.post("/program-inputs/tenure")
+    def program_tenure(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        from ...loaner.sl_policy import SLPolicyStore
+        try:
+            SLPolicyStore(app.prefs, s.scope).set_projected_tenure_months(req.f("months", ""),
+                                                                          actor=s.principal_id, at=_now(app))
+            s.flash = "Projected program tenure saved (applied) — used to accrue the monthly write-down."
         except ValueError as e:
             s.flash = f"Not saved — {e}."
         return Response.redirect("/program-inputs")

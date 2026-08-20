@@ -149,7 +149,8 @@ def _unit_icv_cell(store, u):
     from ...loaner.program_inputs import resolve_for_unit
     if not u.in_service_date:
         return safe(badge("unresolved", "Unknown"))
-    r = resolve_for_unit(store, "icv", model=u.model or "", in_service_date=u.in_service_date)
+    r = resolve_for_unit(store, "icv", model=u.model or "", in_service_date=u.in_service_date,
+                         model_year=getattr(u, "model_year", "") or "")
     if r.get("status") != "resolved":
         return safe(badge("unresolved", "Unknown"))
     v = r["entry"].value
@@ -215,7 +216,10 @@ def _economic_ranking_card(app, scope, add_n):
     for i, item in enumerate(show, 1):
         pe = item["econ"]
         proof = kv([(f"{t.label} ({t.role})",
-                     ("Unknown" if t.value is None else f"${int(t.value):,}")) for t in pe.terms]
+                     safe(("Unknown" if t.value is None else f"${int(t.value):,}")
+                          + (f' <span class="muted" style="font-size:12px">{esc(t.source)}</span>'
+                             if t.source and any(c in t.source for c in "×%") else '')))
+                    for t in pe.terms]
                    + [("Net (in − cost)", f"${pe.net():,.0f}")])
         rows.append([esc(str(i)), esc(pe.stock or pe.unit_id[-8:]), esc(pe.identity),
                      safe(f'<strong>${pe.net():,.0f}</strong>'), safe(disclosure("Proof — terms", proof))])

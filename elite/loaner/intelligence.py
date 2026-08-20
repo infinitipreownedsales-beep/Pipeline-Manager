@@ -118,6 +118,7 @@ class UnitIntel:
     membership_state: str
     rental_state: str | None
     quality_flags: tuple = ()
+    model_year: str = ""                              # authoritative MY from the fleet source ("" when absent)
 
 
 @dataclass(frozen=True)
@@ -235,6 +236,8 @@ def build_intelligence(conn, scope, prefs, clock):
     from .loaner_cockpit import MetaPrefs, desired_fleet, current_fleet_count
     pe = build_preowned_evidence(conn, scope)          # A: composition + DTS + sample depth
     vin_model = active_fleet_models(conn, scope)
+    from .preowned_evidence import active_fleet_model_years
+    vin_my = active_fleet_model_years(conn, scope)      # authoritative MY per unit (never inferred)
     retail_rows, as_of = latest_retail_rows(conn, scope)
     retail_loaded = bool(as_of)
 
@@ -309,7 +312,7 @@ def build_intelligence(conn, scope, prefs, clock):
         units.append(UnitIntel(id=u["id"], vin=vin, model=model, in_service_date=u["accepted_in_service_date"],
                                age_days=age, mileage=mileage, mileage_available=mileage is not None,
                                membership_state=u["membership_state"], rental_state=u["current_rental_state"],
-                               quality_flags=tuple(flags)))
+                               quality_flags=tuple(flags), model_year=vin_my.get(vin, "")))
 
     for a in conn.execute(
             "SELECT a.id, a.prompt, u.vin, u.id uid FROM service_loaner_monitoring_alert a "

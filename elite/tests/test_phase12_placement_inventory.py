@@ -52,6 +52,27 @@ class TestPlacementSeesInventory(unittest.TestCase):
         res = best_available_placement(self.app, self.conn, SCOPE, n=3)   # nothing ingested
         self.assertFalse(res["loaded"])              # honest: genuinely no snapshot -> not loaded (no fabrication)
 
+    def test_fleet_model_year_propagates_to_unit_intel(self):
+        # Real production path (src_p11_service_loaner_fleet): a fleet export carrying model_year must reach
+        # unit-level intelligence so the MY-scoped ICV/Velocity resolve (the TC348756 live defect).
+        from elite.loaner.snapshot import SnapshotService
+        from elite.loaner.store import LoanerStore
+        from elite.ops.adapters import run_adapter
+        from elite.ops.contracts import get_contract
+        from elite.loaner.intelligence import build_intelligence
+        fleet = ("vin,model,model_year,in_service_date,odometer_value,status\n"
+                 "1GNSKBKC5FR000701,QX60,2026,2026-02-10,11513,available\n")
+        run = self.p.import_payload("service_loaner_fleet", fleet, claimed_snapshot="full",
+                                    effective_time="2026-08-20T12:00:00Z")
+        batch = self.p.data.get_batch(run["import_batch_id"])
+        rows = run_adapter(get_contract("service_loaner_fleet"), fleet, file_kind="csv").rows
+        SnapshotService(LoanerStore(self.conn, self.p.clock), self.p.data, self.p.ingestion,
+                        self.p.clock, SCOPE).reconcile(batch, rows)
+        intel = build_intelligence(self.conn, SCOPE, self.app.prefs, self.p.clock)
+        u = next((x for x in intel.units if x.vin == "1GNSKBKC5FR000701"), None)
+        self.assertIsNotNone(u)
+        self.assertEqual(u.model_year, "2026")       # authoritative MY reached the unit (never inferred)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

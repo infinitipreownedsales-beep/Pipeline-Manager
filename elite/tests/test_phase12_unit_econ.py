@@ -73,18 +73,31 @@ class TestPolicyUnits(unittest.TestCase):
     def tearDown(self):
         self.p.close()
 
-    def test_writedown_amount_and_percent_of_icv(self):
+    def test_writedown_amount_is_one_time(self):
         self.pol.set_writedown("QX60", 3000, kind="amount", actor="k", at="t")
         d, expl = self.pol.resolve_writedown_dollars("QX60", icv=6500)
-        self.assertEqual(d, 3000)
-        self.pol.set_writedown("QX80", 20, kind="percent_icv", actor="k", at="t")
-        d2, expl2 = self.pol.resolve_writedown_dollars("QX80", icv=9000)
-        self.assertEqual(d2, 1800)                    # 20% of $9,000
-        self.assertIn("%", expl2)
+        self.assertEqual(d, 3000)                     # flat, tenure-independent
+        self.assertIn("one-time", expl)
+
+    def test_percent_writedown_is_MONTHLY_and_accrues_with_tenure(self):
+        self.pol.set_writedown("QX80", 2, kind="percent_icv", actor="k", at="t")   # 2% PER MONTH
+        d6, e6 = self.pol.resolve_writedown_dollars("QX80", icv=9000, tenure_months=6)
+        d3, _ = self.pol.resolve_writedown_dollars("QX80", icv=9000, tenure_months=3)
+        self.assertEqual(d6, 1080)                    # 2%/mo × 9000 × 6 = 1080
+        self.assertEqual(d3, 540)                     # 3 months writes down half as much
+        self.assertGreater(d6, d3)                    # tenure changes the write-down
+        self.assertIn("/mo", e6)
+        self.assertIn("6 mo", e6)
+
+    def test_percent_writedown_unknown_without_tenure(self):
+        self.pol.set_writedown("QX80", 2, kind="percent_icv", actor="k", at="t")
+        d, reason = self.pol.resolve_writedown_dollars("QX80", icv=9000, tenure_months=None)
+        self.assertIsNone(d)                          # a monthly rate needs a tenure — never guessed
+        self.assertIn("tenure", reason)
 
     def test_percent_writedown_unknown_when_icv_missing(self):
-        self.pol.set_writedown("QX80", 20, kind="percent_icv", actor="k", at="t")
-        d, reason = self.pol.resolve_writedown_dollars("QX80", icv=None)
+        self.pol.set_writedown("QX80", 2, kind="percent_icv", actor="k", at="t")
+        d, reason = self.pol.resolve_writedown_dollars("QX80", icv=None, tenure_months=6)
         self.assertIsNone(d)                          # cannot resolve a % without the ICV basis — never guessed
         self.assertIn("ICV", reason)
 
@@ -147,6 +160,28 @@ class TestBuildAndSourcing(unittest.TestCase):
         self.assertEqual(ms.place_count, 2)           # 2 sourced from existing surplus (not ordered)
         self.assertEqual(ms.order_count, 1)           # only 1 ordered specifically for Service Loaner
         self.assertFalse(ms.unresolved)
+
+    def test_tenure_changes_placement_economics_via_scenario(self):
+        # monthly % write-down: a longer scenario tenure writes down more, lowering net — recomputed live,
+        # and the scenario NEVER overwrites official policy.
+        pol = SLPolicyStore(self.app.prefs, SCOPE)
+        pol.set_writedown("QX60", 2, kind="percent_icv", actor="k", at="t")   # 2%/month, official
+        cands3 = [_cand("A", "QX60", "2026")]
+        cands6 = [_cand("A", "QX60", "2026")]
+        with patch("elite.loaner.unit_econ.read_new_retail_units", return_value=[{"i": 0}]), \
+             patch("elite.loaner.unit_econ.certified_harm_index", return_value={}), \
+             patch("elite.loaner.unit_econ._to_candidate", side_effect=cands3), \
+             patch("elite.loaner.unit_econ._used_gross_by_model", return_value={"QX60": 3000}):
+            r3 = build_placement_econ(self.app, SCOPE, "2026-01", n=1, scenario={"tenure_months": 3})
+        with patch("elite.loaner.unit_econ.read_new_retail_units", return_value=[{"i": 0}]), \
+             patch("elite.loaner.unit_econ.certified_harm_index", return_value={}), \
+             patch("elite.loaner.unit_econ._to_candidate", side_effect=cands6), \
+             patch("elite.loaner.unit_econ._used_gross_by_model", return_value={"QX60": 3000}):
+            r6 = build_placement_econ(self.app, SCOPE, "2026-01", n=1, scenario={"tenure_months": 6})
+        net3 = r3["all_econ"][0].net()
+        net6 = r6["all_econ"][0].net()
+        self.assertGreater(net3, net6)                # longer tenure -> more write-down -> lower net
+        self.assertIsNone(pol.projected_tenure_months())  # scenario did NOT overwrite official policy
 
     def test_sourcing_unresolved_when_economics_absent_orders_full(self):
         SLPolicyStore(self.app.prefs, SCOPE).clear_writedown("QX60")   # break economics readiness

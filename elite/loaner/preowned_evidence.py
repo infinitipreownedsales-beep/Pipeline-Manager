@@ -173,6 +173,44 @@ def active_fleet_models(conn, scope):
     return out
 
 
+def active_fleet_model_years(conn, scope):
+    """(vin -> MODEL YEAR, 4-digit string) for the authoritative active fleet, from the latest completed loaner
+    snapshot. Reads whatever model-year column the real export carries (model_year / year / MY / 'model year')
+    verbatim — never inferred from a VIN or model code. Read-only; {} when unavailable."""
+    active_vins = {r[0] for r in conn.execute(
+        "SELECT vin FROM service_loaner_unit WHERE store_scope=? AND superseded_by IS NULL "
+        "AND active_fleet_presence=1 AND vin IS NOT NULL", (scope,)).fetchall()}
+    if not active_vins:
+        return {}
+    batch = conn.execute(
+        "SELECT id FROM import_batch WHERE source_id='src_p11_service_loaner_fleet' AND store_scope=? "
+        "AND lifecycle_status='completed' ORDER BY received_at DESC, id DESC LIMIT 1", (scope,)).fetchone()
+    out = {}
+    if not batch:
+        return out
+    cand_keys = ("model_year", "year", "MY", "my", "Model Year", "Model_Year", "modelYear")
+    for obs in conn.execute("SELECT raw_values FROM source_observation WHERE import_batch_id=? "
+                            "AND acceptance_status='accepted'", (batch[0],)).fetchall():
+        raw = _json(obs[0])
+        vin = str(raw.get("vin") or "").strip().upper()
+        if vin not in active_vins:
+            continue
+        val = None
+        for k in cand_keys:
+            if raw.get(k) not in (None, ""):
+                val = raw.get(k)
+                break
+        if val is None:                                    # last resort: any key whose normalised name is year-ish
+            for k, v in raw.items():
+                if str(k).strip().lower().replace("_", " ") in ("model year", "year", "my") and v not in (None, ""):
+                    val = v
+                    break
+        my = "".join(ch for ch in str(val or "") if ch.isdigit())[:4]
+        if len(my) == 4:
+            out[vin] = my
+    return out
+
+
 def latest_retail_rows(conn, scope):
     """(normalized rows, received_at) for the latest completed retail_history schema>=3 batch, or ([], None)."""
     batch = conn.execute(

@@ -92,6 +92,19 @@ class TestRealFleetIngestion(unittest.TestCase):
         from elite.ui.prefs import PrefsService
         return PrefsService(self.p.store.conn, self.p.clock)
 
+    def test_scoped_icv_needs_model_year_to_resolve(self):
+        # The load-bearing fix: an MY-scoped ICV record resolves ONLY when the unit's model year is supplied.
+        # Coverage sees the record at model/month level, but the unit resolver must carry the MY.
+        from elite.loaner.program_inputs import ProgramInputsStore, resolve_for_unit
+        pis = ProgramInputsStore(self._prefs(), SCOPE)
+        pis.add("icv", effective_month="2026-02", model="QX60", model_year="2026", value=6500,
+                actor="kyle", recorded_at="t")
+        with_my = resolve_for_unit(pis, "icv", model="QX60", in_service_date="2026-02-10", model_year="2026")
+        self.assertEqual(with_my["status"], "resolved")
+        self.assertEqual(with_my["entry"].value, 6500)
+        blank = resolve_for_unit(pis, "icv", model="QX60", in_service_date="2026-02-10", model_year="")
+        self.assertEqual(blank["status"], "unresolved")      # the exact live bug when MY is missing
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

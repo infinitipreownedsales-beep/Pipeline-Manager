@@ -37,8 +37,24 @@ class SLPolicyStore:
         d = self.prefs.get_pref(self._sk, self.KEY, default={}) or {}
         d.setdefault("writedown", {})                 # model -> {"kind": amount|percent_icv, "value": N}
         d.setdefault("protection_buffer_days", None)  # DAYS (release-timing), not dollars
+        d.setdefault("projected_tenure_months", None)  # projected loaner-program tenure (months) for % write-down
         d.setdefault("history", [])
         return d
+
+    # ---- projected program tenure (MONTHS) — used to turn a MONTHLY write-down rate into a cumulative $ ----
+    def projected_tenure_months(self):
+        v = self._doc()["projected_tenure_months"]
+        return None if v is None else int(v)
+
+    def set_projected_tenure_months(self, months, *, actor, at):
+        n = _to_num(months)
+        if n is None or n <= 0:
+            raise ValueError("projected tenure must be a positive whole number of months")
+        d = self._doc()
+        d["projected_tenure_months"] = int(round(n))
+        d["history"].append({"kind": "projected_tenure_months", "months": int(round(n)), "actor": actor, "at": at})
+        self.prefs.set_pref(self._sk, self.KEY, d)
+        return int(round(n))
 
     # ---- per-model write-down (unit-explicit: a dollar AMOUNT, or a PERCENT of ICV) --------------------
     def writedown_spec(self, model):
@@ -65,19 +81,24 @@ class SLPolicyStore:
         self.prefs.set_pref(self._sk, self.KEY, d)
         return spec
 
-    def resolve_writedown_dollars(self, model, *, icv, spec=None):
-        """Resolve a write-down spec to DOLLARS. 'amount' is used directly; 'percent_icv' needs the unit's ICV
-        (returns (None, reason) when the percent basis is unavailable — never guessed). Returns (dollars,
-        explanation) or (None, reason)."""
+    def resolve_writedown_dollars(self, model, *, icv, spec=None, tenure_months=None):
+        """Resolve a write-down spec to CUMULATIVE DOLLARS. 'amount' is a flat one-time dollar result (used
+        directly). 'percent_icv' is a MONTHLY write-down RATE: cumulative $ = monthly_rate% × ICV × tenure
+        (months) — so a longer tenure loses more value. Needs both the unit's ICV and a projected tenure;
+        returns (None, reason) when either is unavailable (never guessed). Returns (dollars, explanation)."""
         spec = spec or self.writedown_spec(model)
         if not spec:
             return None, "no governed write-down policy for this model"
         if spec["kind"] == "amount":
-            return int(spec["value"]), f"${int(spec['value']):,} (flat policy)"
+            return int(spec["value"]), f"${int(spec['value']):,} (flat, one-time)"
         if icv is None:
-            return None, "write-down is a percent of ICV but ICV is unknown for this unit"
-        dollars = int(round(spec["value"] / 100.0 * float(icv)))
-        return dollars, f"{spec['value']:g}% of ICV ${int(icv):,} = ${dollars:,}"
+            return None, "monthly write-down is a percent of ICV but ICV is unknown for this unit"
+        months = tenure_months if tenure_months is not None else self.projected_tenure_months()
+        if months is None:
+            return None, "monthly write-down needs a projected program tenure (months) — not set"
+        months = int(months)
+        dollars = int(round(spec["value"] / 100.0 * float(icv) * months))
+        return dollars, (f"{spec['value']:g}%/mo × ICV ${int(icv):,} × {months} mo = ${dollars:,}")
 
     def clear_writedown(self, model):
         d = self._doc()
