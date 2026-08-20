@@ -281,7 +281,7 @@ def _loaner_command_body(app, s, intel, placement, add_n):
     from .program_inputs import ProgramInputsStore
     icv_store = ProgramInputsStore(app.prefs, s.scope)
     parts.append('<div class="card"><h2>Current fleet</h2>'
-                 + (table(["Stock", "VIN", "Model / trim", "Source state", "In service", "Age", "Mileage",
+                 + (table(["Stock", "VIN", "Model / trim", "Source state", "In service", "Age", "Last checkout mi",
                            "Applicable ICV", "Economic call"],
                           [_fleet_unit_row(u, _unit_icv_cell(icv_store, u)) for u in intel.units])
                     if intel.units else empty("No active Service-Loaner units."))
@@ -430,7 +430,7 @@ def register(app):
         mi = f"{u.mileage:,} mi" if u.mileage_available else "not reported (data-quality condition)"
         facts = kv([("VIN", u.vin), ("Model", u.model or "—"),
                     ("Authoritative in-service date", u.in_service_date or "—"),
-                    ("In-service age", age), ("Available mileage", mi),
+                    ("In-service age", age), ("Last checkout mileage", mi),
                     ("Membership state", u.membership_state), ("Rental state", u.rental_state or "—")])
         model_ev = next((m for m in intel.models if m.model == u.model), None)
         ev = ""

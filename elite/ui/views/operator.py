@@ -1928,7 +1928,7 @@ def _run_upload(app, scope, contract_key, upload):
                         ).fetchone()
                         if batch else None
                     )
-                    if batch and not already_projected:
+                    if batch:
                         accepted_rows = []
                         for obs in ops.data.list_observations(batch.id):
                             if obs is None or obs.acceptance_status != "accepted":
@@ -1940,7 +1940,14 @@ def _run_upload(app, scope, contract_key, upload):
                         projector = SnapshotService(
                             p6.store, ops.data, ops.ingestion, app.stack.clock, scope
                         )
-                        projector.reconcile(batch, accepted_rows)
+                        # Membership projection runs once per batch. Dating (in-service date + mileage) is
+                        # backfilled on EVERY upload — idempotently and even for an already-projected batch —
+                        # so re-uploading the fleet CSV populates the authoritative dates/mileage on units that
+                        # were created before dating reconciliation existed, without manual re-entry.
+                        if not already_projected:
+                            projector.reconcile(batch, accepted_rows)
+                        else:
+                            projector.backfill_dating(batch, accepted_rows)
                 except Exception as e:
                     return (
                         f"Imported {safe} into {contract_key} - {state}, but the Service Loaner "

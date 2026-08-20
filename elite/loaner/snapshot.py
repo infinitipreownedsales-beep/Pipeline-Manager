@@ -58,7 +58,9 @@ class SnapshotService:
         """Reconcile the authoritative in-service date + last checkout mileage that the SAME fleet-snapshot
         row carries, into the unit — the step that was missing, leaving active units with a NULL in-service
         date and no mileage even when the snapshot supplied both. Verified authority; blank/invalid never
-        becomes authoritative; a prior verified date is never erased by a later blank."""
+        becomes authoritative; a prior verified date is never erased by a later blank. Mileage is read from
+        `last_checkout_mileage` (aliased) OR the raw `odometer_value` header (the DMS export column, and what
+        observations parsed before the alias existed still carry) — explicit 0 survives as a real value."""
         cur = self.store.get_unit(unit_id)
         isd = _clean_in_service_date(row.get("in_service_date"))
         if isd and not cur.accepted_in_service_date:
@@ -66,12 +68,33 @@ class SnapshotService:
             dating.resolve_in_service_date(cur, [{"value": isd, "source": "service_loaner_fleet",
                                                   "authority": "verified"}], import_date=batch.id)
             cur = self.store.get_unit(unit_id)
-        if "last_checkout_mileage" in row:
-            m = dating.record_mileage(cur, row.get("last_checkout_mileage"), snapshot_ref=batch.id,
-                                      source="service_loaner_fleet")
+        has_mi = ("last_checkout_mileage" in row) or ("odometer_value" in row)
+        raw_mi = row.get("last_checkout_mileage", row.get("odometer_value"))
+        if has_mi:
+            m = dating.record_mileage(cur, raw_mi, snapshot_ref=batch.id, source="service_loaner_fleet")
             if m.value_kind in ("value", "zero"):     # zero is a valid explicit mileage; blank/missing/invalid are not
                 with self.store.conn:
                     self.store.set_unit_field(self.store.conn, unit_id, last_checkout_mileage=str(m.value))
+
+    def backfill_dating(self, batch, rows):
+        """Idempotently (re)apply the authoritative in-service date + last-checkout mileage from accepted fleet
+        rows to EXISTING active units, joining by accepted VIN. Runs on every fleet upload so units created
+        before dating reconciliation existed (or before the odometer alias) get backfilled WITHOUT manual
+        re-entry — even when the upload is an idempotent replay of an already-projected batch. Never creates
+        membership; never overwrites an already-resolved in-service date."""
+        dating = DatingService(self.store, self.clock)
+        touched = 0
+        for row in rows:
+            raw_vin = row.get("vin")
+            if vin_status(raw_vin) != "valid":
+                continue
+            vin = normalize_vin(raw_vin or "")
+            unit = self.store.unit_for_vin(vin, self.scope, active_only=True)
+            if unit is None:
+                continue
+            self._reconcile_dating(dating, unit.id, row, batch)
+            touched += 1
+        return touched
 
     def reconcile(self, batch, rows):
         """Reconcile active-fleet membership by accepted VIN. Returns a summary dict of outcomes."""
