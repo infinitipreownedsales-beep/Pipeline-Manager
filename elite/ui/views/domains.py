@@ -335,8 +335,10 @@ def register(app):
             add_n = max(0, min(20, int(req.q("add") or 0)))
         except (TypeError, ValueError):
             add_n = 0
-        loaner_vins = frozenset(u.vin for u in intel.units if u.vin)
-        placement = best_available_placement(app, _conn(app), s.scope, n=add_n, loaner_vins=loaner_vins)
+        # exclude EVERY physically-committed vehicle (Service Loaner + Demo) — one vehicle, one purpose
+        from ...ordering.cross_domain import committed_vins
+        committed = frozenset(committed_vins(_conn(app), s.scope, app.prefs).keys())
+        placement = best_available_placement(app, _conn(app), s.scope, n=add_n, loaner_vins=committed)
         body = _loaner_command_body(app, s, intel, placement, add_n)
         flash, s.flash = s.flash, None
         return Response(page("Service Loaners", body, ctx=app.ctx(s), active_path="/service-loaner",
