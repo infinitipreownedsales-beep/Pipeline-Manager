@@ -206,8 +206,9 @@ class TestPlannedRequirementPage(unittest.TestCase):
 
 
 class TestCpoDecompositionView(unittest.TestCase):
-    """The CPO board shows each order's source decomposition and fails safe when a Service-Loaner model's
-    future requirement is unresolved."""
+    """The CPO board shows the dealership decomposition and consumes the self-balancing Service-Loaner result:
+    a fleet at/above target resolves to zero automatically (no invented number); a missing target is the only
+    real prerequisite; a management directive is separate and additive."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -217,33 +218,36 @@ class TestCpoDecompositionView(unittest.TestCase):
     def tearDown(self):
         self.p.close()
 
+    def _set_target(self, n):
+        from elite.loaner.loaner_cockpit import MetaPrefs, set_desired_fleet
+        set_desired_fleet(MetaPrefs(self.p.app.prefs, SCOPE), n)
+
     def _cpo(self):
-        with patch("elite.ui.views.operator._acquire_board", return_value=[_board_row("QX60", 2)]), \
-             patch("elite.ui.views.operator._sl_relevant_models", return_value={"QX60"}):
+        with patch("elite.ui.views.operator._acquire_board", return_value=[_board_row("QX60", 2)]):
             return self.full.get("/ordering/cpo").body
 
-    def test_unresolved_sl_model_fails_safe(self):
-        b = self._cpo()
+    def test_no_target_is_the_only_prerequisite(self):
+        b = self._cpo()                                                 # no desired fleet set
         self.assertIn("Order sources — QX60", b)
-        self.assertIn("Retail-certified", b)
-        self.assertIn("This is not the complete dealership order", b)   # top fail-safe banner
-        self.assertIn("unresolved", b)
+        self.assertIn("Service-Loaner target not set", b)              # the one real prerequisite
+        self.assertIn("do not invent a number", b)
 
-    def test_planned_need_is_added_and_shown(self):
+    def test_fleet_at_target_auto_resolves_to_zero(self):
+        self._set_target(0)                                            # 0 active units, target 0 -> need 0
+        b = self._cpo()
+        self.assertIn("no additional loaner acquisition required", b)  # auto-resolved, no manual entry
+        self.assertNotIn("Service-Loaner target not set", b)
+        self.assertIn("Total dealership acquisition requirement", b)
+
+    def test_management_directive_is_added(self):
+        self._set_target(0)
         PlannedRequirementStore(self.p.app.prefs, SCOPE).add(model="QX60", quantity=2, actor="k", recorded_at="t")
         b = self._cpo()
-        self.assertIn("Total dealership requirement 4", b)              # 2 retail + 2 planned
-        self.assertIn("model-level", b)                                 # not fabricated onto a color
-        self.assertNotIn("This is not the complete dealership order", b)  # resolved -> banner gone
-
-    def test_acknowledged_none_clears_failsafe(self):
-        PlannedRequirementStore(self.p.app.prefs, SCOPE).acknowledge_no_need("QX60", actor="k", at="2026-08-19")
-        b = self._cpo()
-        self.assertNotIn("This is not the complete dealership order", b)
-        self.assertIn("no additional QX60 loaners are needed", b)
+        self.assertIn("Management directive", b)                       # separate, additive, model-level
+        self.assertIn("Model total 4", b)                             # 2 retail + 2 directive for QX60
 
     def test_certified_retail_not_mutated(self):
-        # decomposition reads certified Retail; it never writes plan state
+        self._set_target(0)
         self._cpo()
         self.assertEqual(current_version(self.p.stack.db.conn), 12)
 

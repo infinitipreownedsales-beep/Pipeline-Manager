@@ -276,10 +276,60 @@ def _cpo_decomposition(app, scope, board):
         m = (b["model"] or "").upper()
         retail_by_model[m] = retail_by_model.get(m, 0) + int(b["order"] or 0)
     store = PlannedRequirementStore(app.prefs, scope)
+    # Per-model SL contribution is the governed MANAGEMENT OVERRIDE only (model-level, additive). The
+    # program-wide CALCULATED requirement is resolved by the self-balancing engine and shown at page level —
+    # it is not fabricated onto individual models. So no model is marked "unresolved" here any more.
     lines = decompose_orders(retail_by_model, store.by_model(),
-                             sl_relevant_models=_sl_relevant_models(app, scope),
-                             acknowledged_models=store.acknowledged_models())
+                             sl_relevant_models=set(), acknowledged_models=store.acknowledged_models())
     return {ln.model: ln for ln in lines}
+
+
+def _cpo_sl_program_banner(sb):
+    """Program-level Service-Loaner self-balancing result for the CPO page. Replaces the old per-model red
+    'unresolved' spam: a fleet at/above target resolves to zero automatically (no manual number required); a
+    positive calculated need is stated and additive; only a missing target is a real prerequisite."""
+    lb = (' <span class="muted">Exit timing is unresolved for '
+          f'{sb.unresolved_timing_units} unit(s), so this is a lower bound.</span>'
+          if sb.is_lower_bound and sb.unresolved_timing_units else "")
+    if sb.resolution == "no_target":
+        return ('<div class="err" role="alert"><strong>Service-Loaner target not set.</strong> Elite cannot '
+                'calculate future loaner need until a desired fleet target exists. '
+                '<a href="/service-loaner">Set the desired Service-Loaner fleet</a> — do not invent a number to '
+                'clear this; the engine will calculate it.</div>')
+    fleet = f'fleet {sb.current_active} / target {sb.desired}'
+    if sb.resolution == "resolved_zero":
+        return restraint_note(safe(
+            f'<strong>Service-Loaner self-balancing: {esc(fleet)} → no additional loaner acquisition required.</strong> '
+            f'The fleet is at or above target; Elite is not adding loaners and is preserving Retail supply.{lb}'))
+    return ('<div class="callout"><strong>Service-Loaner self-balancing: '
+            f'{esc(fleet)}, {sb.releasing_now} releasing → order {sb.calculated_need} more for Service Loaner.</strong> '
+            'This is a separate dealership obligation, added to the total below (Retail demand is unchanged). '
+            'Model/colour allocation stays open unless a management directive sets it. '
+            f'<a href="/ordering/sl-requirements">Review the plan</a>.{lb}</div>')
+
+
+def _cpo_dealership_total_card(deco, sb):
+    """The one reconciled dealership acquisition total: certified Retail + governed SL (management override +
+    calculated program need) + other, counted once. Certified Retail demand is summed, never mutated."""
+    retail = sum(ln.retail_certified for ln in deco.values())
+    override = sum(ln.sl_planned for ln in deco.values())
+    other = sum(ln.other_committed for ln in deco.values())
+    calc = sb.calculated_need if sb.resolution == "resolved_need" else 0
+    total = retail + override + calc + other
+    rows = [("Retail-certified acquisition requirement", retail),
+            ("Service-Loaner calculated requirement (program)", calc),
+            ("Service-Loaner management override", override),
+            ("Other authoritative commitment", other),
+            ("Total dealership acquisition requirement", total)]
+    body = "".join(f'<dt>{esc(k)}</dt><dd><strong>{v}</strong></dd>' for k, v in rows)
+    note = ('' if sb.resolution != "no_target" else
+            '<p class="muted" style="font-size:12px">Service-Loaner need is not yet counted — set the fleet '
+            'target so the total is complete.</p>')
+    return ('<div class="card"><h2 style="margin-top:4px">Dealership acquisition requirement</h2>'
+            f'<dl class="kv">{body}</dl>'
+            '<p class="muted" style="font-size:12px">Certified Retail demand is read, never changed. '
+            'Service-Loaner need is additive and, where only program-level, is not assigned to an exact '
+            f'colour combination.</p>{note}</div>')
 
 
 def _cpo_supply_integrity(app, scope):
@@ -302,34 +352,22 @@ def _cpo_supply_integrity(app, scope):
 
 
 def _decomposition_html(model, ln):
-    """The order-source line for one model, plus the state-specific Service-Loaner disclosure. When a model's
-    future SL requirement is unresolved this renders the fail-safe alert — a Retail-only figure must not be
-    read as the complete dealership order."""
+    """The order-source line for one model: certified Retail + any governed management-override Service-Loaner
+    quantity for this model. The program-wide calculated SL requirement is resolved at page level, so no
+    per-model 'unresolved' state is shown here."""
     src = [f'<div class="pos" style="margin:6px 0"><strong>Order sources — {esc(model)}</strong> · '
            f'Retail-certified <strong>{ln.retail_certified}</strong>']
     if ln.sl_planned:
-        src.append(f' · Service&nbsp;Loaner planned <strong>+{ln.sl_planned}</strong>')
+        src.append(f' · Service&nbsp;Loaner directive <strong>+{ln.sl_planned}</strong>')
     if ln.other_committed:
         src.append(f' · Other commitment <strong>+{ln.other_committed}</strong>')
-    src.append(f' · <strong>Total dealership requirement {ln.total}</strong></div>')
+    src.append(f' · <strong>Model total {ln.total}</strong></div>')
     tail = ""
-    if ln.sl_state == "additive":
+    if ln.sl_planned:
         tail = restraint_note(safe(
-            f'Service&nbsp;Loaner requirement: <strong>+{ln.sl_planned} additional {esc(model)}</strong> — an '
-            'approved <strong>model-level</strong> need. It is <strong>not</strong> assigned to an exact color '
-            'combination here; the color allocation stays unresolved rather than guessing. '
-            '<a href="/ordering/sl-requirements">Manage</a>'))
-    elif ln.sl_state == "unresolved":
-        tail = ('<div class="err" role="alert"><strong>Incomplete dealership order.</strong> '
-                f'{esc(model)} is operated as a Service&nbsp;Loaner model, but its future Service-Loaner '
-                'requirement is <strong>unresolved</strong>. This Retail-only recommendation is <strong>not</strong> '
-                'the complete order for tomorrow. '
-                '<a href="/ordering/sl-requirements">Record the Service-Loaner requirement</a> — or confirm none is '
-                'needed — before ordering.</div>')
-    elif ln.sl_state == "acknowledged_none":
-        tail = ('<p class="muted" style="font-size:12px;margin:3px 0">Service&nbsp;Loaner: management confirmed no '
-                f'additional {esc(model)} loaners are needed — the Retail-certified order is complete for this '
-                'model.</p>')
+            f'Management directive: <strong>+{ln.sl_planned} additional {esc(model)}</strong> for Service&nbsp;Loaner '
+            '— a governed <strong>model-level</strong> add. It is <strong>not</strong> assigned to an exact colour '
+            'combination here. <a href="/ordering/sl-requirements">Manage</a>'))
     return "".join(src) + tail
 
 
@@ -526,18 +564,13 @@ def register(app):
                         (next_ym, _month_label(next_ym)) if next_ym else None, jump_html=safe(jump))
         parts = [workspace_header("CPO Ordering", nav)]
 
-        # cross-domain fail-safe: if any Service-Loaner model's future requirement is unresolved, this screen is
-        # NOT the complete dealership order — say so before the operator reads the Retail-only recommendations.
-        unresolved = sorted(m for m, ln in deco.items() if ln.sl_state == "unresolved")
-        if unresolved:
-            parts.append('<div class="err" role="alert"><strong>This is not the complete dealership order.</strong> '
-                         f'{esc(", ".join(unresolved))} '
-                         + ('is a Service&nbsp;Loaner model whose' if len(unresolved) == 1
-                            else 'are Service&nbsp;Loaner models whose')
-                         + ' future Service-Loaner requirement is unresolved. The Retail recommendations below do '
-                         'not yet include Service-Loaner need. '
-                         '<a href="/ordering/sl-requirements">Resolve Service-Loaner requirements</a> before you '
-                         'order for tomorrow.</div>')
+        # Service-Loaner self-balancing (program-level, engine-calculated): a fleet at/above target resolves to
+        # zero automatically — no invented number — so the old per-model red 'unresolved' spam is gone. The
+        # dealership total reconciles certified Retail + calculated SL + management override + other.
+        from ...loaner.self_balancing import build_requirement
+        sb = build_requirement(_conn(app), s.scope, app.prefs)
+        parts.append(_cpo_sl_program_banner(sb))
+        parts.append(_cpo_dealership_total_card(deco, sb))
 
         # one physical supply truth: a committed SL/Demo VIN must never also count as free Retail supply
         dbl = _cpo_supply_integrity(app, s.scope)

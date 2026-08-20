@@ -8,7 +8,7 @@ resolve a model's future SL requirement to zero, so ordering can tell 'resolved:
 """
 from __future__ import annotations
 
-from ..render import page, esc, safe, table, badge, form, workspace_header, empty, disclosure
+from ..render import page, esc, safe, table, badge, form, workspace_header, empty, disclosure, kv, metric, stat_row
 from ..http import Response
 from ...ordering.cross_domain import PlannedRequirementStore
 
@@ -16,6 +16,65 @@ from ...ordering.cross_domain import PlannedRequirementStore
 def _now(app):
     from ...clock import to_utc_iso
     return to_utc_iso(app.stack.clock.now())
+
+
+def _sl_why(sb):
+    """Managerial narrative for the self-balancing result — what, why, why this action, and the watch clause.
+    Generated only from the engine's authoritative inputs; never fabricated."""
+    rel = f", with {sb.releasing_now} releasing now" if sb.releasing_now else ""
+    watch = (f" Watch: {sb.unresolved_timing_units} unit(s) have no authoritative in-service date, so future "
+             "exits cannot be projected yet — if enough units exit, the need could rise."
+             if sb.is_lower_bound and sb.unresolved_timing_units else "")
+    if sb.resolution == "no_target":
+        return ("Elite can't calculate Service-Loaner acquisition yet because no desired fleet target is set. "
+                "Set the target and Elite derives the need from the active fleet — you won't need to invent a "
+                "number to make ordering proceed.")
+    if sb.resolution == "resolved_zero":
+        return (f"The loaner fleet is {sb.current_active} against a target of {sb.desired}{rel}, so "
+                f"{sb.remaining} are expected to remain — at or above target. Elite is not adding loaners, which "
+                f"also protects Retail supply.{watch}")
+    return (f"The fleet is {sb.current_active} against a target of {sb.desired}{rel}, leaving {sb.remaining} "
+            f"expected to remain — {sb.calculated_need} below target. Elite recommends ordering "
+            f"{sb.calculated_need} specifically for Service Loaner rather than pulling from Retail, so Retail "
+            f"coverage is not silently shorted.{watch}")
+
+
+def _sl_source_label(sb):
+    return {"none": "Do not add — preserve Retail supply",
+            "order_specific": "Order specifically for Service Loaner",
+            "unresolved": "Unresolved — set the fleet target"}.get(sb.source, sb.source)
+
+
+def _sl_engine_card(app, scope):
+    """The Elite-calculated Service-Loaner plan (self-balancing), shown before any manual controls: fleet
+    position, calculated requirement, source recommendation and human Why."""
+    from ...loaner.self_balancing import build_requirement
+    sb = build_requirement(app.stack.db.conn, scope, app.prefs)
+    tone = {"no_target": "attention", "resolved_zero": "healthy", "resolved_need": "pending"}.get(sb.resolution, "pending")
+    need_txt = ("— (set target)" if sb.resolution == "no_target"
+                else str(sb.calculated_need) + (" (lower bound)" if sb.is_lower_bound and sb.calculated_need else ""))
+    band = stat_row([metric(sb.current_active, "Current fleet"),
+                     metric(sb.desired if sb.desired is not None else "not set", "Desired target"),
+                     metric(sb.releasing_now, "Releasing now"),
+                     metric(sb.remaining, "Expected to remain"),
+                     metric(need_txt, "Calculated need", attn=(sb.resolution == "resolved_need"))])
+    body = (band
+            + f'<p style="margin:8px 0 2px">{badge(tone, _sl_source_label(sb))}</p>'
+            + f'<p style="margin:4px 0"><strong>Why:</strong> {esc(_sl_why(sb))}</p>'
+            + '<details><summary>Proof — calculated inputs</summary>'
+            + kv([("Desired operating fleet", sb.desired if sb.desired is not None else "not set"),
+                  ("Current active fleet", sb.current_active), ("Releasing now (governed exits)", sb.releasing_now),
+                  ("Projected future exits (timing-gated)", sb.projected_future_exits),
+                  ("Committed incoming SL supply", sb.committed_incoming),
+                  ("Expected to remain", sb.remaining),
+                  ("Units with unresolved in-service date", sb.unresolved_timing_units),
+                  ("Calculated additional need", sb.calculated_need)]) + '</details>'
+            + ('' if sb.desired is not None else
+               '<p class="muted" style="font-size:12px">Set the desired fleet on the '
+               '<a href="/service-loaner">Service Loaner board</a>.</p>')
+            + '<p class="muted" style="font-size:12px">Month-by-month projection (exits/replacements by month) '
+              'is pending authoritative lifecycle timing; the release-by call stays gated until then.</p>')
+    return '<div class="card"><h2 style="margin-top:4px">Elite calculated plan (self-balancing)</h2>' + body + '</div>'
 
 
 def _retire_form(s, req_id):
@@ -79,14 +138,16 @@ def register(app):
                      'flagging it as incomplete.</p>',
                    csrf=s.csrf_token, submit="Confirm no additional need")
 
-        parts = [workspace_header("Service Loaner — Planned Requirement",
+        parts = [workspace_header("Service Loaner — Planning & Directives",
                                   safe('<a href="/ordering/cpo">← CPO</a> · <a href="/service-loaner">Command Board</a>'))]
-        parts.append('<div class="card"><p class="muted">A planned Service-Loaner requirement is an additive future '
-                     'need that ordering must satisfy <strong>in addition to</strong> certified Retail demand. It is '
-                     'kept at model level — it is never assigned to an exact color combination here, and it never '
-                     'changes certified Retail demand math.</p></div>')
-        parts.append('<div class="card"><h2>Active planned requirements</h2>' + listing
-                     + disclosure("Record a planned requirement", add) + '</div>')
+        parts.append(_sl_engine_card(app, s.scope))
+        parts.append('<div class="card"><p class="muted">Elite calculates the Service-Loaner requirement above from '
+                     'authoritative fleet state. A <strong>management directive</strong> below is an additive '
+                     'override for cases where management has decided to add specific units — it is governed and '
+                     'audited, kept at model level, never assigned to an exact colour, and never changes certified '
+                     'Retail demand. It is not required to make ordering proceed.</p></div>')
+        parts.append('<div class="card"><h2>Management directives</h2>' + listing
+                     + disclosure("Record a management directive", add) + '</div>')
         parts.append('<div class="card"><h2>No additional need</h2>'
                      '<p style="margin:2px 0">Resolved as “none”: ' + ack_chips + '</p>'
                      + (('<p style="margin:6px 0">' + clear_forms + '</p>') if clear_forms else "")
