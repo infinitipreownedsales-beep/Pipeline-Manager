@@ -14,7 +14,7 @@ import json
 
 from ..render import (ADMIN_NAV, badge, esc, page, safe, table, kv, empty, form,
                       workspace_header, month_nav, metric, stat_row, progress, chip, disclosure,
-                      action_group, rec_card, rec_row, work_group, restraint_note, coverage_lane,
+                      action_group, rec_row, work_group, restraint_note, coverage_lane,
                       horizon_strip)
 from ..http import Response
 from .domains import _readable, _resp, _conn
