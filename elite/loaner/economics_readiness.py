@@ -5,21 +5,19 @@ nothing; it only reports whether the certified economic engine can run yet, so t
   * stop labelling the Retail-harm fallback as the economically "best" placement, and
   * replace the stale "coverage incomplete" warning with the ACTUAL remaining gates.
 
-Required authoritative inputs for a total-dealership Service-Loaner placement ranking:
+Required authoritative inputs for the DOLLAR placement ranking:
   - effective-dated ICV coverage over the active fleet lifecycle;
   - effective-dated Velocity terms (incl. day / mileage caps) over the same;
   - dealership used-market evidence (resale / post-loaner DTS) with a defensible sample;
-  - governed write-down policy / amounts;
-  - governed protection / risk buffer.
+  - governed write-down policy (dollar amount or percent of ICV).
 When any is missing the ranking stays gated (Undetermined) — never guessed.
+
+The governed PROTECTION BUFFER is a DAY count for the release-timing backsolve — a SEPARATE dimension. It is
+reported for release-timing readiness and is NEVER part of the dollar placement gates (days are not dollars).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-# Governed prefs that WOULD carry the remaining economic policy inputs (not yet populated in the pilot).
-_WRITEDOWN_KEY = "sl_writedown_policy"
-_BUFFER_KEY = "sl_protection_buffer"
 
 
 @dataclass(frozen=True)
@@ -31,8 +29,8 @@ class Gate:
 
 
 def assess_gates(*, icv_complete, velocity_complete, used_evidence_defensible, writedown_present,
-                 buffer_present, icv_detail="", velocity_detail="", used_detail=""):
-    """Pure: turn the availability of each authoritative input into an ordered gate list."""
+                 icv_detail="", velocity_detail="", used_detail=""):
+    """Pure: the DOLLAR placement-economics gates (the protection buffer is DAYS, tracked separately)."""
     return [
         Gate("icv", "Effective-dated ICV coverage", bool(icv_complete),
              icv_detail or ("complete" if icv_complete else "incomplete over the active fleet lifecycle")),
@@ -42,10 +40,8 @@ def assess_gates(*, icv_complete, velocity_complete, used_evidence_defensible, w
              bool(used_evidence_defensible),
              used_detail or ("defensible sample present" if used_evidence_defensible
                              else "no defensible used-sale sample for the active models yet")),
-        Gate("writedown", "Governed write-down policy / amounts", bool(writedown_present),
+        Gate("writedown", "Governed write-down policy ($ or % of ICV)", bool(writedown_present),
              "recorded" if writedown_present else "no governed write-down policy input exists yet"),
-        Gate("buffer", "Governed protection / risk buffer", bool(buffer_present),
-             "recorded" if buffer_present else "no governed protection-buffer input exists yet"),
     ]
 
 
@@ -103,9 +99,18 @@ def phase4_gates(app, scope):
         from .sl_policy import SLPolicyStore
         pol = SLPolicyStore(app.prefs, scope)
         wd = bool(pol.all_writedowns())          # at least one model's write-down policy recorded
-        buf = pol.buffer() is not None
     except Exception:   # noqa: BLE001
-        wd, buf = False, False
+        wd = False
     return assess_gates(icv_complete=icv_ok, velocity_complete=vel_ok, used_evidence_defensible=used_ok,
-                        writedown_present=wd, buffer_present=buf,
+                        writedown_present=wd,
                         icv_detail=f"ICV coverage {icv_st}", velocity_detail=f"Velocity coverage {vel_st}")
+
+
+def release_timing_buffer_days(app, scope):
+    """The governed protection buffer in DAYS (release-timing), or None. Reported separately from the dollar
+    placement gates — a day count is never a dollar economic input."""
+    try:
+        from .sl_policy import SLPolicyStore
+        return SLPolicyStore(app.prefs, scope).protection_buffer_days()
+    except Exception:   # noqa: BLE001
+        return None

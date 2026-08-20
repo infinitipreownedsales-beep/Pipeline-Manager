@@ -70,9 +70,9 @@ class TestEconomicRankingSurface(unittest.TestCase):
         from unittest.mock import patch
         from elite.loaner.unit_econ import compute_placement_econ
         qx60, _ = compute_placement_econ(unit_id="V60", identity="2026 QX60 LUXE AWD", model="QX60", stock="S60",
-                                         icv=6500, velocity=2500, used_gross=3000, writedown=3000, buffer=500)
+                                         icv=6500, velocity=2500, used_gross=3000, writedown_dollars=3000)
         qx80, _ = compute_placement_econ(unit_id="V80", identity="2026 QX80 LUXE AWD", model="QX80", stock="S80",
-                                         icv=9000, velocity=2500, used_gross=3500, writedown=9000, buffer=500)
+                                         icv=9000, velocity=2500, used_gross=3500, writedown_dollars=9000)
         res = {"loaded": True, "ready": True, "have_economics": True,
                "ranked": [{"econ": qx60, "net": qx60.net(), "identity": qx60.identity},
                           {"econ": qx80, "net": qx80.net(), "identity": qx80.identity}],
@@ -98,15 +98,16 @@ class TestPolicyStore(unittest.TestCase):
         self.p.close()
 
     def test_set_get_and_explicit_zero(self):
-        self.pol.set_writedown("qx60", 0, actor="k", at="t")       # a real $0 policy
-        self.assertEqual(self.pol.writedown("QX60"), 0)            # 0, not None
-        self.assertIsNone(self.pol.writedown("QX80"))             # unset stays UNKNOWN, never 0
-        self.pol.set_buffer(500, actor="k", at="t")
-        self.assertEqual(self.pol.buffer(), 500)
+        self.pol.set_writedown("qx60", 0, kind="amount", actor="k", at="t")   # a real $0 policy
+        d, _ = self.pol.resolve_writedown_dollars("QX60", icv=6500)
+        self.assertEqual(d, 0)                                     # 0, not None
+        self.assertIsNone(self.pol.writedown_spec("QX80"))        # unset stays UNKNOWN, never 0
+        self.pol.set_protection_buffer_days(21, actor="k", at="t")  # DAYS, a separate dimension
+        self.assertEqual(self.pol.protection_buffer_days(), 21)
 
     def test_blank_rejected(self):
         with self.assertRaises(ValueError):
-            self.pol.set_writedown("QX60", "", actor="k", at="t")
+            self.pol.set_writedown("QX60", "", kind="amount", actor="k", at="t")
 
 
 if __name__ == "__main__":

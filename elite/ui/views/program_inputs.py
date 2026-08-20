@@ -183,30 +183,39 @@ def register(app):
         from .operator import _known_models, _select
         pol = SLPolicyStore(app.prefs, s.scope)
         wds = pol.all_writedowns()
-        buf = pol.buffer()
-        rows = [[esc(m), f"${v:,}"] for m, v in sorted(wds.items())] or None
-        wtable = table(["Model", "Write-down"], rows) if rows else empty("No per-model write-down policy recorded.")
+        buf_days = pol.protection_buffer_days()
+
+        def _wd_disp(spec):
+            return f"${int(spec['value']):,} (flat)" if spec["kind"] == "amount" else f"{spec['value']:g}% of ICV"
+        rows = [[esc(m), _wd_disp(spec)] for m, spec in sorted(wds.items())] or None
+        wtable = table(["Model", "Write-down policy"], rows) if rows else empty("No per-model write-down policy recorded.")
         model_opts = _select("model", [(m, m) for m in (_known_models(app, s.scope) or [])])
+        kind_opts = _select("kind", [("amount", "Dollar amount ($)"), ("percent_icv", "Percent of ICV (%)")])
         wform = form("/program-inputs/writedown",
                      '<label>Model</label>' + model_opts
-                     + '<label>Write-down $ (value the store books as lost over the loaner program; a real 0 is '
-                       'allowed)</label><input name=amount type=number min=0 style="max-width:160px" required>',
+                     + '<label>Write-down type (units are explicit — a $ amount, or a % of the unit\'s ICV)</label>'
+                     + kind_opts
+                     + '<label>Value (dollars, or percent — a real 0 is allowed)</label>'
+                       '<input name=value type=number min=0 step="0.01" style="max-width:160px" required>',
                      csrf=s.csrf_token, submit="Save write-down policy")
         bform = form("/program-inputs/buffer",
-                     '<label>Protection / risk buffer $ (flat governed margin applied per placement)</label>'
-                     f'<input name=amount type=number min=0 style="max-width:160px" '
-                     f'value="{esc(buf if buf is not None else "")}" required>',
-                     csrf=s.csrf_token, submit="Save protection buffer")
+                     '<label>Protection buffer — DAYS (release-timing reserve protecting the 240-day '
+                     'total-to-retail deadline; this is a day count, never dollars)</label>'
+                     f'<input name=days type=number min=0 style="max-width:160px" '
+                     f'value="{esc(buf_days if buf_days is not None else "")}" required>',
+                     csrf=s.csrf_token, submit="Save protection buffer (days)")
         return ('<div class="card"><h2>Service-Loaner economic policy</h2>'
-                '<p class="muted">These two governed inputs are true dealership policy — Elite derives everything '
-                'else (ICV / Velocity are above; used gross / DTS come from your preowned evidence). Once both '
-                'exist, the economic placement ranking can run under its certified contract. Saving applies '
-                'immediately; scenario what-ifs never overwrite policy.</p>'
-                + '<h3 style="margin:8px 0 4px">Per-model write-down</h3>' + wtable
+                '<p class="muted">Governed dealership policy — Elite derives everything else (ICV / Velocity are '
+                'above; used gross / DTS come from your preowned evidence). <strong>Write-down</strong> is a dollar '
+                '(or percent-of-ICV) input that feeds the placement DOLLAR economics. The <strong>protection '
+                'buffer</strong> is a DAY count that feeds the release-timing backsolve — the two live in '
+                'different dimensions and are never mixed. Saving applies immediately; scenario what-ifs never '
+                'overwrite policy.</p>'
+                + '<h3 style="margin:8px 0 4px">Per-model write-down (dollars)</h3>' + wtable
                 + disclosure("Set a model write-down", wform)
-                + f'<h3 style="margin:12px 0 4px">Protection buffer</h3><p style="margin:2px 0">'
-                + (f'<strong>${buf:,}</strong>' if buf is not None else safe(badge("unresolved", "not set")))
-                + '</p>' + disclosure("Set protection buffer", bform) + '</div>')
+                + '<h3 style="margin:12px 0 4px">Protection buffer (days · release-timing)</h3><p style="margin:2px 0">'
+                + (f'<strong>{buf_days} days</strong>' if buf_days is not None else safe(badge("unresolved", "not set")))
+                + '</p>' + disclosure("Set protection buffer (days)", bform) + '</div>')
 
     def _add(app, req, kind):
         s = req.session
@@ -241,8 +250,9 @@ def register(app):
         app.require(s, "workspace.view")
         from ...loaner.sl_policy import SLPolicyStore
         model = (req.f("model", "") or "").strip()
+        kind = (req.f("kind", "amount") or "amount").strip()
         try:
-            SLPolicyStore(app.prefs, s.scope).set_writedown(model, req.f("amount", ""),
+            SLPolicyStore(app.prefs, s.scope).set_writedown(model, req.f("value", ""), kind=kind,
                                                             actor=s.principal_id, at=_now(app))
             s.flash = f"Write-down policy saved for {model.upper()} (applied)."
         except ValueError as e:
@@ -255,8 +265,9 @@ def register(app):
         app.require(s, "workspace.view")
         from ...loaner.sl_policy import SLPolicyStore
         try:
-            SLPolicyStore(app.prefs, s.scope).set_buffer(req.f("amount", ""), actor=s.principal_id, at=_now(app))
-            s.flash = "Protection buffer saved (applied)."
+            SLPolicyStore(app.prefs, s.scope).set_protection_buffer_days(req.f("days", ""),
+                                                                         actor=s.principal_id, at=_now(app))
+            s.flash = "Protection buffer (days) saved (applied) — used for release timing, not dollar economics."
         except ValueError as e:
             s.flash = f"Not saved — {e}."
         return Response.redirect("/program-inputs")

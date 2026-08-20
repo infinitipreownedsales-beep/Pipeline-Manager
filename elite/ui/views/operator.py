@@ -266,22 +266,35 @@ def _sl_relevant_models(app, scope):
         return set()
 
 
-def _cpo_decomposition(app, scope, board):
+def _cpo_decomposition(app, scope, board, month):
     """Per-model cross-domain order-source decomposition for the CPO board: certified Retail acquire units +
-    approved additive Service-Loaner planned need + other governed commitments = total dealership acquisition
-    requirement. Certified Retail demand is read, never recomputed or mutated; SL need stays model-level."""
+    the Service-Loaner ORDER portion of any management directive (i.e. what remains AFTER placing safe units
+    from existing surplus) + other governed commitments = total dealership acquisition requirement.
+
+    Certified Retail demand is read, never mutated. A directive of N is NOT added blindly: economic sourcing
+    decides how many can come from existing surplus (place) vs must be ordered specifically; only the ORDER
+    portion reaches CPO. When economics can't assess the split, the full requirement is ordered conservatively
+    and flagged (never under-ordered, never fabricated). Returns (deco_by_model, sourcing_by_model)."""
     from ...ordering.cross_domain import PlannedRequirementStore, decompose_orders
+    from ...loaner.unit_econ import sourcing_plan
     retail_by_model = {}
     for b in board:
         m = (b["model"] or "").upper()
         retail_by_model[m] = retail_by_model.get(m, 0) + int(b["order"] or 0)
     store = PlannedRequirementStore(app.prefs, scope)
-    # Per-model SL contribution is the governed MANAGEMENT OVERRIDE only (model-level, additive). The
-    # program-wide CALCULATED requirement is resolved by the self-balancing engine and shown at page level —
-    # it is not fabricated onto individual models. So no model is marked "unresolved" here any more.
-    lines = decompose_orders(retail_by_model, store.by_model(),
+    directives = store.by_model()                          # {model: N} governed management directive
+    order_by_model, sourcing = {}, {}
+    if directives:
+        try:
+            sp = sourcing_plan(app, scope, month, directives)
+            sourcing = sp["by_model"]
+            for m, ms in sourcing.items():
+                order_by_model[m] = ms.requested if ms.unresolved else ms.order_count
+        except Exception:   # noqa: BLE001 — fail safe: order the full requirement rather than under-order Retail
+            order_by_model = dict(directives)
+    lines = decompose_orders(retail_by_model, order_by_model,
                              sl_relevant_models=set(), acknowledged_models=store.acknowledged_models())
-    return {ln.model: ln for ln in lines}
+    return {ln.model: ln for ln in lines}, sourcing
 
 
 def _cpo_sl_program_banner(sb):
@@ -308,26 +321,39 @@ def _cpo_sl_program_banner(sb):
             f'<a href="/ordering/sl-requirements">Review the plan</a>.{lb}</div>')
 
 
-def _cpo_dealership_total_card(deco, sb):
-    """The one reconciled dealership acquisition total: certified Retail + governed SL (management override +
-    calculated program need) + other, counted once. Certified Retail demand is summed, never mutated."""
+def _cpo_dealership_total_card(deco, sb, sourcing=None):
+    """The one reconciled dealership acquisition total: certified Retail + the Service-Loaner ORDER portion of
+    any directive (after placing safe units from existing surplus) + calculated program need + other, counted
+    once. Certified Retail demand is summed, never mutated."""
+    sourcing = sourcing or {}
     retail = sum(ln.retail_certified for ln in deco.values())
-    override = sum(ln.sl_planned for ln in deco.values())
+    order_directive = sum(ln.sl_planned for ln in deco.values())     # already the ORDER portion (post-sourcing)
     other = sum(ln.other_committed for ln in deco.values())
     calc = sb.calculated_need if sb.resolution == "resolved_need" else 0
-    total = retail + override + calc + other
+    total = retail + order_directive + calc + other
+    placed = sum(ms.place_count for ms in sourcing.values())
+    requested = sum(ms.requested for ms in sourcing.values())
     rows = [("Retail-certified acquisition requirement", retail),
             ("Service-Loaner calculated requirement (program)", calc),
-            ("Service-Loaner management override", override),
+            ("Service-Loaner directive — ORDER portion", order_directive),
             ("Other authoritative commitment", other),
             ("Total dealership acquisition requirement", total)]
     body = "".join(f'<dt>{esc(k)}</dt><dd><strong>{v}</strong></dd>' for k, v in rows)
+    src = ''
+    if requested:
+        unresolved = any(ms.unresolved for ms in sourcing.values())
+        src = ('<p class="muted" style="font-size:12px">Service-Loaner directive of <strong>' + str(requested)
+               + '</strong>: <strong>' + str(placed) + '</strong> sourced from existing Retail surplus (placed, '
+               'not ordered), <strong>' + str(order_directive) + '</strong> ordered specifically for Service '
+               'Loaner. Elite does not order units it can safely place from surplus.'
+               + (' <em>Sourcing split is pending economics — the full requirement is ordered conservatively.</em>'
+                  if unresolved else '') + '</p>')
     note = ('' if sb.resolution != "no_target" else
             '<p class="muted" style="font-size:12px">Service-Loaner need is not yet counted — set the fleet '
             'target so the total is complete.</p>')
     return ('<div class="card"><h2 style="margin-top:4px">Dealership acquisition requirement</h2>'
-            f'<dl class="kv">{body}</dl>'
-            '<p class="muted" style="font-size:12px">Certified Retail demand is read, never changed. '
+            f'<dl class="kv">{body}</dl>' + src
+            + '<p class="muted" style="font-size:12px">Certified Retail demand is read, never changed. '
             'Service-Loaner need is additive and, where only program-level, is not assigned to an exact '
             f'colour combination.</p>{note}</div>')
 
@@ -546,7 +572,7 @@ def register(app):
         board = _acquire_board(app, s.scope, month)
         coverage = _model_coverage(app, s.scope, month)
         pmonths = _plan_months(app, s.scope)     # certified per-plan month rows (for the horizon sparkline)
-        deco = _cpo_decomposition(app, s.scope, board)   # cross-domain order-source decomposition per model
+        deco, sourcing = _cpo_decomposition(app, s.scope, board, month)   # order-source decomposition per model
         models = {}
         for b in board:
             b["month"] = month
@@ -574,9 +600,10 @@ def register(app):
         if directive_total and sb.resolution != "resolved_need":
             parts.append('<div class="callout"><strong>Management directive active.</strong> Elite\'s calculated '
                          f'need is {sb.calculated_need if sb.resolution != "no_target" else "pending"}, and '
-                         f'management has directed <strong>+{directive_total}</strong> more — additive to the '
-                         'dealership order below, with certified Retail demand unchanged.</div>')
-        parts.append(_cpo_dealership_total_card(deco, sb))
+                         f'management has directed <strong>+{directive_total}</strong> more to ORDER (after placing '
+                         'any safe units from surplus) — additive to the dealership order below, with certified '
+                         'Retail demand unchanged.</div>')
+        parts.append(_cpo_dealership_total_card(deco, sb, sourcing))
 
         # one physical supply truth: a committed SL/Demo VIN must never also count as free Retail supply
         dbl = _cpo_supply_integrity(app, s.scope)

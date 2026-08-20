@@ -14,7 +14,7 @@ from elite.workflow.fixtures import SCOPE
 class TestGates(unittest.TestCase):
     def _all_but(self, **over):
         base = dict(icv_complete=True, velocity_complete=True, used_evidence_defensible=True,
-                    writedown_present=True, buffer_present=True)
+                    writedown_present=True)
         base.update(over)
         return assess_gates(**base)
 
@@ -22,12 +22,12 @@ class TestGates(unittest.TestCase):
         self.assertTrue(ready(self._all_but()))
         self.assertEqual(missing(self._all_but()), [])
 
-    def test_missing_writedown_and_buffer_blocks(self):
-        # the realistic live state: ICV + Velocity + used evidence present, policy inputs absent
-        gates = self._all_but(writedown_present=False, buffer_present=False)
+    def test_missing_writedown_blocks(self):
+        # the realistic live state: ICV + Velocity + used evidence present, write-down policy absent
+        gates = self._all_but(writedown_present=False)
         self.assertFalse(ready(gates))
         miss = {g.key for g in missing(gates)}
-        self.assertEqual(miss, {"writedown", "buffer"})
+        self.assertEqual(miss, {"writedown"})
 
     def test_missing_inputs_are_flagged_not_zeroed(self):
         # a missing input is reported as an explicit gap, never silently treated as present/zero
@@ -54,8 +54,7 @@ class TestStaleWarningRemoved(unittest.TestCase):
             Gate("icv", "Effective-dated ICV coverage", True, "ICV coverage complete"),
             Gate("velocity", "Effective-dated Velocity terms", True, "Velocity coverage complete"),
             Gate("used_evidence", "Dealership used-market evidence (resale / post-loaner DTS)", True, "defensible"),
-            Gate("writedown", "Governed write-down policy / amounts", False, "no governed write-down policy input exists yet"),
-            Gate("buffer", "Governed protection / risk buffer", False, "no governed protection-buffer input exists yet"),
+            Gate("writedown", "Governed write-down policy ($ or % of ICV)", False, "no governed write-down policy input exists yet"),
         ]
         with patch("elite.loaner.economics_readiness.phase4_gates", return_value=complete_but_policy_missing):
             b = self.full.get("/program-inputs").body
@@ -65,10 +64,9 @@ class TestStaleWarningRemoved(unittest.TestCase):
         # replaced by an honest conditional line: coverage complete, and the REAL remaining gates named
         self.assertIn("Program coverage complete.", b)
         self.assertIn("Governed write-down policy", b)
-        self.assertIn("Governed protection / risk buffer", b)
 
     def test_ready_allows_engine_to_proceed_message(self):
-        all_present = [Gate(k, k, True, "have") for k in ("icv", "velocity", "used_evidence", "writedown", "buffer")]
+        all_present = [Gate(k, k, True, "have") for k in ("icv", "velocity", "used_evidence", "writedown")]
         with patch("elite.loaner.economics_readiness.phase4_gates", return_value=all_present):
             b = self.full.get("/program-inputs").body
         self.assertIn("economic placement ranking can proceed", b)

@@ -262,6 +262,19 @@ class TestCpoDecompositionView(unittest.TestCase):
         self._cpo()
         self.assertEqual(current_version(self.p.stack.db.conn), 12)
 
+    def test_sourcing_places_from_surplus_only_order_portion_reaches_cpo(self):
+        # directive +3 QX60; economic sourcing places 2 from surplus, orders only 1 -> CPO must NOT add all 3
+        from elite.loaner.unit_econ import ModelSourcing
+        self._set_target(0)
+        PlannedRequirementStore(self.p.app.prefs, SCOPE).add(model="QX60", quantity=3, actor="k", recorded_at="t")
+        fake = {"by_model": {"QX60": ModelSourcing("QX60", 3, (object(), object()), 1, False)}, "econ": {}}
+        with patch("elite.ui.views.operator._acquire_board", return_value=[_board_row("QX60", 2)]), \
+             patch("elite.loaner.unit_econ.sourcing_plan", return_value=fake):
+            b = self.full.get("/ordering/cpo").body
+        self.assertIn("2</strong> sourced from existing Retail surplus", b)   # placed, not ordered
+        self.assertIn("1</strong> ordered specifically for Service", b)       # only the shortfall is ordered
+        self.assertIn("Model total 3", b)                                     # 2 retail + 1 order (NOT +3)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

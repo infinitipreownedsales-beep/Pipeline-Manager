@@ -1,11 +1,15 @@
-"""Governed Service-Loaner economic POLICY — the only two economic inputs Elite cannot derive for itself and
-that are genuinely dealership policy: the per-model write-down (value the store books as lost over the loaner
-program) and a flat protection / risk buffer. Everything else in the economics is derived from authoritative
-evidence (effective-dated ICV / Velocity, preowned resale / gross / DTS, certified Retail coverage).
+"""Governed Service-Loaner POLICY — the dealership inputs Elite cannot derive for itself.
 
-Store-scoped, governed (actor + timestamp recorded), append-history via prefs; schema unchanged. Saving a
-value is the EXPLICIT apply — there is no implicit or scenario write here. A scenario what-if is passed
-separately at call time and NEVER persisted through this store (see unit_econ.build_placement_econ).
+TWO DISTINCT, UNIT-EXPLICIT policies. They live in different dimensions and are NEVER mixed:
+
+  * WRITE-DOWN (dollars, or a percentage that resolves to dollars against a named basis): the value the store
+    books as lost over the loaner program. Feeds the DOLLAR economics of a placement.
+  * PROTECTION BUFFER (DAYS): a time reserve protecting the 240-day total-to-retail deadline. Feeds the
+    RELEASE-TIMING backsolve (latest prudent release = 240 − learned post-loaner DTS − recon − buffer days).
+    It is a day count and MUST NEVER be added to dollar economics.
+
+Store-scoped, governed (actor + timestamp recorded), append-history via prefs; schema unchanged. Saving is
+the EXPLICIT apply — a scenario what-if is passed at call time and never written here.
 """
 from __future__ import annotations
 
@@ -14,16 +18,16 @@ def _norm_model(m):
     return (m or "").upper().strip()
 
 
-def _to_int(v):
+def _to_num(v):
     try:
-        n = int(round(float(str(v).replace(",", "").replace("$", "").strip())))
+        return float(str(v).replace(",", "").replace("$", "").replace("%", "").strip())
     except (TypeError, ValueError):
         return None
-    return n
 
 
 class SLPolicyStore:
     KEY = "sl_economic_policy"
+    WRITEDOWN_KINDS = ("amount", "percent_icv")
 
     def __init__(self, prefs, scope):
         self.prefs = prefs
@@ -31,31 +35,49 @@ class SLPolicyStore:
 
     def _doc(self):
         d = self.prefs.get_pref(self._sk, self.KEY, default={}) or {}
-        d.setdefault("writedown", {})
-        d.setdefault("buffer", None)
+        d.setdefault("writedown", {})                 # model -> {"kind": amount|percent_icv, "value": N}
+        d.setdefault("protection_buffer_days", None)  # DAYS (release-timing), not dollars
         d.setdefault("history", [])
         return d
 
-    # ---- per-model write-down (value lost over the program; a real 0 is allowed, blank stays unknown) ----
-    def writedown(self, model):
-        """The governed write-down for a model, or None when the dealership has not set one (UNKNOWN — never
-        silently zero)."""
-        v = self._doc()["writedown"].get(_norm_model(model))
-        return None if v is None else int(v)
+    # ---- per-model write-down (unit-explicit: a dollar AMOUNT, or a PERCENT of ICV) --------------------
+    def writedown_spec(self, model):
+        """The governed write-down spec for a model, or None (UNKNOWN — never silently zero). A spec is
+        {'kind': 'amount'|'percent_icv', 'value': float}."""
+        s = self._doc()["writedown"].get(_norm_model(model))
+        return dict(s) if s else None
 
     def all_writedowns(self):
-        return {k: int(v) for k, v in self._doc()["writedown"].items() if v is not None}
+        return {k: dict(v) for k, v in self._doc()["writedown"].items() if v}
 
-    def set_writedown(self, model, amount, *, actor, at):
-        n = _to_int(amount)
+    def set_writedown(self, model, value, *, kind="amount", actor, at):
+        if kind not in self.WRITEDOWN_KINDS:
+            raise ValueError("write-down kind must be 'amount' (dollars) or 'percent_icv' (percentage of ICV)")
+        n = _to_num(value)
         if n is None or n < 0:
-            raise ValueError("write-down must be a whole dollar amount (0 or more)")
+            raise ValueError("write-down must be a non-negative number")
+        if kind == "percent_icv" and n > 100:
+            raise ValueError("a write-down percentage cannot exceed 100%")
+        spec = {"kind": kind, "value": (int(round(n)) if kind == "amount" else round(n, 2))}
         d = self._doc()
-        d["writedown"][_norm_model(model)] = n
-        d["history"].append({"kind": "writedown", "model": _norm_model(model), "amount": n,
-                             "actor": actor, "at": at})
+        d["writedown"][_norm_model(model)] = spec
+        d["history"].append({"kind": "writedown", "model": _norm_model(model), **spec, "actor": actor, "at": at})
         self.prefs.set_pref(self._sk, self.KEY, d)
-        return n
+        return spec
+
+    def resolve_writedown_dollars(self, model, *, icv, spec=None):
+        """Resolve a write-down spec to DOLLARS. 'amount' is used directly; 'percent_icv' needs the unit's ICV
+        (returns (None, reason) when the percent basis is unavailable — never guessed). Returns (dollars,
+        explanation) or (None, reason)."""
+        spec = spec or self.writedown_spec(model)
+        if not spec:
+            return None, "no governed write-down policy for this model"
+        if spec["kind"] == "amount":
+            return int(spec["value"]), f"${int(spec['value']):,} (flat policy)"
+        if icv is None:
+            return None, "write-down is a percent of ICV but ICV is unknown for this unit"
+        dollars = int(round(spec["value"] / 100.0 * float(icv)))
+        return dollars, f"{spec['value']:g}% of ICV ${int(icv):,} = ${dollars:,}"
 
     def clear_writedown(self, model):
         d = self._doc()
@@ -65,20 +87,20 @@ class SLPolicyStore:
             return True
         return False
 
-    # ---- flat protection / risk buffer ----
-    def buffer(self):
-        v = self._doc()["buffer"]
+    # ---- protection buffer (DAYS — release-timing only; NEVER dollars) --------------------------------
+    def protection_buffer_days(self):
+        v = self._doc()["protection_buffer_days"]
         return None if v is None else int(v)
 
-    def set_buffer(self, amount, *, actor, at):
-        n = _to_int(amount)
+    def set_protection_buffer_days(self, days, *, actor, at):
+        n = _to_num(days)
         if n is None or n < 0:
-            raise ValueError("protection buffer must be a whole dollar amount (0 or more)")
+            raise ValueError("protection buffer must be a whole number of DAYS (0 or more)")
         d = self._doc()
-        d["buffer"] = n
-        d["history"].append({"kind": "buffer", "amount": n, "actor": actor, "at": at})
+        d["protection_buffer_days"] = int(round(n))
+        d["history"].append({"kind": "protection_buffer_days", "days": int(round(n)), "actor": actor, "at": at})
         self.prefs.set_pref(self._sk, self.KEY, d)
-        return n
+        return int(round(n))
 
     def history(self):
         return list(self._doc()["history"])
