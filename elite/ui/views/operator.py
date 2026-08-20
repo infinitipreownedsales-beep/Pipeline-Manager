@@ -253,6 +253,67 @@ def _acquire_board(app, scope, month=None):
     return out
 
 
+def _sl_relevant_models(app, scope):
+    """Models the dealership actually operates as Service Loaners (active fleet), i.e. models whose future
+    Service-Loaner requirement must be resolved before a Retail-only order can be called complete. Read from
+    the certified/authoritative loaner intelligence composition; on any failure return empty (fail toward NOT
+    inventing an unresolved warning for a model we cannot confirm is a loaner model)."""
+    try:
+        from ...loaner.intelligence import build_intelligence
+        intel = build_intelligence(_conn(app), scope, app.prefs, app.stack.clock)
+        return {(m or "").upper() for m, _ in intel.composition if m}
+    except Exception:   # noqa: BLE001
+        return set()
+
+
+def _cpo_decomposition(app, scope, board):
+    """Per-model cross-domain order-source decomposition for the CPO board: certified Retail acquire units +
+    approved additive Service-Loaner planned need + other governed commitments = total dealership acquisition
+    requirement. Certified Retail demand is read, never recomputed or mutated; SL need stays model-level."""
+    from ...ordering.cross_domain import PlannedRequirementStore, decompose_orders
+    retail_by_model = {}
+    for b in board:
+        m = (b["model"] or "").upper()
+        retail_by_model[m] = retail_by_model.get(m, 0) + int(b["order"] or 0)
+    store = PlannedRequirementStore(app.prefs, scope)
+    lines = decompose_orders(retail_by_model, store.by_model(),
+                             sl_relevant_models=_sl_relevant_models(app, scope),
+                             acknowledged_models=store.acknowledged_models())
+    return {ln.model: ln for ln in lines}
+
+
+def _decomposition_html(model, ln):
+    """The order-source line for one model, plus the state-specific Service-Loaner disclosure. When a model's
+    future SL requirement is unresolved this renders the fail-safe alert — a Retail-only figure must not be
+    read as the complete dealership order."""
+    src = [f'<div class="pos" style="margin:6px 0"><strong>Order sources — {esc(model)}</strong> · '
+           f'Retail-certified <strong>{ln.retail_certified}</strong>']
+    if ln.sl_planned:
+        src.append(f' · Service&nbsp;Loaner planned <strong>+{ln.sl_planned}</strong>')
+    if ln.other_committed:
+        src.append(f' · Other commitment <strong>+{ln.other_committed}</strong>')
+    src.append(f' · <strong>Total dealership requirement {ln.total}</strong></div>')
+    tail = ""
+    if ln.sl_state == "additive":
+        tail = restraint_note(safe(
+            f'Service&nbsp;Loaner requirement: <strong>+{ln.sl_planned} additional {esc(model)}</strong> — an '
+            'approved <strong>model-level</strong> need. It is <strong>not</strong> assigned to an exact color '
+            'combination here; the color allocation stays unresolved rather than guessing. '
+            '<a href="/ordering/sl-requirements">Manage</a>'))
+    elif ln.sl_state == "unresolved":
+        tail = ('<div class="err" role="alert"><strong>Incomplete dealership order.</strong> '
+                f'{esc(model)} is operated as a Service&nbsp;Loaner model, but its future Service-Loaner '
+                'requirement is <strong>unresolved</strong>. This Retail-only recommendation is <strong>not</strong> '
+                'the complete order for tomorrow. '
+                '<a href="/ordering/sl-requirements">Record the Service-Loaner requirement</a> — or confirm none is '
+                'needed — before ordering.</div>')
+    elif ln.sl_state == "acknowledged_none":
+        tail = ('<p class="muted" style="font-size:12px;margin:3px 0">Service&nbsp;Loaner: management confirmed no '
+                f'additional {esc(model)} loaners are needed — the Retail-certified order is complete for this '
+                'model.</p>')
+    return "".join(src) + tail
+
+
 def register(app):
     @app.get("/")
     def pipeline_home(app, req):
@@ -428,6 +489,7 @@ def register(app):
         board = _acquire_board(app, s.scope, month)
         coverage = _model_coverage(app, s.scope, month)
         pmonths = _plan_months(app, s.scope)     # certified per-plan month rows (for the horizon sparkline)
+        deco = _cpo_decomposition(app, s.scope, board)   # cross-domain order-source decomposition per model
         models = {}
         for b in board:
             b["month"] = month
@@ -444,6 +506,19 @@ def register(app):
                         (month, _month_label(month)),
                         (next_ym, _month_label(next_ym)) if next_ym else None, jump_html=safe(jump))
         parts = [workspace_header("CPO Ordering", nav)]
+
+        # cross-domain fail-safe: if any Service-Loaner model's future requirement is unresolved, this screen is
+        # NOT the complete dealership order — say so before the operator reads the Retail-only recommendations.
+        unresolved = sorted(m for m, ln in deco.items() if ln.sl_state == "unresolved")
+        if unresolved:
+            parts.append('<div class="err" role="alert"><strong>This is not the complete dealership order.</strong> '
+                         f'{esc(", ".join(unresolved))} '
+                         + ('is a Service&nbsp;Loaner model whose' if len(unresolved) == 1
+                            else 'are Service&nbsp;Loaner models whose')
+                         + ' future Service-Loaner requirement is unresolved. The Retail recommendations below do '
+                         'not yet include Service-Loaner need. '
+                         '<a href="/ordering/sl-requirements">Resolve Service-Loaner requirements</a> before you '
+                         'order for tomorrow.</div>')
 
         if not models:
             parts.append('<div class="card"><p class="muted">No certified ACQUIRE recommendations are issued '
@@ -485,7 +560,9 @@ def register(app):
                                    f'<input id=a_{esc(mo)} name="alloc_{esc(mo)}" type=number min=0 '
                                    f'style="max-width:120px" value="{esc(alloc.get(mo, ""))}">',
                                    csrf=s.csrf_token, submit="Save ceiling"))
-            block = [f'<div class="card"><h2 style="margin-top:4px">{esc(mo)}</h2>{hero}{lane}{edit}']
+            ln = deco.get((mo or "").upper())
+            deco_html = _decomposition_html(mo, ln) if ln else ""
+            block = [f'<div class="card"><h2 style="margin-top:4px">{esc(mo)}</h2>{hero}{deco_html}{lane}{edit}']
 
             # work queue: unresolved recommendations, in certified rank order. The top 3 get the rich card;
             # ranks 4..N compress to compact rows so a whole model stays scannable in ~one viewport. Handled

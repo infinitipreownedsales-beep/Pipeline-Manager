@@ -90,8 +90,13 @@ class PlannedSLRequirement:
 
 
 class PlannedRequirementStore:
-    """Append-only, store-scoped planned Service-Loaner requirement (governed JSON; no schema change)."""
+    """Append-only, store-scoped planned Service-Loaner requirement (governed JSON; no schema change).
+
+    Also carries a governed 'no additional need' acknowledgement per model, so ordering can distinguish a
+    resolved-and-empty future requirement ("management confirmed we need no more QX60 loaners") from an
+    UNRESOLVED one (nobody has said either way). That distinction is what lets CPO fail safe."""
     KEY = "sl_planned_requirement"
+    ACK_KEY = "sl_no_additional_need"
 
     def __init__(self, prefs, scope):
         self.prefs = prefs
@@ -138,3 +143,93 @@ class PlannedRequirementStore:
         for e in self.active():
             out[e.model] = out.get(e.model, 0) + e.quantity
         return out
+
+    # ---- governed 'no additional need' acknowledgement (resolved-empty, distinct from unresolved) -----------
+    def _ack_rows(self):
+        return dict(self.prefs.get_pref(self._sk, self.ACK_KEY, default={}) or {})
+
+    def acknowledge_no_need(self, model, *, actor, at):
+        """Governed record that no additional Service-Loaner units of this model are needed. It marks the
+        model's future SL requirement RESOLVED (as zero) so CPO stops flagging it incomplete."""
+        m = (model or "").upper().strip()
+        if not m:
+            raise ValueError("model required")
+        rows = self._ack_rows()
+        rows[m] = {"actor": actor, "at": at}
+        self.prefs.set_pref(self._sk, self.ACK_KEY, rows)
+        return m
+
+    def clear_acknowledgement(self, model):
+        m = (model or "").upper().strip()
+        rows = self._ack_rows()
+        if m in rows:
+            del rows[m]
+            self.prefs.set_pref(self._sk, self.ACK_KEY, rows)
+            return True
+        return False
+
+    def acknowledged_models(self):
+        """Models governed as 'no additional need'. A model that now carries an active planned need is NOT
+        'acknowledged none' — an explicit planned quantity supersedes a prior no-need acknowledgement."""
+        planned = set(self.by_model().keys())
+        return {m for m in self._ack_rows().keys() if m not in planned}
+
+
+# ---- cross-domain order-source decomposition (pure; never mutates certified Retail demand) ------------------
+@dataclass(frozen=True)
+class OrderSourceLine:
+    """One model's decomposition of tomorrow's total dealership acquisition requirement into its sources.
+    Retail is the certified acquire-now quantity (read, never recomputed). SL is the approved additive
+    planned need, kept at model level (never fabricated onto an exact color). `sl_state` says whether the
+    Service-Loaner future requirement for this model is resolved, and how."""
+    model: str
+    retail_certified: int
+    sl_planned: int
+    other_committed: int
+    sl_state: str            # additive | acknowledged_none | unresolved | not_applicable
+    sl_combo_resolved: bool  # is SL need allocated to exact combinations? (always False for now: model-level)
+
+    @property
+    def total(self):
+        return self.retail_certified + self.sl_planned + self.other_committed
+
+    @property
+    def complete(self):
+        """False only when a known Service-Loaner model's future requirement is unresolved — the one state in
+        which a Retail-only order must NOT be presented as the complete dealership order."""
+        return self.sl_state != "unresolved"
+
+
+def decompose_orders(retail_by_model, planned_by_model, *, sl_relevant_models=(), acknowledged_models=(),
+                     other_by_model=None):
+    """Combine certified Retail acquire quantities with the approved additive Service-Loaner planned need and
+    any other governed commitments into per-model order-source lines. Pure: it reads dictionaries and returns
+    lines; it changes no certified state and invents no combination-level SL demand.
+
+    sl_state per model:
+      additive          — an approved planned SL need exists (add it; it is model-level, not a color)
+      acknowledged_none — management governed 'no additional need' (resolved as zero)
+      unresolved        — the model is operated as a Service Loaner but nobody has resolved its future need
+      not_applicable    — not a Service-Loaner model; there is nothing to resolve
+    """
+    other = dict(other_by_model or {})
+    sl_rel = {(m or "").upper() for m in sl_relevant_models}
+    ack = {(m or "").upper() for m in acknowledged_models}
+    retail = {(m or "").upper(): int(v or 0) for m, v in dict(retail_by_model).items()}
+    planned = {(m or "").upper(): int(v or 0) for m, v in dict(planned_by_model).items()}
+    other = {(m or "").upper(): int(v or 0) for m, v in other.items()}
+    models = set(retail) | {m for m, q in planned.items() if q > 0} | sl_rel | {m for m, q in other.items() if q}
+    lines = []
+    for m in sorted(models):
+        pq = planned.get(m, 0)
+        if pq > 0:
+            state = "additive"
+        elif m in ack:
+            state = "acknowledged_none"
+        elif m in sl_rel:
+            state = "unresolved"
+        else:
+            state = "not_applicable"
+        lines.append(OrderSourceLine(model=m, retail_certified=retail.get(m, 0), sl_planned=pq,
+                                     other_committed=other.get(m, 0), sl_state=state, sl_combo_resolved=False))
+    return lines

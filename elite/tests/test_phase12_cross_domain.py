@@ -3,11 +3,12 @@ governed additive planned Service-Loaner requirement (non-economic; never mutate
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from elite.ui.fixtures import Phase10
 from elite.workflow.fixtures import SCOPE
 from elite.db import current_version
-from elite.ordering.cross_domain import committed_vins, PlannedRequirementStore
+from elite.ordering.cross_domain import committed_vins, PlannedRequirementStore, decompose_orders
 
 
 class TestCommittedVins(unittest.TestCase):
@@ -77,6 +78,151 @@ class TestPlannedRequirement(unittest.TestCase):
 
     def test_schema_unchanged(self):
         self.store.add(model="QX60", quantity=1, actor="k", recorded_at="t")
+        self.assertEqual(current_version(self.p.stack.db.conn), 12)
+
+    def test_acknowledge_no_need_resolves_to_zero(self):
+        self.store.acknowledge_no_need("qx60", actor="kyle", at="2026-08-19")
+        self.assertIn("QX60", self.store.acknowledged_models())          # normalized + recorded
+        self.assertEqual(self.store.by_model(), {})                      # acknowledgement adds no quantity
+
+    def test_planned_need_supersedes_acknowledgement(self):
+        self.store.acknowledge_no_need("QX60", actor="k", at="2026-08-19")
+        self.store.add(model="QX60", quantity=2, actor="k", recorded_at="t")
+        # an explicit planned quantity wins: the model is no longer 'acknowledged none'
+        self.assertNotIn("QX60", self.store.acknowledged_models())
+
+    def test_clear_acknowledgement_reopens(self):
+        self.store.acknowledge_no_need("QX60", actor="k", at="2026-08-19")
+        self.assertTrue(self.store.clear_acknowledgement("qx60"))
+        self.assertEqual(self.store.acknowledged_models(), set())
+
+
+class TestDecomposeOrders(unittest.TestCase):
+    """Pure cross-domain order-source combiner — Retail is read (never mutated); SL is additive, model-level;
+    the unresolved state is the fail-safe trigger."""
+
+    def _by_model(self, lines):
+        return {l.model: l for l in lines}
+
+    def test_additive_planned_is_added_not_merged(self):
+        d = self._by_model(decompose_orders({"QX60": 4}, {"QX60": 2}, sl_relevant_models={"QX60"}))
+        ln = d["QX60"]
+        self.assertEqual((ln.retail_certified, ln.sl_planned, ln.total), (4, 2, 6))
+        self.assertEqual(ln.sl_state, "additive")
+        self.assertTrue(ln.complete)
+        self.assertFalse(ln.sl_combo_resolved)          # SL need stays model-level, not assigned to a color
+
+    def test_sl_relevant_without_resolution_is_unresolved(self):
+        d = self._by_model(decompose_orders({"QX60": 3}, {}, sl_relevant_models={"QX60"}))
+        self.assertEqual(d["QX60"].sl_state, "unresolved")
+        self.assertFalse(d["QX60"].complete)            # Retail-only must NOT be called complete
+        self.assertEqual(d["QX60"].total, 3)            # certified Retail is not mutated
+
+    def test_acknowledged_none_is_complete(self):
+        d = self._by_model(decompose_orders({"QX60": 3}, {}, sl_relevant_models={"QX60"},
+                                            acknowledged_models={"QX60"}))
+        self.assertEqual(d["QX60"].sl_state, "acknowledged_none")
+        self.assertTrue(d["QX60"].complete)
+
+    def test_non_loaner_model_is_not_applicable(self):
+        d = self._by_model(decompose_orders({"Q50": 2}, {}, sl_relevant_models=set()))
+        self.assertEqual(d["Q50"].sl_state, "not_applicable")
+        self.assertTrue(d["Q50"].complete)
+
+    def test_planned_only_model_absent_from_retail_still_appears(self):
+        # a model with SL need but no Retail order must still surface (its need would otherwise be invisible)
+        d = self._by_model(decompose_orders({}, {"QX80": 1}, sl_relevant_models=set()))
+        self.assertEqual((d["QX80"].retail_certified, d["QX80"].sl_planned, d["QX80"].total), (0, 1, 1))
+        self.assertEqual(d["QX80"].sl_state, "additive")
+
+    def test_case_insensitive_model_keys(self):
+        d = self._by_model(decompose_orders({"qx60": 1}, {"QX60": 1}, sl_relevant_models={"Qx60"}))
+        self.assertEqual(set(d), {"QX60"})
+        self.assertEqual(d["QX60"].total, 2)
+
+
+def _board_row(model="QX60", order=2, pid="p1"):
+    return {"pid": pid, "combo": pid + "c", "identity": f"{model} LUXE", "model": model, "order": order,
+            "current": 0, "future": 0, "certified_future": 0, "m_present": False, "m_shortage": None,
+            "m_demand": None, "m_cum_demand": None, "m_cum_supply": None, "m_excess": None, "m_confidence": None}
+
+
+class TestPlannedRequirementPage(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.p = Phase10(os.path.join(self.tmp, "elite.db"))
+        self.full = self.p.login(self.p.op_full)
+
+    def tearDown(self):
+        self.p.close()
+
+    def test_record_and_list_planned_requirement(self):
+        self.assertIn("No planned Service-Loaner requirements", self.full.get("/ordering/sl-requirements").body)
+        self.full.post("/ordering/sl-requirements/add",
+                       {"model": "QX60", "quantity": "3", "required_by": "2026-10", "reason": "GM directive"})
+        b = self.full.get("/ordering/sl-requirements").body
+        self.assertIn("QX60", b)
+        self.assertIn("GM directive", b)
+        self.assertIn("2026-10", b)
+        self.assertEqual(PlannedRequirementStore(self.p.app.prefs, SCOPE).by_model(), {"QX60": 3})
+
+    def test_zero_quantity_rejected(self):
+        self.full.post("/ordering/sl-requirements/add", {"model": "QX60", "quantity": "0"})
+        self.assertEqual(PlannedRequirementStore(self.p.app.prefs, SCOPE).by_model(), {})   # never stored
+
+    def test_acknowledge_no_need_round_trip(self):
+        self.full.post("/ordering/sl-requirements/ack", {"model": "QX60"})
+        self.assertIn("QX60", PlannedRequirementStore(self.p.app.prefs, SCOPE).acknowledged_models())
+        b = self.full.get("/ordering/sl-requirements").body
+        self.assertIn("Reopen QX60", b)
+        self.full.post("/ordering/sl-requirements/ack-clear", {"model": "QX60"})
+        self.assertEqual(PlannedRequirementStore(self.p.app.prefs, SCOPE).acknowledged_models(), set())
+
+    def test_schema_unchanged(self):
+        self.full.post("/ordering/sl-requirements/add", {"model": "QX60", "quantity": "1"})
+        self.assertEqual(current_version(self.p.stack.db.conn), 12)
+
+
+class TestCpoDecompositionView(unittest.TestCase):
+    """The CPO board shows each order's source decomposition and fails safe when a Service-Loaner model's
+    future requirement is unresolved."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.p = Phase10(os.path.join(self.tmp, "elite.db"))
+        self.full = self.p.login(self.p.op_full)
+
+    def tearDown(self):
+        self.p.close()
+
+    def _cpo(self):
+        with patch("elite.ui.views.operator._acquire_board", return_value=[_board_row("QX60", 2)]), \
+             patch("elite.ui.views.operator._sl_relevant_models", return_value={"QX60"}):
+            return self.full.get("/ordering/cpo").body
+
+    def test_unresolved_sl_model_fails_safe(self):
+        b = self._cpo()
+        self.assertIn("Order sources — QX60", b)
+        self.assertIn("Retail-certified", b)
+        self.assertIn("This is not the complete dealership order", b)   # top fail-safe banner
+        self.assertIn("unresolved", b)
+
+    def test_planned_need_is_added_and_shown(self):
+        PlannedRequirementStore(self.p.app.prefs, SCOPE).add(model="QX60", quantity=2, actor="k", recorded_at="t")
+        b = self._cpo()
+        self.assertIn("Total dealership requirement 4", b)              # 2 retail + 2 planned
+        self.assertIn("model-level", b)                                 # not fabricated onto a color
+        self.assertNotIn("This is not the complete dealership order", b)  # resolved -> banner gone
+
+    def test_acknowledged_none_clears_failsafe(self):
+        PlannedRequirementStore(self.p.app.prefs, SCOPE).acknowledge_no_need("QX60", actor="k", at="2026-08-19")
+        b = self._cpo()
+        self.assertNotIn("This is not the complete dealership order", b)
+        self.assertIn("no additional QX60 loaners are needed", b)
+
+    def test_certified_retail_not_mutated(self):
+        # decomposition reads certified Retail; it never writes plan state
+        self._cpo()
         self.assertEqual(current_version(self.p.stack.db.conn), 12)
 
 
