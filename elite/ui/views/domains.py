@@ -106,7 +106,11 @@ def _placement_row(rank, c, *, compact=False):
     colors = " / ".join(x for x in (c.exterior, c.interior) if x)
     tone = {"EXCESS": "healthy", "COVERED": "ok", "UNKNOWN": "attention"}.get(c.new_retail_state, "attention")
     econ = safe(f'{badge("pending", "Pending Economics")}')
-    return [esc(rank), esc(c.stock or "—"), esc((c.vin or "—")[-8:]), safe(esc(ident) or "—"),
+    # VIN column shows the AUTHORITATIVE VIN only; never a serial/stock masquerading as a VIN
+    vin_cell = (esc(c.vin[-8:]) if c.vin_authoritative and c.vin else
+                safe(f'{badge("unresolved", "no VIN")}' + (f' <span class="muted">serial {esc(c.serial)}</span>'
+                                                           if c.serial else '')))
+    return [esc(rank), esc(c.stock or "—"), vin_cell, safe(esc(ident) or "—"),
             esc(colors or "—"), safe(badge(tone, c.new_retail_state)), esc(c.rank_reason), econ]
 
 

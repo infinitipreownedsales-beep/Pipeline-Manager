@@ -17,10 +17,20 @@ from elite.loaner.placement import (best_available_placement, certified_harm_ind
 import elite.tests.test_phase12_loaner_intelligence as INTEL
 
 
-def _unit(stock, vin, model_code, ext, inte, *, dis=10, status="Deal Open", loc="DLR-INV", year="2026",
-          model="QX80", trim="LUXE 2WD"):
-    return {"stock_number": stock, "vin": vin, "model_code": model_code, "exterior": ext, "interior": inte,
-            "dis": dis, "status": status, "location": loc, "year": year, "model": model, "trim": trim}
+def _vin(tag):
+    """A deterministic authoritative-shaped 17-char VIN for a short tag."""
+    return ("5N1AZ" + "".join(ch for ch in tag if ch.isalnum())).ljust(17, "0")[:17]
+
+
+def _unit(stock, tag, model_code, ext, inte, *, dis=10, status="Deal Open", loc="DLR-INV", year="2026",
+          model="QX80", trim="LUXE 2WD", serial=None, no_vin=False):
+    row = {"stock_number": stock, "model_code": model_code, "exterior": ext, "interior": inte,
+           "dis": dis, "status": status, "location": loc, "year": year, "model": model, "trim": trim}
+    if no_vin:
+        row["serial"] = serial or ("T" + "".join(ch for ch in tag if ch.isalnum()))   # serial only, no VIN
+    else:
+        row["vin"] = _vin(tag)
+    return row
 
 
 class TestPlacementEngine(unittest.TestCase):
@@ -48,9 +58,9 @@ class TestPlacementEngine(unittest.TestCase):
             return best_available_placement(self.p.app, self.conn, SCOPE, n=n, loaner_vins=loaner_vins)
 
     def test_over_stocked_ranked_first_short_protected(self):
-        rows = [_unit("A1", "VINAAAA1111", "8331", "QBE", "G", dis=10),   # EXCESS
-                _unit("B2", "VINBBBB2222", "8481", "GAT", "D", dis=90),   # SHORTAGE -> protected
-                _unit("C3", "VINCCCC3333", "8361", "XKD", "A", dis=40)]   # COVERED
+        rows = [_unit("A1", "A1", "8331", "QBE", "G", dis=10),   # EXCESS
+                _unit("B2", "B2", "8481", "GAT", "D", dis=90),   # SHORTAGE -> protected
+                _unit("C3", "C3", "8361", "XKD", "A", dis=40)]   # COVERED
         harm = self._harm({("8331", "QBE", "G"): EXCESS, ("8481", "GAT", "D"): SHORTAGE,
                            ("8361", "XKD", "A"): COVERED})
         res = self._run(rows, harm, n=3)
@@ -61,37 +71,46 @@ class TestPlacementEngine(unittest.TestCase):
         self.assertTrue(all(c.new_retail_state in (EXCESS, COVERED) for c in res["candidates"]))
 
     def test_candidate_identity_is_complete(self):
-        rows = [_unit("Q26043", "JN8AZ2222", "8331", "QBE", "G", year="2026", model="QX80", trim="LUXE 2WD")]
+        rows = [_unit("Q26043", "Q26043", "8331", "QBE", "G", year="2026", model="QX80", trim="LUXE 2WD")]
         res = self._run(rows, self._harm({("8331", "QBE", "G"): EXCESS}), n=1)
         c = res["candidates"][0]
         for field in (c.stock, c.vin, c.year, c.model, c.exterior, c.interior):
             self.assertTrue(field)                        # VIN/Stock/Year/Model/colours all present
-        self.assertEqual((c.stock, c.vin[-4:], c.year, c.model), ("Q26043", "2222", "2026", "QX80"))
+        self.assertTrue(c.vin_authoritative)
+        self.assertEqual((c.stock, len(c.vin), c.year, c.model), ("Q26043", 17, "2026", "QX80"))
+
+    # 1D: a serial-only row (no VIN, serial_lifecycle) never presents the serial as a VIN
+    def test_serial_is_not_promoted_to_vin(self):
+        rows = [_unit("N15111", "TC348756", "8331", "QBE", "G", no_vin=True, serial="TC348756")]
+        c = self._run(rows, self._harm({("8331", "QBE", "G"): EXCESS}), n=1)["candidates"][0]
+        self.assertEqual(c.vin, "")                        # no fabricated VIN
+        self.assertFalse(c.vin_authoritative)
+        self.assertEqual(c.serial, "TC348756")             # serial preserved as serial, not a VIN
 
     def test_aging_breaks_ties_within_same_state(self):
-        rows = [_unit("NEW", "VIN1", "8331", "QBE", "G", dis=5),
-                _unit("OLD", "VIN2", "8331", "QBE", "C", dis=120)]
+        rows = [_unit("NEW", "NEW", "8331", "QBE", "G", dis=5),
+                _unit("OLD", "OLD", "8331", "QBE", "C", dis=120)]
         res = self._run(rows, self._harm({("8331", "QBE", "G"): EXCESS, ("8331", "QBE", "C"): EXCESS}), n=2)
         self.assertEqual([c.stock for c in res["candidates"]], ["OLD", "NEW"])   # oldest-aging first
 
     def test_next_best_and_n_limit(self):
-        rows = [_unit(f"S{i}", f"VIN{i}", "8331", "QBE", "G", dis=100 - i) for i in range(6)]
+        rows = [_unit(f"S{i}", f"S{i}", "8331", "QBE", "G", dis=100 - i) for i in range(6)]
         res = self._run(rows, self._harm({("8331", "QBE", "G"): COVERED}), n=2)
         self.assertEqual(len(res["candidates"]), 2)
         self.assertEqual(len(res["next_best"]), 3)        # 2-3 next-best alternatives
 
     def test_excludes_existing_loaners_and_off_lot(self):
-        rows = [_unit("ON", "VINON", "8331", "QBE", "G", loc="DLR-INV"),
-                _unit("INC", "VININC", "8331", "QBE", "G", loc="ONS"),        # incoming, not on lot
-                _unit("SOLD", "VINSOLD", "8331", "QBE", "G", status="Sold"),   # leaving retail
-                _unit("LOAN", "VINLOAN", "8331", "QBE", "G")]                  # already a loaner
+        rows = [_unit("ON", "ON", "8331", "QBE", "G", loc="DLR-INV"),
+                _unit("INC", "INC", "8331", "QBE", "G", loc="ONS"),        # incoming, not on lot
+                _unit("SOLD", "SOLD", "8331", "QBE", "G", status="Sold"),   # leaving retail
+                _unit("LOAN", "LOAN", "8331", "QBE", "G")]                  # already a loaner
         res = self._run(rows, self._harm({("8331", "QBE", "G"): EXCESS}), n=5,
-                        loaner_vins=frozenset({"VINLOAN"}))
+                        loaner_vins=frozenset({_vin("LOAN")}))               # committed by AUTHORITATIVE VIN
         got = {c.stock for c in res["candidates"]}
         self.assertEqual(got, {"ON"})                     # only the eligible on-lot, non-loaner, unsold unit
 
     def test_unresolved_coverage_flagged_not_invented(self):
-        rows = [_unit("U1", "VINU1", "8331", "QBE", "G")]
+        rows = [_unit("U1", "U1", "8331", "QBE", "G")]
         res = self._run(rows, {}, n=1)                    # no certified plan for the combo
         self.assertEqual(res["unresolved"], 1)
         self.assertEqual(res["candidates"], [])           # unresolved coverage is not offered as "safe"
@@ -127,19 +146,26 @@ class TestCommandBoardPage(unittest.TestCase):
 
     def test_add_shows_physical_candidates(self):
         from elite.loaner.placement import PlacementCandidate
-        fake = {"candidates": [PlacementCandidate("Q26043", "JN8AZ99992222", "2026", "QX80", "LUXE 2WD", "",
-                                                  "QBE", "G", 40, "EXCESS", "over-stocked — safest to place",
-                                                  "over-stocked — safest to place · 40d in stock", True)],
-                "next_best": [], "protected": 1, "unresolved": 0, "eligible": 2, "loaded": True}
+        cand = PlacementCandidate("Q26043", "5N1AZ2CS9PC900001", True, "", "2026", "QX80", "LUXE 2WD", "",
+                                  "QBE", "G", 40, "EXCESS", "over-stocked — safest to place",
+                                  "over-stocked — safest to place · 40d in stock", True)
+        serial_only = PlacementCandidate("N15111", "", False, "TC348756", "2026", "QX80", "SPORT 4WD", "",
+                                         "KCN", "D", 154, "EXCESS", "over-stocked — safest to place",
+                                         "over-stocked — safest to place · 154d in stock", True)
+        fake = {"candidates": [cand, serial_only], "next_best": [], "protected": 1, "unresolved": 0,
+                "eligible": 3, "loaded": True}
         with patch("elite.loaner.intelligence.build_intelligence", return_value=INTEL._fake_intel()), \
              patch("elite.loaner.placement.best_available_placement", return_value=fake):
             b = self.full.get("/service-loaner", add="1").body
         self.assertIn("Operational placement shortlist — economic Ideal pending Phase 4", b)
         self.assertIn("Best available placement candidates", b)
         self.assertIn("Q26043", b)                        # Stock #
-        self.assertIn("99992222"[-8:], b)                 # VIN tail
+        self.assertIn("PC900001", b)                      # authoritative VIN tail shown
         self.assertIn("QX80", b)
         self.assertIn("protected", b)                     # short-coverage protection surfaced
+        # 1D: a serial-only candidate never shows the serial as a VIN
+        self.assertIn("no VIN", b)
+        self.assertNotIn("TC348756</td>", b.replace(" ", ""))   # serial not placed in the VIN cell as a VIN
 
     def test_certified_unchanged(self):
         with patch("elite.loaner.intelligence.build_intelligence", return_value=INTEL._fake_intel()):

@@ -33,7 +33,9 @@ _STATE_RANK = {EXCESS: 0, COVERED: 1, UNKNOWN: 2, SHORTAGE: 3}
 @dataclass(frozen=True)
 class PlacementCandidate:
     stock: str
-    vin: str
+    vin: str                 # authoritative VIN only ("" when the source does not provide one)
+    vin_authoritative: bool  # False -> the board must NOT present serial/stock as a VIN
+    serial: str              # source Serial (lifecycle-dependent; UNKNOWN semantics — never a VIN)
     year: str
     model: str
     trim: str
@@ -87,19 +89,43 @@ def certified_harm_index(conn, scope):
     return idx
 
 
+# the DMS inventory can arrive under EITHER contract: the CSV `new_inventory_current`, or the xlsx
+# `new_inventory_pipeline_summary` (which _run_upload maps .xlsx uploads to). The placement board must read
+# whichever actually has the latest snapshot — otherwise it reports "no snapshot" while Data shows inventory
+# loaded (the 4A defect).
+INVENTORY_CONTRACTS = ("new_inventory_current", "new_inventory_pipeline_summary")
+
+
 def read_new_retail_units(app, scope):
-    """Raw per-unit rows of the latest completed New-Retail inventory snapshot (on-lot + incoming), or [] when
-    no inventory snapshot / ops orchestrator is available. Never fabricates units."""
+    """Raw per-unit rows of the latest completed New-Retail inventory snapshot, from whichever inventory
+    contract has data, or [] when none / no ops orchestrator. Never fabricates units."""
     try:
         from ..ui.views.operator import _ops_stack
         from ..newinv.supply_bridge import read_latest_snapshot_rows
         ops = _ops_stack(app)
         if ops is None:
             return []
-        src = ops.source_id("new_inventory_current")
-        return list(read_latest_snapshot_rows(ops.data, src, scope) or [])
+        for key in INVENTORY_CONTRACTS:
+            try:
+                rows = list(read_latest_snapshot_rows(ops.data, ops.source_id(key), scope) or [])
+            except Exception:   # noqa: BLE001
+                rows = []
+            if rows:
+                return rows
+        return []
     except Exception:   # noqa: BLE001 — inventory availability must never break the page
         return []
+
+
+def _authoritative_vin(row):
+    """A VIN only when the source truly provides one. Serial is lifecycle-dependent (serial_lifecycle) and its
+    semantics are UNKNOWN — it is NEVER promoted to a VIN. Returns (vin, is_authoritative, serial)."""
+    vin = _first(row, "vin")
+    serial = _first(row, "serial")
+    stock = _first(row, "stock_number", "stock")
+    # a real VIN is 17 chars and distinct from stock/serial; anything else is not trustworthy as a VIN
+    ok = bool(vin) and len(vin) == 17 and vin not in (serial, stock)
+    return (vin if ok else "", ok, serial)
 
 
 def _to_candidate(row, harm_index):
@@ -111,8 +137,9 @@ def _to_candidate(row, harm_index):
     state = harm["state"] if harm else UNKNOWN
     dis = _as_int(_first(row, "dis", "days_in_stock"))
     reason = _HARM_LABEL[state] + (f" · {dis}d in stock" if dis is not None else "")
+    vin, vin_ok, serial = _authoritative_vin(row)
     return PlacementCandidate(
-        stock=_first(row, "stock_number", "stock"), vin=_first(row, "vin", "serial"),
+        stock=_first(row, "stock_number", "stock"), vin=vin, vin_authoritative=vin_ok, serial=serial,
         year=_first(row, "year", "model_year", "my"), model=_first(row, "model", "model_line") or model_code,
         trim=_first(row, "trim", "trim_desc", "description"), drivetrain=_first(row, "drivetrain", "drive"),
         exterior=ext, interior=inte, dis=dis, new_retail_state=state, harm_label=_HARM_LABEL[state],
@@ -126,8 +153,8 @@ def _eligible(row, loaner_vins):
     status = _first(row, "status").lower()
     if "sold" in status or "delivered" in status:       # already leaving retail — not eligible
         return False
-    vin = _first(row, "vin", "serial")
-    return not (vin and vin in loaner_vins)
+    vin, ok, _serial = _authoritative_vin(row)
+    return not (ok and vin in loaner_vins)               # exclude committed loaners by AUTHORITATIVE VIN only
 
 
 def best_available_placement(app, conn, scope, *, n, loaner_vins=frozenset()):
