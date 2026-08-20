@@ -107,6 +107,40 @@ class TestPhase6Snapshot(unittest.TestCase):
         _b, s = self._ingest([{"vin": VIN, "rental_status": "rented", "conflicting_state": True}])
         self.assertEqual(s.get("CONFLICTING_STATE"), 1)
 
+    # ---- in-service date + mileage reconciliation from the SAME fleet snapshot row (the missing bridge) ----
+    def test_11_in_service_date_reconciled_from_fleet_row(self):
+        self._ingest([{"vin": VIN, "rental_status": "available", "in_service_date": "2025-12-01",
+                       "last_checkout_mileage": "1200"}])
+        u = self.p.store.unit_for_vin(VIN, SCOPE)
+        self.assertEqual(u.accepted_in_service_date, "2025-12-01")           # no longer NULL
+        self.assertEqual(u.in_service_date_authority, "verified")            # authoritative, not 'snapshot' placeholder
+        self.assertEqual(str(u.last_checkout_mileage), "1200")               # mileage carried too
+
+    def test_12_us_date_format_normalized(self):
+        self._ingest([{"vin": VIN, "rental_status": "available", "in_service_date": "12/01/2025"}])
+        self.assertEqual(self.p.store.unit_for_vin(VIN, SCOPE).accepted_in_service_date, "2025-12-01")
+
+    def test_13_blank_or_invalid_date_stays_unresolved(self):
+        self._ingest([{"vin": VIN, "rental_status": "available", "in_service_date": "  "},
+                      {"vin": VIN2, "rental_status": "available", "in_service_date": "not-a-date"}])
+        self.assertIsNone(self.p.store.unit_for_vin(VIN, SCOPE).accepted_in_service_date)   # never fabricated
+        self.assertIsNone(self.p.store.unit_for_vin(VIN2, SCOPE).accepted_in_service_date)
+
+    def test_14_no_date_column_never_substitutes_import_date(self):
+        self._ingest([{"vin": VIN, "rental_status": "available"}])           # no in_service_date at all
+        self.assertIsNone(self.p.store.unit_for_vin(VIN, SCOPE).accepted_in_service_date)
+
+    def test_15_prior_verified_date_not_erased_by_later_blank(self):
+        self._ingest([{"vin": VIN, "rental_status": "available", "in_service_date": "2025-12-01"}])
+        self._ingest([{"vin": VIN, "rental_status": "rented", "in_service_date": ""}])   # later snapshot, blank date
+        self.assertEqual(self.p.store.unit_for_vin(VIN, SCOPE).accepted_in_service_date, "2025-12-01")
+
+    def test_16_zero_mileage_is_valid_but_blank_is_not(self):
+        self._ingest([{"vin": VIN, "rental_status": "available", "last_checkout_mileage": "0"},
+                      {"vin": VIN2, "rental_status": "available", "last_checkout_mileage": ""}])
+        self.assertEqual(str(self.p.store.unit_for_vin(VIN, SCOPE).last_checkout_mileage), "0")   # explicit zero kept
+        self.assertIsNone(self.p.store.unit_for_vin(VIN2, SCOPE).last_checkout_mileage)           # blank not authoritative
+
 
 if __name__ == "__main__":
     unittest.main()

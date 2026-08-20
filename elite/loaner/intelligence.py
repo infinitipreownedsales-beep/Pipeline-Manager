@@ -35,6 +35,21 @@ def _numeric(v):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
+def _mileage_int(v):
+    """Coerce the stored last-checkout mileage to a clean int (0 is valid), or None when unreported. Robust
+    to the value being stored as text (SQLite TEXT affinity) rather than a native integer."""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def _year_of(sold_date):
     try:
         return int(str(sold_date)[:4])
@@ -279,7 +294,7 @@ def build_intelligence(conn, scope, prefs, clock):
         vin = (u["vin"] or "").upper()
         model = vin_model.get(vin)
         age = _age_days(u["accepted_in_service_date"], clock)
-        mileage = u["last_checkout_mileage"]
+        mileage = _mileage_int(u["last_checkout_mileage"])
         flags = []
         if u["accepted_in_service_date"] is None:
             flags.append("in-service date not resolved")

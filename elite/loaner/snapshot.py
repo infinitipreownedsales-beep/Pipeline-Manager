@@ -8,12 +8,35 @@ conflicting operational states are explicit.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 
 from ..data.identity import resolve_vehicle
 from ..data.normalize import normalize_vin, vin_status
 from ..ids import new_id
+from .dating import DatingService
 from .models import ServiceLoanerUnit
+
+
+def _clean_in_service_date(raw):
+    """Normalize an authoritative in-service-date cell to ISO YYYY-MM-DD, or None when it is blank or does
+    not parse. A value that does not parse is left UNRESOLVED — it is never guessed or coerced into a date,
+    and the file's import date is never substituted for it."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    try:                                   # already ISO (the common, unambiguous case)
+        return _dt.date.fromisoformat(s[:10]).isoformat()
+    except ValueError:
+        pass
+    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y"):   # common DMS export formats
+        try:
+            return _dt.datetime.strptime(s, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None                            # unparseable -> unresolved (never fabricated)
 
 
 class SnapshotService:
@@ -31,9 +54,29 @@ class SnapshotService:
                                      scope=self.scope, entity_kind="vehicle", fact_type=fact_type,
                                      claimed_snapshot=snapshot_type, effective_time=effective_time)
 
+    def _reconcile_dating(self, dating, unit_id, row, batch):
+        """Reconcile the authoritative in-service date + last checkout mileage that the SAME fleet-snapshot
+        row carries, into the unit — the step that was missing, leaving active units with a NULL in-service
+        date and no mileage even when the snapshot supplied both. Verified authority; blank/invalid never
+        becomes authoritative; a prior verified date is never erased by a later blank."""
+        cur = self.store.get_unit(unit_id)
+        isd = _clean_in_service_date(row.get("in_service_date"))
+        if isd and not cur.accepted_in_service_date:
+            # the fleet snapshot's in-service date is a VERIFIED column (not the file's import date)
+            dating.resolve_in_service_date(cur, [{"value": isd, "source": "service_loaner_fleet",
+                                                  "authority": "verified"}], import_date=batch.id)
+            cur = self.store.get_unit(unit_id)
+        if "last_checkout_mileage" in row:
+            m = dating.record_mileage(cur, row.get("last_checkout_mileage"), snapshot_ref=batch.id,
+                                      source="service_loaner_fleet")
+            if m.value_kind in ("value", "zero"):     # zero is a valid explicit mileage; blank/missing/invalid are not
+                with self.store.conn:
+                    self.store.set_unit_field(self.store.conn, unit_id, last_checkout_mileage=str(m.value))
+
     def reconcile(self, batch, rows):
         """Reconcile active-fleet membership by accepted VIN. Returns a summary dict of outcomes."""
         snapshot_type = batch.validated_snapshot_type
+        dating = DatingService(self.store, self.clock)
         present, seen, summary = set(), set(), {}
 
         def bump(outcome):
@@ -86,6 +129,8 @@ class SnapshotService:
                         last_accepted_snapshot=batch.id,
                         active_fleet_presence=1)
                 outcome = "MEMBER_CONFIRMED"
+            # reconcile the authoritative in-service date + mileage carried by this same fleet row
+            self._reconcile_dating(dating, unit.id, row, batch)
             if conflicting:
                 outcome = "CONFLICTING_STATE"
             self.store.add_operational_state(unit.id, snapshot_ref=batch.id, rental_state=rental,
