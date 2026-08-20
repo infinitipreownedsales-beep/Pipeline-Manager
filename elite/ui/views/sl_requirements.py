@@ -18,37 +18,10 @@ def _now(app):
     return to_utc_iso(app.stack.clock.now())
 
 
-def _sl_why(sb):
-    """Managerial narrative for the self-balancing result — what, why, why this action, and the watch clause.
-    Generated only from the engine's authoritative inputs; never fabricated."""
-    rel = f", with {sb.releasing_now} releasing now" if sb.releasing_now else ""
-    watch = (f" Watch: {sb.unresolved_timing_units} unit(s) have no authoritative in-service date, so future "
-             "exits cannot be projected yet — if enough units exit, the need could rise."
-             if sb.is_lower_bound and sb.unresolved_timing_units else "")
-    if sb.resolution == "no_target":
-        return ("Elite can't calculate Service-Loaner acquisition yet because no desired fleet target is set. "
-                "Set the target and Elite derives the need from the active fleet — you won't need to invent a "
-                "number to make ordering proceed.")
-    if sb.resolution == "resolved_zero":
-        return (f"The loaner fleet is {sb.current_active} against a target of {sb.desired}{rel}, so "
-                f"{sb.remaining} are expected to remain — at or above target. Elite is not adding loaners, which "
-                f"also protects Retail supply.{watch}")
-    return (f"The fleet is {sb.current_active} against a target of {sb.desired}{rel}, leaving {sb.remaining} "
-            f"expected to remain — {sb.calculated_need} below target. Elite recommends ordering "
-            f"{sb.calculated_need} specifically for Service Loaner rather than pulling from Retail, so Retail "
-            f"coverage is not silently shorted.{watch}")
-
-
-def _sl_source_label(sb):
-    return {"none": "Do not add — preserve Retail supply",
-            "order_specific": "Order specifically for Service Loaner",
-            "unresolved": "Unresolved — set the fleet target"}.get(sb.source, sb.source)
-
-
 def _sl_engine_card(app, scope):
     """The Elite-calculated Service-Loaner plan (self-balancing), shown before any manual controls: fleet
     position, calculated requirement, source recommendation and human Why."""
-    from ...loaner.self_balancing import build_requirement
+    from ...loaner.self_balancing import build_requirement, human_why, source_label
     sb = build_requirement(app.stack.db.conn, scope, app.prefs)
     tone = {"no_target": "attention", "resolved_zero": "healthy", "resolved_need": "pending"}.get(sb.resolution, "pending")
     need_txt = ("— (set target)" if sb.resolution == "no_target"
@@ -59,8 +32,8 @@ def _sl_engine_card(app, scope):
                      metric(sb.remaining, "Expected to remain"),
                      metric(need_txt, "Calculated need", attn=(sb.resolution == "resolved_need"))])
     body = (band
-            + f'<p style="margin:8px 0 2px">{badge(tone, _sl_source_label(sb))}</p>'
-            + f'<p style="margin:4px 0"><strong>Why:</strong> {esc(_sl_why(sb))}</p>'
+            + f'<p style="margin:8px 0 2px">{badge(tone, source_label(sb))}</p>'
+            + f'<p style="margin:4px 0"><strong>Why:</strong> {esc(human_why(sb))}</p>'
             + '<details><summary>Proof — calculated inputs</summary>'
             + kv([("Desired operating fleet", sb.desired if sb.desired is not None else "not set"),
                   ("Current active fleet", sb.current_active), ("Releasing now (governed exits)", sb.releasing_now),

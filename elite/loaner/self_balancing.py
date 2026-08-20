@@ -71,6 +71,33 @@ def compute_requirement(*, desired, current_active, releasing_now=0, projected_f
                                    ut > 0)
 
 
+def source_label(sb):
+    return {"none": "Do not add — preserve Retail supply",
+            "order_specific": "Order specifically for Service Loaner",
+            "unresolved": "Unresolved — set the fleet target"}.get(sb.source, sb.source)
+
+
+def human_why(sb):
+    """Managerial narrative for the self-balancing result — what, why, why this action, and a watch clause.
+    Generated only from the engine's authoritative inputs; never fabricated."""
+    rel = f", with {sb.releasing_now} releasing now" if sb.releasing_now else ""
+    watch = (f" Watch: {sb.unresolved_timing_units} unit(s) have no authoritative in-service date, so future "
+             "exits cannot be projected yet — if enough units exit, the need could rise."
+             if sb.is_lower_bound and sb.unresolved_timing_units else "")
+    if sb.resolution == "no_target":
+        return ("Elite can't calculate Service-Loaner acquisition yet because no desired fleet target is set. "
+                "Set the target and Elite derives the need from the active fleet — you won't need to invent a "
+                "number to make ordering proceed.")
+    if sb.resolution == "resolved_zero":
+        return (f"The loaner fleet is {sb.current_active} against a target of {sb.desired}{rel}, so "
+                f"{sb.remaining} are expected to remain — at or above target. Elite is not adding loaners, which "
+                f"also protects Retail supply.{watch}")
+    return (f"The fleet is {sb.current_active} against a target of {sb.desired}{rel}, leaving {sb.remaining} "
+            f"expected to remain — {sb.calculated_need} below target. Elite recommends ordering "
+            f"{sb.calculated_need} specifically for Service Loaner rather than pulling from Retail, so Retail "
+            f"coverage is not silently shorted.{watch}")
+
+
 def _counts(conn, scope):
     marks_in = ",".join("?" * len(_IN_FLEET))
     marks_rel = ",".join("?" * len(_RELEASING))

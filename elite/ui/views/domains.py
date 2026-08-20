@@ -143,15 +143,51 @@ def _placement_row(rank, c, *, compact=False):
             esc(colors or "—"), safe(badge(tone, c.new_retail_state)), esc(c.rank_reason), econ]
 
 
-def _fleet_unit_row(u):
-    """Compact current-fleet row: identity + lifecycle facts we DO have; the economic call is Pending
-    Economics. Per-unit missing state stays visible when the unit is opened."""
+def _unit_icv_cell(store, u):
+    """Applicable ICV for this physical unit, resolved from its AUTHORITATIVE in-service month. UNKNOWN renders
+    as 'Unknown' — never '$0 pending' (the legacy bug): a missing economic value is not zero."""
+    from ...loaner.program_inputs import resolve_for_unit
+    if not u.in_service_date:
+        return safe(badge("unresolved", "Unknown"))
+    r = resolve_for_unit(store, "icv", model=u.model or "", in_service_date=u.in_service_date)
+    if r.get("status") != "resolved":
+        return safe(badge("unresolved", "Unknown"))
+    v = r["entry"].value
+    return f"${v:,}" if v is not None else safe(badge("unresolved", "Unknown"))
+
+
+def _fleet_unit_row(u, icv_cell):
+    """Compact current-fleet cascade row: identity + the lifecycle facts we authoritatively have (in-service
+    date, age, mileage, applicable ICV). Timing/economic call (release-by, retail window) is Pending
+    Economics — one row per unit, so the fleet reads without opening 27 pages."""
     age = f"{u.age_days}d" if u.age_days is not None else "—"
     miles = f"{u.mileage:,}" if (u.mileage_available and u.mileage is not None) else "—"
     src = esc(u.rental_state or u.membership_state or "—")
     return [safe(f'<a href="/service-loaner/unit/{esc(u.id)}">{esc(u.stock if hasattr(u, "stock") else (u.vin or "")[-8:])}</a>'),
-            esc((u.vin or "—")[-8:]), esc(u.model or "—"), src, esc(age), esc(miles),
-            safe(badge("pending", "Pending Economics"))]
+            esc((u.vin or "—")[-8:]), esc(u.model or "—"), src, esc(u.in_service_date or "—"), esc(age), esc(miles),
+            icv_cell, safe(badge("pending", "Pending Economics"))]
+
+
+def _fleet_position_card(app, scope):
+    """Fleet Position band — the legacy program's signature top strip, rebuilt on the self-balancing engine:
+    in service / target / releasing / expected to remain / calculated add, with a source recommendation and a
+    human Why. Authoritative state only; economic timing stays Pending."""
+    from ...loaner.self_balancing import build_requirement, human_why, source_label
+    sb = build_requirement(_conn(app), scope, app.prefs)
+    tone = {"no_target": "attention", "resolved_zero": "healthy", "resolved_need": "pending"}.get(sb.resolution, "pending")
+    need_txt = ("— set target" if sb.resolution == "no_target"
+                else str(sb.calculated_need) + (" (lower bound)" if sb.is_lower_bound and sb.calculated_need else ""))
+    band = stat_row([metric(sb.current_active, "In service"),
+                     metric(sb.desired if sb.desired is not None else "not set", "Target"),
+                     metric(sb.releasing_now, "Releasing now"),
+                     metric(sb.remaining, "Expected to remain"),
+                     metric(need_txt, "Add (calculated)", attn=(sb.resolution == "resolved_need"))])
+    return ('<div class="card"><h2 style="margin-top:4px">Fleet position — self-balancing</h2>' + band
+            + f'<p style="margin:6px 0 2px">{badge(tone, source_label(sb))}</p>'
+            + f'<p style="margin:4px 0"><strong>Why:</strong> {esc(human_why(sb))}</p>'
+            + '<p class="muted" style="font-size:12px">Economic RETIRE / HOLD / release-by and the month-by-month '
+            'exit plan stay Pending until authoritative lifecycle economics exist — never guessed.</p>'
+            + '<p style="margin-top:6px"><a href="/ordering/sl-requirements">Open planning &amp; directives →</a></p></div>')
 
 
 def _program_coverage(app, scope):
@@ -172,6 +208,9 @@ def _loaner_command_body(app, s, intel, placement, add_n):
     asof = (f'inventory + fleet evidence · as of {esc(intel.retail_as_of)}' if intel.retail_as_of
             else 'inventory + fleet evidence')
     parts = [workspace_header("Service Loaner Command Board", safe(f'<span class="muted">{asof}</span>'))]
+
+    # ---- FLEET POSITION (self-balancing engine) ----
+    parts.append(_fleet_position_card(app, s.scope))
 
     # ---- PROGRAM STATE ----
     blocked = sum(1 for u in intel.units if not u.in_service_date or not u.mileage_available)
@@ -238,12 +277,17 @@ def _loaner_command_body(app, s, intel, placement, add_n):
                  'guesses. The board keeps a slot for each so Phase 4 fills them without a redesign.</div></div>')
     parts.append("".join(board))
 
-    # ---- CURRENT FLEET ----
+    # ---- CURRENT FLEET (cascade) ----
+    from .program_inputs import ProgramInputsStore
+    icv_store = ProgramInputsStore(app.prefs, s.scope)
     parts.append('<div class="card"><h2>Current fleet</h2>'
-                 + (table(["Stock", "VIN", "Model / trim", "Source state", "In-service age", "Mileage",
-                           "Economic call"], [_fleet_unit_row(u) for u in intel.units])
+                 + (table(["Stock", "VIN", "Model / trim", "Source state", "In service", "Age", "Mileage",
+                           "Applicable ICV", "Economic call"],
+                          [_fleet_unit_row(u, _unit_icv_cell(icv_store, u)) for u in intel.units])
                     if intel.units else empty("No active Service-Loaner units."))
-                 + '</div>')
+                 + '<p class="muted" style="font-size:12px">One row per physical unit. Applicable ICV is resolved '
+                 'from each unit\'s authoritative in-service month; Unknown is shown as Unknown, never $0. '
+                 'Release-by / retail window stay Pending until authoritative economics exist.</p></div>')
 
     # ---- WHY (A+B intelligence, behind the command surface) ----
     why = []
