@@ -46,7 +46,7 @@ def _sl_engine_card(app, scope):
                '<p class="muted" style="font-size:12px">Set the desired fleet on the '
                '<a href="/service-loaner">Service Loaner board</a>.</p>')
             + '<p class="muted" style="font-size:12px">Month-by-month projection (exits/replacements by month) '
-              'is pending authoritative lifecycle timing; the release-by call stays gated until then.</p>')
+              'is pending authoritative lifecycle timing; the release-timing call stays gated until then.</p>')
     return '<div class="card"><h2 style="margin-top:4px">Elite calculated plan (self-balancing)</h2>' + body + '</div>'
 
 

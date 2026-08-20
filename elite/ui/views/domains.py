@@ -185,8 +185,8 @@ def _fleet_position_card(app, scope):
     return ('<div class="card"><h2 style="margin-top:4px">Fleet position — self-balancing</h2>' + band
             + f'<p style="margin:6px 0 2px">{badge(tone, source_label(sb))}</p>'
             + f'<p style="margin:4px 0"><strong>Why:</strong> {esc(human_why(sb))}</p>'
-            + '<p class="muted" style="font-size:12px">Economic RETIRE / HOLD / release-by and the month-by-month '
-            'exit plan stay Pending until authoritative lifecycle economics exist — never guessed.</p>'
+            + '<p class="muted" style="font-size:12px">Economic retention, retirement and release timing, and the '
+            'month-by-month exit plan, stay Pending until authoritative lifecycle economics exist — never guessed.</p>'
             + '<p style="margin-top:6px"><a href="/ordering/sl-requirements">Open planning &amp; directives →</a></p></div>')
 
 
@@ -287,7 +287,7 @@ def _loaner_command_body(app, s, intel, placement, add_n):
                     if intel.units else empty("No active Service-Loaner units."))
                  + '<p class="muted" style="font-size:12px">One row per physical unit. Applicable ICV is resolved '
                  'from each unit\'s authoritative in-service month; Unknown is shown as Unknown, never $0. '
-                 'Release-by / retail window stay Pending until authoritative economics exist.</p></div>')
+                 'Release timing / retail window stay Pending until authoritative economics exist.</p></div>')
 
     # ---- WHY (A+B intelligence, behind the command surface) ----
     why = []
