@@ -157,8 +157,10 @@ class TestCommandBoardPage(unittest.TestCase):
         with patch("elite.loaner.intelligence.build_intelligence", return_value=INTEL._fake_intel()), \
              patch("elite.loaner.placement.best_available_placement", return_value=fake):
             b = self.full.get("/service-loaner", add="1").body
-        self.assertIn("Operational placement shortlist — economic Ideal pending Phase 4", b)
-        self.assertIn("Best available placement candidates", b)
+        self.assertIn("lowest Retail-harm", b)                 # honest framing — not the economic optimum
+        self.assertIn("Lowest Retail-harm placement candidates", b)
+        self.assertNotIn("Best available placement candidates", b)   # the overclaim is gone
+        self.assertIn("Service-Loaner economics pending", b)
         self.assertIn("Q26043", b)                        # Stock #
         self.assertIn("PC900001", b)                      # authoritative VIN tail shown
         self.assertIn("QX80", b)

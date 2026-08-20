@@ -92,6 +92,26 @@ def _coverage_line(store, kind, earliest, cur, models):
             f'{esc(cov["earliest"] or "unknown")}; missing program periods: {span}.')
 
 
+def phase4_gate_line(app, scope):
+    """Conditional Phase-4 readiness line. NEVER the stale static claim that coverage is incomplete: if ICV /
+    Velocity coverage is actually complete it says so and lists the REAL remaining economic gates (write-down
+    policy, protection buffer, used-market evidence). When the engine is fully ready it says the economic
+    ranking can proceed."""
+    from ...loaner.economics_readiness import phase4_gates, ready, missing
+    gates = phase4_gates(app, scope)
+    if ready(gates):
+        return ('<p class="muted" style="font-size:12px">' + safe(badge("healthy", "ready"))
+                + ' All required authoritative economic inputs are present — the Service-Loaner economic '
+                'placement ranking can proceed under its certified contract.</p>')
+    miss = missing(gates)
+    cov_incomplete = any(g.key in ("icv", "velocity") and not g.present for g in gates)
+    lead = ("Historical program coverage is incomplete." if cov_incomplete
+            else "Program coverage complete.")
+    items = "; ".join(f"{esc(g.label)} ({esc(g.detail)})" for g in miss)
+    return ('<p class="muted" style="font-size:12px">' + safe(badge("attention", "pending")) + f' {lead} '
+            f'Economic calls remain Pending until these authoritative inputs exist: {items}.</p>')
+
+
 def coverage_summary(app, scope, *, heading=True):
     """Read-only ICV/Velocity coverage banner for the active fleet — safe to embed on the Service Loaner board."""
     store = ProgramInputsStore(app.prefs, scope)
@@ -99,8 +119,7 @@ def coverage_summary(app, scope, *, heading=True):
     cur = _cur_month(app)
     body = ('<div style="font-size:13px;margin:3px 0">' + _coverage_line(store, "icv", earliest, cur, models) + '</div>'
             '<div style="font-size:13px;margin:3px 0">' + _coverage_line(store, "velocity", earliest, cur, models) + '</div>'
-            '<p class="muted" style="font-size:12px">Phase-4 economics are not authoritative while required '
-            'historical program coverage is incomplete.</p>')
+            + phase4_gate_line(app, scope))
     head = '<h3 style="margin:2px 0 4px">Program coverage</h3>' if heading else ""
     return head + body
 

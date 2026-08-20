@@ -190,6 +190,23 @@ def _fleet_position_card(app, scope):
             + '<p style="margin-top:6px"><a href="/ordering/sl-requirements">Open planning &amp; directives →</a></p></div>')
 
 
+def _phase4_gates_html(app, scope):
+    """Compact list of Phase-4 economic-readiness gates (present vs the actual missing inputs) — so the
+    operator sees EXACTLY what remains before the economic placement ranking can run, not a static claim."""
+    try:
+        from ...loaner.economics_readiness import phase4_gates, ready
+        gates = phase4_gates(app, scope)
+        if ready(gates):
+            return (' ' + badge("healthy", "ready")
+                    + ' all required economic inputs are present — the ranking can proceed.')
+        items = "".join(
+            f'<li>{safe(badge("healthy", "have") if g.present else badge("attention", "need"))} '
+            f'{esc(g.label)} — {esc(g.detail)}</li>' for g in gates)
+        return f'<ul style="margin:6px 0 0;padding-left:18px;font-size:12.5px">{items}</ul>'
+    except Exception:   # noqa: BLE001
+        return ""
+
+
 def _program_coverage(app, scope):
     """Read-only ICV/Velocity coverage banner + a clean link to the effective-dated Program Inputs page."""
     try:
@@ -237,25 +254,31 @@ def _loaner_command_body(app, s, intel, placement, add_n):
     # ---- WHAT NEEDS ME : ADD / placement ----
     ask = form("/service-loaner", '<label for=addn>Need to add</label>'
                f'<input id=addn name=add type=number min=1 max=20 value="{esc(add_n or "")}" '
-               'style="max-width:120px" placeholder="N units">', csrf=s.csrf_token, submit="Show best candidates",
-               method="get")
+               'style="max-width:120px" placeholder="N units">', csrf=s.csrf_token,
+               submit="Show lowest Retail-harm candidates", method="get")
     board = ['<div class="card"><h2>What needs me — add Service Loaners</h2>'
-             '<p class="muted">Operational placement shortlist — economic Ideal pending Phase 4. If management '
-             'asks you to add N loaners today, these are the safest physical New-Retail units to place first on '
-             'currently-certified evidence. This is not an economic optimum.</p>' + ask]
+             '<p class="muted">This is the <strong>lowest Retail-harm</strong> shortlist — the physical New-Retail '
+             'units that can be pulled with the least damage to certified Retail coverage. It is ranked by '
+             'Retail-harm and aging only. It is <strong>NOT</strong> the total Service-Loaner economic optimum '
+             '(used-value loss / ICV / resale are not yet weighed): the economic Ideal is pending Phase-4 inputs.</p>'
+             + ask]
     if not placement["loaded"]:
         board.append(empty("No New-Retail inventory snapshot is loaded yet — load Inventory in Data to build the "
                            "placement shortlist. No candidates are invented."))
     elif add_n and placement["candidates"]:
         rows = [_placement_row(i + 1, c) for i, c in enumerate(placement["candidates"])]
-        board.append('<h3 style="margin:10px 0 4px">Best available placement candidates</h3>'
-                     + table(["#", "Stock", "VIN", "Year / Model / Trim", "Ext / Int", "New-Retail", "Why safer",
+        board.append('<h3 style="margin:10px 0 4px">Lowest Retail-harm placement candidates '
+                     '<span class="badge">Service-Loaner economics pending</span></h3>'
+                     '<p class="muted" style="font-size:12px">Ranked by Retail-harm + aging, not by total '
+                     'dealership economics. An older/excess unit can rank high here yet be a worse economic '
+                     'placement once used-value loss and resale are weighed.</p>'
+                     + table(["#", "Stock", "VIN", "Year / Model / Trim", "Ext / Int", "New-Retail", "Why (Retail-harm)",
                               "Economic call"], rows))
         if placement["next_best"]:
             nb = [_placement_row("·", c, compact=True) for c in placement["next_best"]]
             board.append(disclosure(f"Next-best alternatives ({len(placement['next_best'])})",
                                     table(["#", "Stock", "VIN", "Year / Model / Trim", "Ext / Int", "New-Retail",
-                                           "Why safer", "Economic call"], nb)))
+                                           "Why (Retail-harm)", "Economic call"], nb)))
         notes = []
         if placement["protected"]:
             notes.append(f'{placement["protected"]} eligible unit(s) were <strong>protected</strong> (their '
@@ -272,9 +295,10 @@ def _loaner_command_body(app, s, intel, placement, add_n):
         board.append('<p class="muted">Enter how many loaners you need to add to see the safest physical '
                      'candidates.</p>')
     board.append('<div class="callout" style="margin-top:10px">'
-                 f'{badge("pending", "Pending Economics")} Economic retirement, retention and release-timing '
-                 'decisions (and expected cost) are reserved for Phase-4 authoritative economics — not shown as '
-                 'guesses. The board keeps a slot for each so Phase 4 fills them without a redesign.</div></div>')
+                 f'{badge("pending", "Pending Economics")} The total-dealership economic ranking (which vehicles '
+                 'lose least value as loaners, and whether any should be ordered instead of pulled from Retail) is '
+                 'reserved for Phase-4 authoritative economics — not guessed. Missing inputs before it can run:'
+                 + _phase4_gates_html(app, s.scope) + '</div></div>')
     parts.append("".join(board))
 
     # ---- CURRENT FLEET (cascade) ----

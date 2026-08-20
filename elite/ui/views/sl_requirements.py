@@ -89,7 +89,21 @@ def _effective_requirement_card(app, scope, store):
     else:
         note = ('<p class="muted" style="font-size:12px">No management directive is active — the effective '
                 'requirement equals Elite’s calculated need.</p>')
-    return ('<div class="card"><h2 style="margin-top:4px">Effective requirement</h2>' + rows + note + '</div>')
+    # honest economic-mix caveat: quantity is known, but WHICH models/vehicles is a Phase-4 economic call
+    econ = ""
+    try:
+        from ...loaner.economics_readiness import phase4_gates, ready, missing
+        gates = phase4_gates(app, scope)
+        if effective and not ready(gates):
+            miss = ", ".join(g.label for g in missing(gates))
+            econ = ('<p class="muted" style="font-size:12px">' + safe(badge("attention", "economics pending"))
+                    + ' The <strong>quantity</strong> is known, but the strongest <strong>model/vehicle mix</strong> '
+                    'is a Phase-4 economic call that cannot run yet (missing: ' + esc(miss) + '). Until then, choose '
+                    'the model by management intent and use the '
+                    '<a href="/service-loaner">lowest Retail-harm shortlist</a> — not an economic optimum.</p>')
+    except Exception:   # noqa: BLE001
+        econ = ""
+    return ('<div class="card"><h2 style="margin-top:4px">Effective requirement</h2>' + rows + note + econ + '</div>')
 
 
 def register(app):
