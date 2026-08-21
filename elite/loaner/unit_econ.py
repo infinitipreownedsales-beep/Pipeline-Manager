@@ -104,6 +104,10 @@ def _invoice_of(row, vin, pol):
 
 
 def _used_gross_by_model(app, scope):
+    # AUTHORITATIVE PREOWNED PROFIT RULE: expected used gross is FRONT-END only. The recorded gross fed here
+    # (retail_history gross_profit) must be the dealership's front-end gross — backend / F&I income is never
+    # included and never influences Service-Loaner economics. The KEEP/PULL/SWAP comparator enforces this by
+    # construction (price − adjusted basis − recon); this model-level figure relies on the source being front-end.
     out = {}
     try:
         from .intelligence import build_intelligence
