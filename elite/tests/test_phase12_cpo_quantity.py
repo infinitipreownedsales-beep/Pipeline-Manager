@@ -94,6 +94,13 @@ class TestCpoQuantity(unittest.TestCase):
         loc = dict(resp.headers).get("Location", "")
         self.assertIn(f"#combo-{self.combo}", loc)        # returns to the combination, not the page top
 
+    def test_session_commitment_shown_as_shadow_supply(self):
+        self._line(state="confirmed", order="2")
+        b = self._body()
+        self.assertIn("Session order commitments", b)
+        self.assertIn("2</strong> unit(s) committed this session", b)      # shadow future supply
+        self.assertIn("not yet an authoritative Production Order", b)
+
     def test_certified_unchanged(self):
         self._body()
         self.assertEqual(current_version(self.conn), 12)

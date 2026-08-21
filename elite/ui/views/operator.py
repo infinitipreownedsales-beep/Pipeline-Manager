@@ -321,6 +321,52 @@ def _cpo_sl_program_banner(sb):
             f'<a href="/ordering/sl-requirements">Review the plan</a>.{lb}</div>')
 
 
+def _read_production_orders(app, scope):
+    """Latest completed authoritative Production Orders snapshot rows, or [] — best effort, never breaks CPO."""
+    try:
+        from ..newinv.supply_bridge import read_latest_snapshot_rows
+        from ..newinv.snapshots import SnapshotReader
+        ops = _ops_stack(app)
+        ops_store = getattr(ops, "ops", None) if ops else None
+        if ops_store is None:
+            return []
+        reader = SnapshotReader(ops_store, ops.data)
+        return list(read_latest_snapshot_rows(reader, ops.source_id("production_orders"), scope) or [])
+    except Exception:   # noqa: BLE001
+        return []
+
+
+def _cpo_commitments_card(app, scope, month, board, lines, qty):
+    """Session ORDER commitments (shadow future supply) and their reconciliation against authoritative
+    Production Orders — counted once, ambiguity surfaced, never silently merged."""
+    from ...ordering.commitment_ledger import commitments_from_lines, reconcile_commitments
+    board_map = {b["combo"]: {"model": b["model"], "order": _int_or0(b.get("order"))} for b in board}
+    commits = commitments_from_lines(lines, qty, board_map)
+    total = sum(v["qty"] for v in commits.values())
+    if not total:
+        return ""
+    prod = _read_production_orders(app, scope)
+    head = ('<div class="card"><h2 style="margin-top:4px">Session order commitments</h2>'
+            f'<p style="margin:2px 0"><strong>{total}</strong> unit(s) committed this session (shadow future '
+            'supply — not yet an authoritative Production Order).</p>')
+    if not prod:
+        return head + ('<p class="muted" style="font-size:12px">No Production Orders snapshot loaded yet. When '
+                       'it arrives, Elite reconciles these commitments so a confirmed order is never counted '
+                       'twice.</p></div>')
+    rec = reconcile_commitments(commits, prod)
+    rows = kv([("Committed this session", total),
+               ("Matched to authoritative Production Orders (counted once)", len(rec["matched"])),
+               ("Still shadow (awaiting a Production Order)", sum(rec["remaining_shadow"].values())),
+               ("Unmatched Production Orders (no session commitment)", len(rec["unmatched"])),
+               ("Ambiguous — needs a deterministic identifier", len(rec["ambiguous"]))])
+    amb = ''
+    if rec["ambiguous"]:
+        amb = ('<div class="err" role="alert"><strong>Ambiguous reconciliation.</strong> '
+               + str(len(rec["ambiguous"])) + ' Production Order(s) could match more than one commitment and '
+               'were NOT merged. Provide a deterministic identifier (VIN or combination) to reconcile.</div>')
+    return head + rows + amb + '</div>'
+
+
 def _cpo_dealership_total_card(deco, sb, sourcing=None):
     """The one reconciled dealership acquisition total: certified Retail + the Service-Loaner ORDER portion of
     any directive (after placing safe units from existing surplus) + calculated program need + other, counted
@@ -605,6 +651,7 @@ def register(app):
                          'any safe units from surplus) — additive to the dealership order below, with certified '
                          'Retail demand unchanged.</div>')
         parts.append(_cpo_dealership_total_card(deco, sb, sourcing))
+        parts.append(_cpo_commitments_card(app, s.scope, month, board, lines, qty))
 
         # one physical supply truth: a committed SL/Demo VIN must never also count as free Retail supply
         dbl = _cpo_supply_integrity(app, s.scope)
