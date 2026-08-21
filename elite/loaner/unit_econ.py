@@ -85,6 +85,24 @@ def compute_placement_econ(*, unit_id, identity, model, stock, icv, velocity, us
                          tuple(terms)), []
 
 
+# authoritative original-invoice headers on a New-Retail inventory row (governed allowlist; never MSRP/ICV)
+_INVOICE_HEADERS = ("invoice", "invoice_price", "original_invoice", "dealer_invoice", "Invoice", "InvoicePrice")
+
+
+def _invoice_of(row, vin, pol):
+    """The authoritative original invoice for a unit: from the inventory row (governed allowlist), else a
+    governed per-VIN invoice override, else None (write-down then fails closed — never MSRP/ICV/estimate)."""
+    from .sl_policy import _to_num
+    if isinstance(row, dict):
+        for k in _INVOICE_HEADERS:
+            v = row.get(k)
+            if v not in (None, ""):
+                n = _to_num(v)
+                if n is not None:
+                    return int(round(n))
+    return pol.invoice_for_vin(vin) if vin else None
+
+
 def _used_gross_by_model(app, scope):
     out = {}
     try:
@@ -105,16 +123,18 @@ def build_placement_econ(app, scope, planning_month, *, n=0, scenario=None):
     5000}}}) is a what-if write-down spec applied ONLY here and never written to policy. Returns a dict with
     the ranked economic result, the excluded units (with reasons), and readiness."""
     from .program_inputs import ProgramInputsStore
-    from .sl_policy import SLPolicyStore
+    from .sl_policy import SLPolicyStore, cumulative_writedown, DAYS_PER_MONTH
     conn = app.stack.db.conn
     pis = ProgramInputsStore(app.prefs, scope)
     pol = SLPolicyStore(app.prefs, scope)
     scenario = scenario or {}
-    scen_wd = {(k or "").upper(): v for k, v in (scenario.get("writedown") or {}).items()}   # {model: spec}
-    # projected program tenure (months) — scenario overrides the governed default; drives the MONTHLY % write-down
+    # projected program tenure (months) — scenario overrides governed default; write-down monthly rate too
     tenure_months = scenario.get("tenure_months")
     if tenure_months is None:
         tenure_months = pol.projected_tenure_months()
+    rate = scenario.get("writedown_rate")
+    if rate is None:
+        rate, _rsrc = pol.writedown_monthly_rate(planning_month)
 
     rows = read_new_retail_units(app, scope)
     loaded = bool(rows)
@@ -135,8 +155,13 @@ def build_placement_econ(app, scope, planning_month, *, n=0, scenario=None):
         icv_e = pis.applicable("icv", model, planning_month, model_year=c.year or "")
         vel_e = pis.applicable("velocity", model, planning_month, model_year=c.year or "")
         icv_v = icv_e.value if icv_e else None
-        wd_dollars, wd_explain = pol.resolve_writedown_dollars(model, icv=icv_v, spec=scen_wd.get(model),
-                                                               tenure_months=tenure_months)
+        # write-down: invoice (never ICV) × governed monthly rate × projected tenure, daily-prorated; fail closed
+        invoice = _invoice_of(r, (vin if ok else ""), pol)
+        if tenure_months is None:
+            wd_dollars, wd_explain = None, "projected program tenure (months) not set"
+        else:
+            wd_dollars, wd_explain, _pa = cumulative_writedown(
+                invoice=invoice, monthly_rate=rate, tenure_days=float(tenure_months) * DAYS_PER_MONTH)
         pe, missing = compute_placement_econ(
             unit_id=uid, identity=ident, model=model, stock=c.stock or "",
             icv=icv_v, velocity=(vel_e.value if vel_e else None),

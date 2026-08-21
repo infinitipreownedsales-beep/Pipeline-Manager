@@ -181,26 +181,28 @@ def register(app):
         per-model write-down and a flat protection buffer. Saving is the explicit apply (no scenario writes)."""
         from ...loaner.sl_policy import SLPolicyStore
         from .operator import _known_models, _select
+        from ...loaner.sl_policy import SLPolicyStore as _SLP
         pol = SLPolicyStore(app.prefs, s.scope)
-        wds = pol.all_writedowns()
         buf_days = pol.protection_buffer_days()
         tenure = pol.projected_tenure_months()
-
-        def _wd_disp(spec):
-            return f"${int(spec['value']):,} (flat, one-time)" if spec["kind"] == "amount" else f"{spec['value']:g}% of ICV / month"
-        rows = [[esc(m), _wd_disp(spec)] for m, spec in sorted(wds.items())] or None
-        wtable = table(["Model", "Write-down policy"], rows) if rows else empty("No per-model write-down policy recorded.")
-        model_opts = _select("model", [(m, m) for m in (_known_models(app, s.scope) or [])])
-        kind_opts = _select("kind", [("percent_icv", "Monthly percent of ICV (%/month)"),
-                                     ("amount", "Flat dollar amount ($, one-time)")])
+        cur_month = _cur_month(app)
+        rate, rate_src = pol.writedown_monthly_rate(cur_month)
+        rate_rows = [[esc(e.get("effective_month") or "—"), f"{float(e['rate']):g}%/mo"]
+                     for e in sorted(pol.writedown_rate_entries(), key=lambda e: e.get("effective_month", ""))] or None
+        wtable = (table(["Effective month", "Rate"], rate_rows) if rate_rows
+                  else empty(f"No governed rate recorded — using the default {rate:g}%/mo of invoice."))
         wform = form("/program-inputs/writedown",
-                     '<label>Model</label>' + model_opts
-                     + '<label>Write-down type — units are explicit. A monthly % of ICV accrues over program '
-                       'tenure (longer tenure = more write-down); a flat $ is one-time.</label>'
-                     + kind_opts
-                     + '<label>Value (percent-per-month, or dollars — a real 0 is allowed)</label>'
-                       '<input name=value type=number min=0 step="0.01" style="max-width:160px" required>',
-                     csrf=s.csrf_token, submit="Save write-down policy")
+                     '<label>Effective month (the rate applies from this month forward)</label>'
+                     f'<input name=effective_month type=month value="{esc(cur_month)}" style="max-width:200px" required>'
+                     '<label>Monthly write-down rate (% of original INVOICE per month — the authoritative basis '
+                     'is invoice, never ICV/MSRP; no cap; accrues daily)</label>'
+                     f'<input name=rate type=number min=0 step="0.01" value="1.25" style="max-width:160px" required>',
+                     csrf=s.csrf_token, submit="Save write-down rate")
+        inv_form = form("/program-inputs/invoice",
+                        '<label>VIN</label><input name=vin style="max-width:240px" required>'
+                        '<label>Original authoritative invoice $ (the write-down basis, when the source lacks it)'
+                        '</label><input name=amount type=number min=0 style="max-width:160px" required>',
+                        csrf=s.csrf_token, submit="Save unit invoice")
         tform = form("/program-inputs/tenure",
                      '<label>Projected loaner-program tenure (MONTHS) — turns a monthly % write-down into a '
                      'cumulative dollar figure. This is program tenure, NOT the 240-day total-to-retail deadline.'
@@ -220,8 +222,13 @@ def register(app):
                 'buffer</strong> is a DAY count that feeds the release-timing backsolve — the two live in '
                 'different dimensions and are never mixed. Saving applies immediately; scenario what-ifs never '
                 'overwrite policy.</p>'
-                + '<h3 style="margin:8px 0 4px">Per-model write-down</h3>' + wtable
-                + disclosure("Set a model write-down", wform)
+                + f'<h3 style="margin:8px 0 4px">Write-down rate — currently {esc(rate_src)}</h3>' + wtable
+                + disclosure("Set write-down rate (effective-dated)", wform)
+                + '<h3 style="margin:12px 0 4px">Per-unit original invoice (write-down basis)</h3>'
+                + '<p class="muted" style="font-size:12px">The write-down is a % of the vehicle\'s original '
+                'authoritative invoice. When the inventory source carries it, Elite reads it automatically; use '
+                'this only to supply an authoritative invoice the source is missing. Never MSRP/ICV.</p>'
+                + disclosure("Set a unit invoice", inv_form)
                 + '<h3 style="margin:12px 0 4px">Projected program tenure (months)</h3><p style="margin:2px 0">'
                 + (f'<strong>{tenure} months</strong>' if tenure is not None else safe(badge("unresolved", "not set")))
                 + ' <span class="muted" style="font-size:12px">— a monthly % write-down needs this to become a '
@@ -263,12 +270,24 @@ def register(app):
         s = req.session
         app.require(s, "workspace.view")
         from ...loaner.sl_policy import SLPolicyStore
-        model = (req.f("model", "") or "").strip()
-        kind = (req.f("kind", "amount") or "amount").strip()
         try:
-            SLPolicyStore(app.prefs, s.scope).set_writedown(model, req.f("value", ""), kind=kind,
-                                                            actor=s.principal_id, at=_now(app))
-            s.flash = f"Write-down policy saved for {model.upper()} (applied)."
+            r = SLPolicyStore(app.prefs, s.scope).set_writedown_rate(
+                req.f("rate", ""), effective_month=req.f("effective_month", "").strip(),
+                actor=s.principal_id, at=_now(app))
+            s.flash = f"Write-down rate saved: {r:g}%/mo of invoice (applied)."
+        except ValueError as e:
+            s.flash = f"Not saved — {e}."
+        return Response.redirect("/program-inputs")
+
+    @app.post("/program-inputs/invoice")
+    def program_invoice(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        from ...loaner.sl_policy import SLPolicyStore
+        try:
+            SLPolicyStore(app.prefs, s.scope).set_invoice(req.f("vin", ""), req.f("amount", ""),
+                                                          actor=s.principal_id, at=_now(app))
+            s.flash = "Unit invoice saved (applied) — used as the write-down basis."
         except ValueError as e:
             s.flash = f"Not saved — {e}."
         return Response.redirect("/program-inputs")

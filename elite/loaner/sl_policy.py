@@ -1,9 +1,10 @@
 """Governed Service-Loaner POLICY — the dealership inputs Elite cannot derive for itself.
 
-TWO DISTINCT, UNIT-EXPLICIT policies. They live in different dimensions and are NEVER mixed:
+DISTINCT, UNIT-EXPLICIT policies. They live in different dimensions and are NEVER mixed:
 
-  * WRITE-DOWN (dollars, or a percentage that resolves to dollars against a named basis): the value the store
-    books as lost over the loaner program. Feeds the DOLLAR economics of a placement.
+  * WRITE-DOWN: a governed MONTHLY RATE (%/month, default 1.25%) applied to the vehicle's original authoritative
+    INVOICE (never ICV/MSRP), accruing every day in the program (no cap, daily-prorated). Feeds the DOLLAR
+    carrying economics. ICV and Velocity are SEPARATE program benefits.
   * PROTECTION BUFFER (DAYS): a time reserve protecting the 240-day total-to-retail deadline. Feeds the
     RELEASE-TIMING backsolve (latest prudent release = 240 − learned post-loaner DTS − recon − buffer days).
     It is a day count and MUST NEVER be added to dollar economics.
@@ -12,6 +13,15 @@ Store-scoped, governed (actor + timestamp recorded), append-history via prefs; s
 the EXPLICIT apply — a scenario what-if is passed at call time and never written here.
 """
 from __future__ import annotations
+
+# Governed AUTHORITATIVE write-down policy (Kyle, 2026):
+#   basis   = original authoritative vehicle INVOICE (never ICV / MSRP / estimate)
+#   rate    = 1.25% of invoice PER MONTH while the vehicle remains in Service Loaner
+#   cap     = none — the write-down keeps accruing every month it stays in the program
+# 1.25% is a governed DEFAULT that brings historical/current SL economics active; a more-specific
+# effective-dated entry always wins and is never overwritten by the default.
+DEFAULT_WRITEDOWN_MONTHLY_RATE = 1.25
+DAYS_PER_MONTH = 30.4375                               # average calendar month, for daily proration
 
 
 def _norm_model(m):
@@ -25,9 +35,29 @@ def _to_num(v):
         return None
 
 
+def cumulative_writedown(*, invoice, monthly_rate, tenure_days):
+    """Cumulative Service-Loaner write-down in DOLLARS.
+
+    basis = original authoritative INVOICE (never ICV/MSRP/estimate); rate = %/month; NO cap; accrues for
+    every day in the program via DAILY PRORATION. Daily proration is a PLANNING ASSUMPTION (exact partial-
+    month accounting is not yet confirmed) and is labelled as such in the explanation — it never blocks a
+    decision. FAILS CLOSED (None) when the authoritative invoice is missing — it is never substituted.
+
+    Returns (dollars, explanation, is_planning_assumption)."""
+    if invoice is None:
+        return None, "missing authoritative invoice — write-down fails closed (never MSRP/ICV/estimate)", False
+    if monthly_rate is None or tenure_days is None:
+        return None, "write-down needs a governed monthly rate and a tenure", False
+    daily_rate = float(monthly_rate) / 100.0 / DAYS_PER_MONTH
+    dollars = int(round(float(invoice) * daily_rate * float(tenure_days)))
+    months = float(tenure_days) / DAYS_PER_MONTH
+    expl = (f"{monthly_rate:g}%/mo × invoice ${int(invoice):,} × {float(tenure_days):.0f}d "
+            f"(~{months:.1f} mo, daily-prorated — planning assumption) = ${dollars:,}")
+    return dollars, expl, True
+
+
 class SLPolicyStore:
     KEY = "sl_economic_policy"
-    WRITEDOWN_KINDS = ("amount", "percent_icv")
 
     def __init__(self, prefs, scope):
         self.prefs = prefs
@@ -35,9 +65,10 @@ class SLPolicyStore:
 
     def _doc(self):
         d = self.prefs.get_pref(self._sk, self.KEY, default={}) or {}
-        d.setdefault("writedown", {})                 # model -> {"kind": amount|percent_icv, "value": N}
+        d.setdefault("writedown_rate", [])            # [{effective_month, rate (%/mo), actor, at}] — governed
+        d.setdefault("invoice_by_vin", {})            # vin -> authoritative original invoice $
         d.setdefault("protection_buffer_days", None)  # DAYS (release-timing), not dollars
-        d.setdefault("projected_tenure_months", None)  # projected loaner-program tenure (months) for % write-down
+        d.setdefault("projected_tenure_months", None)  # projected loaner-program tenure (months)
         d.setdefault("history", [])
         return d
 
@@ -56,57 +87,55 @@ class SLPolicyStore:
         self.prefs.set_pref(self._sk, self.KEY, d)
         return int(round(n))
 
-    # ---- per-model write-down (unit-explicit: a dollar AMOUNT, or a PERCENT of ICV) --------------------
-    def writedown_spec(self, model):
-        """The governed write-down spec for a model, or None (UNKNOWN — never silently zero). A spec is
-        {'kind': 'amount'|'percent_icv', 'value': float}."""
-        s = self._doc()["writedown"].get(_norm_model(model))
-        return dict(s) if s else None
+    # ---- governed MONTHLY write-down RATE (%/mo of invoice; effective-dated; 1.25% default) ------------
+    def writedown_monthly_rate(self, month=None):
+        """(rate %/month, source) applicable at `month`. The most-recent governed effective-dated entry wins;
+        otherwise the governed DEFAULT 1.25% brings economics active (never overwriting a specific value)."""
+        entries = sorted((e for e in self._doc()["writedown_rate"] if e.get("rate") is not None),
+                         key=lambda e: e.get("effective_month", ""))
+        applicable = None
+        for e in entries:
+            if month is None or (e.get("effective_month", "") <= month):
+                applicable = e
+        if applicable is not None:
+            return float(applicable["rate"]), f"governed {float(applicable['rate']):g}%/mo (eff {applicable.get('effective_month','')})"
+        return DEFAULT_WRITEDOWN_MONTHLY_RATE, f"default {DEFAULT_WRITEDOWN_MONTHLY_RATE:g}%/mo"
 
-    def all_writedowns(self):
-        return {k: dict(v) for k, v in self._doc()["writedown"].items() if v}
+    def writedown_rate_entries(self):
+        return list(self._doc()["writedown_rate"])
 
-    def set_writedown(self, model, value, *, kind="amount", actor, at):
-        if kind not in self.WRITEDOWN_KINDS:
-            raise ValueError("write-down kind must be 'amount' (dollars) or 'percent_icv' (percentage of ICV)")
-        n = _to_num(value)
+    def set_writedown_rate(self, rate, *, effective_month, actor, at):
+        n = _to_num(rate)
         if n is None or n < 0:
-            raise ValueError("write-down must be a non-negative number")
-        if kind == "percent_icv" and n > 100:
-            raise ValueError("a write-down percentage cannot exceed 100%")
-        spec = {"kind": kind, "value": (int(round(n)) if kind == "amount" else round(n, 2))}
+            raise ValueError("write-down rate must be a non-negative percent per month")
+        if n > 100:
+            raise ValueError("a monthly write-down rate cannot exceed 100%")
         d = self._doc()
-        d["writedown"][_norm_model(model)] = spec
-        d["history"].append({"kind": "writedown", "model": _norm_model(model), **spec, "actor": actor, "at": at})
+        d["writedown_rate"].append({"effective_month": (effective_month or "").strip(), "rate": round(n, 4),
+                                    "actor": actor, "at": at})
+        d["history"].append({"kind": "writedown_rate", "rate": round(n, 4), "effective_month": effective_month,
+                             "actor": actor, "at": at})
         self.prefs.set_pref(self._sk, self.KEY, d)
-        return spec
+        return round(n, 4)
 
-    def resolve_writedown_dollars(self, model, *, icv, spec=None, tenure_months=None):
-        """Resolve a write-down spec to CUMULATIVE DOLLARS. 'amount' is a flat one-time dollar result (used
-        directly). 'percent_icv' is a MONTHLY write-down RATE: cumulative $ = monthly_rate% × ICV × tenure
-        (months) — so a longer tenure loses more value. Needs both the unit's ICV and a projected tenure;
-        returns (None, reason) when either is unavailable (never guessed). Returns (dollars, explanation)."""
-        spec = spec or self.writedown_spec(model)
-        if not spec:
-            return None, "no governed write-down policy for this model"
-        if spec["kind"] == "amount":
-            return int(spec["value"]), f"${int(spec['value']):,} (flat, one-time)"
-        if icv is None:
-            return None, "monthly write-down is a percent of ICV but ICV is unknown for this unit"
-        months = tenure_months if tenure_months is not None else self.projected_tenure_months()
-        if months is None:
-            return None, "monthly write-down needs a projected program tenure (months) — not set"
-        months = int(months)
-        dollars = int(round(spec["value"] / 100.0 * float(icv) * months))
-        return dollars, (f"{spec['value']:g}%/mo × ICV ${int(icv):,} × {months} mo = ${dollars:,}")
+    # ---- per-VIN authoritative original INVOICE (the write-down basis) --------------------------------
+    def invoice_for_vin(self, vin):
+        v = self._doc()["invoice_by_vin"].get((vin or "").strip().upper())
+        return None if v is None else int(v)
 
-    def clear_writedown(self, model):
+    def set_invoice(self, vin, amount, *, actor, at):
+        n = _to_num(amount)
+        if n is None or n < 0:
+            raise ValueError("invoice must be a non-negative dollar amount")
         d = self._doc()
-        if _norm_model(model) in d["writedown"]:
-            del d["writedown"][_norm_model(model)]
-            self.prefs.set_pref(self._sk, self.KEY, d)
-            return True
-        return False
+        d["invoice_by_vin"][(vin or "").strip().upper()] = int(round(n))
+        d["history"].append({"kind": "invoice", "vin": (vin or "").strip().upper(), "amount": int(round(n)),
+                             "actor": actor, "at": at})
+        self.prefs.set_pref(self._sk, self.KEY, d)
+        return int(round(n))
+
+    def all_invoices(self):
+        return {k: int(v) for k, v in self._doc()["invoice_by_vin"].items() if v is not None}
 
     # ---- protection buffer (DAYS — release-timing only; NEVER dollars) --------------------------------
     def protection_buffer_days(self):

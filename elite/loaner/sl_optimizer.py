@@ -76,15 +76,18 @@ def optimize_sl_placement(app, scope, planning_month, n, *, loaner_vins=frozense
     rejected units (DO NOT PLACE / UNRESOLVED), the remaining unmet requirement, and whether the sequential
     result diverges from a naive static top-N."""
     from .program_inputs import ProgramInputsStore
-    from .sl_policy import SLPolicyStore
+    from .sl_policy import SLPolicyStore, cumulative_writedown, DAYS_PER_MONTH
+    from .unit_econ import _invoice_of
     conn = app.stack.db.conn
     pis = ProgramInputsStore(app.prefs, scope)
     pol = SLPolicyStore(app.prefs, scope)
     scenario = scenario or {}
-    scen_wd = {(k or "").upper(): v for k, v in (scenario.get("writedown") or {}).items()}
     tenure = scenario.get("tenure_months")
     if tenure is None:
         tenure = pol.projected_tenure_months()
+    rate = scenario.get("writedown_rate")
+    if rate is None:
+        rate, _rsrc = pol.writedown_monthly_rate(planning_month)
     gross_by_model = _gross_by_model(app, scope)
 
     rows = read_new_retail_units(app, scope)
@@ -104,8 +107,12 @@ def optimize_sl_placement(app, scope, planning_month, n, *, loaner_vins=frozense
         icv_e = pis.applicable("icv", model, planning_month, model_year=c.year or "")
         vel_e = pis.applicable("velocity", model, planning_month, model_year=c.year or "")
         icv_v = icv_e.value if icv_e else None
-        wd_dollars, wd_expl = pol.resolve_writedown_dollars(model, icv=icv_v, spec=scen_wd.get(model),
-                                                            tenure_months=tenure)
+        invoice = _invoice_of(r, (c.vin if c.vin_authoritative else ""), pol)
+        if tenure is None:
+            wd_dollars, wd_expl = None, "projected program tenure (months) not set"
+        else:
+            wd_dollars, wd_expl, _pa = cumulative_writedown(
+                invoice=invoice, monthly_rate=rate, tenure_days=float(tenure) * DAYS_PER_MONTH)
         pe, _missing = compute_placement_econ(
             unit_id=(c.vin if c.vin_authoritative else c.stock) or c.serial or "unit",
             identity=" ".join(x for x in (c.year, c.model, c.trim, c.drivetrain) if x).strip() or model,

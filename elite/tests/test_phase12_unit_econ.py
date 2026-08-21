@@ -62,8 +62,9 @@ class TestComputeEcon(unittest.TestCase):
         self.assertEqual(pe.opportunity_cost, 0)
 
 
-class TestPolicyUnits(unittest.TestCase):
-    """The two governed policies live in different dimensions and are never confused."""
+class TestWriteDownPolicy(unittest.TestCase):
+    """Authoritative write-down: % of original INVOICE per month (never ICV), no cap, daily-prorated, fails
+    closed on missing invoice."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -73,48 +74,58 @@ class TestPolicyUnits(unittest.TestCase):
     def tearDown(self):
         self.p.close()
 
-    def test_writedown_amount_is_one_time(self):
-        self.pol.set_writedown("QX60", 3000, kind="amount", actor="k", at="t")
-        d, expl = self.pol.resolve_writedown_dollars("QX60", icv=6500)
-        self.assertEqual(d, 3000)                     # flat, tenure-independent
-        self.assertIn("one-time", expl)
+    def test_default_rate_is_governed_1_25(self):
+        from elite.loaner.sl_policy import DEFAULT_WRITEDOWN_MONTHLY_RATE
+        self.assertEqual(DEFAULT_WRITEDOWN_MONTHLY_RATE, 1.25)     # governed data, not buried in a calc
+        rate, src = self.pol.writedown_monthly_rate("2026-08")
+        self.assertEqual(rate, 1.25)
+        self.assertIn("default", src)
 
-    def test_percent_writedown_is_MONTHLY_and_accrues_with_tenure(self):
-        self.pol.set_writedown("QX80", 2, kind="percent_icv", actor="k", at="t")   # 2% PER MONTH
-        d6, e6 = self.pol.resolve_writedown_dollars("QX80", icv=9000, tenure_months=6)
-        d3, _ = self.pol.resolve_writedown_dollars("QX80", icv=9000, tenure_months=3)
-        self.assertEqual(d6, 1080)                    # 2%/mo × 9000 × 6 = 1080
-        self.assertEqual(d3, 540)                     # 3 months writes down half as much
-        self.assertGreater(d6, d3)                    # tenure changes the write-down
-        self.assertIn("/mo", e6)
-        self.assertIn("6 mo", e6)
+    def test_governed_rate_overrides_default_effective_dated(self):
+        self.pol.set_writedown_rate(2.0, effective_month="2026-06", actor="k", at="t")
+        self.assertEqual(self.pol.writedown_monthly_rate("2026-07")[0], 2.0)     # after effective
+        self.assertEqual(self.pol.writedown_monthly_rate("2026-05")[0], 1.25)    # before -> default
 
-    def test_percent_writedown_unknown_without_tenure(self):
-        self.pol.set_writedown("QX80", 2, kind="percent_icv", actor="k", at="t")
-        d, reason = self.pol.resolve_writedown_dollars("QX80", icv=9000, tenure_months=None)
-        self.assertIsNone(d)                          # a monthly rate needs a tenure — never guessed
-        self.assertIn("tenure", reason)
+    def test_cumulative_uses_invoice_not_icv_no_cap_accrues(self):
+        from elite.loaner.sl_policy import cumulative_writedown, DAYS_PER_MONTH
+        d6, e6, pa = cumulative_writedown(invoice=80000, monthly_rate=1.25, tenure_days=6 * DAYS_PER_MONTH)
+        d12, _, _ = cumulative_writedown(invoice=80000, monthly_rate=1.25, tenure_days=12 * DAYS_PER_MONTH)
+        self.assertEqual(d6, 6000)                    # 1.25%/mo × 80,000 × 6 mo
+        self.assertEqual(d12, 12000)                  # no cap: 12 months writes down twice as much
+        self.assertTrue(pa)                           # daily proration flagged as a planning assumption
+        self.assertIn("invoice", e6)
+        self.assertNotIn("ICV", e6)
 
-    def test_percent_writedown_unknown_when_icv_missing(self):
-        self.pol.set_writedown("QX80", 2, kind="percent_icv", actor="k", at="t")
-        d, reason = self.pol.resolve_writedown_dollars("QX80", icv=None, tenure_months=6)
-        self.assertIsNone(d)                          # cannot resolve a % without the ICV basis — never guessed
-        self.assertIn("ICV", reason)
+    def test_changing_icv_cannot_alter_writedown(self):
+        from elite.loaner.sl_policy import cumulative_writedown
+        a = cumulative_writedown(invoice=50000, monthly_rate=1.25, tenure_days=90)[0]
+        b = cumulative_writedown(invoice=50000, monthly_rate=1.25, tenure_days=90)[0]
+        self.assertEqual(a, b)                        # write-down is invoice-based; ICV is not an input at all
+
+    def test_partial_month_daily_proration(self):
+        from elite.loaner.sl_policy import cumulative_writedown, DAYS_PER_MONTH
+        half = cumulative_writedown(invoice=60000, monthly_rate=1.25, tenure_days=DAYS_PER_MONTH / 2)[0]
+        full = cumulative_writedown(invoice=60000, monthly_rate=1.25, tenure_days=DAYS_PER_MONTH)[0]
+        self.assertEqual(full, 750)                   # 1.25% of 60,000
+        self.assertEqual(half, 375)                   # half a month -> half the write-down (daily proration)
+
+    def test_missing_invoice_fails_closed(self):
+        from elite.loaner.sl_policy import cumulative_writedown
+        d, reason, pa = cumulative_writedown(invoice=None, monthly_rate=1.25, tenure_days=90)
+        self.assertIsNone(d)                          # never substitute MSRP/ICV/estimate
+        self.assertIn("invoice", reason)
 
     def test_protection_buffer_is_days_and_separate(self):
         self.pol.set_protection_buffer_days(21, actor="k", at="t")
         self.assertEqual(self.pol.protection_buffer_days(), 21)
         self.assertEqual(release_timing_buffer_days(self.p.app, SCOPE), 21)
-        # the buffer is NOT one of the dollar placement gates
         gate_keys = {g.key for g in phase4_gates(self.p.app, SCOPE)}
-        self.assertNotIn("buffer", gate_keys)
+        self.assertNotIn("buffer", gate_keys)         # DAYS never a dollar placement gate
 
-    def test_readiness_writedown_gate_flips(self):
-        g0 = {g.key: g.present for g in phase4_gates(self.p.app, SCOPE)}
-        self.assertFalse(g0["writedown"])
-        self.pol.set_writedown("QX60", 3000, kind="amount", actor="k", at="t")
-        g1 = {g.key: g.present for g in phase4_gates(self.p.app, SCOPE)}
-        self.assertTrue(g1["writedown"])
+    def test_per_vin_invoice_override(self):
+        self.pol.set_invoice("5N1AZ2CS0PC900001", 55000, actor="k", at="t")
+        self.assertEqual(self.pol.invoice_for_vin("5n1az2cs0pc900001"), 55000)   # normalized
+        self.assertIsNone(self.pol.invoice_for_vin("OTHER"))
 
 
 class TestBuildAndSourcing(unittest.TestCase):
@@ -127,70 +138,69 @@ class TestBuildAndSourcing(unittest.TestCase):
     def tearDown(self):
         self.p.close()
 
-    def _prep(self, qx80_wd=9000, qx60_wd=3000):
+    def _prep(self):
         from elite.loaner.program_inputs import ProgramInputsStore
         pis = ProgramInputsStore(self.app.prefs, SCOPE)
         for model, icv in (("QX80", 9000), ("QX60", 6500)):
             pis.add("icv", effective_month="2026-01", model=model, value=icv, actor="k", recorded_at="t")
             pis.add("velocity", effective_month="2026-01", model=model, value=2500, actor="k", recorded_at="t")
-        pol = SLPolicyStore(self.app.prefs, SCOPE)
-        pol.set_writedown("QX80", qx80_wd, kind="amount", actor="k", at="t")
-        pol.set_writedown("QX60", qx60_wd, kind="amount", actor="k", at="t")
+        SLPolicyStore(self.app.prefs, SCOPE).set_projected_tenure_months(6, actor="k", at="t")  # default rate 1.25
 
-    def _ctx(self, cands, gross):
-        return [patch("elite.loaner.unit_econ.read_new_retail_units", return_value=[{"i": i} for i in range(len(cands))]),
+    def _ctx(self, cands, gross, invoices):
+        rows = [{"invoice": inv} for inv in invoices]
+        return [patch("elite.loaner.unit_econ.read_new_retail_units", return_value=rows),
                 patch("elite.loaner.unit_econ.certified_harm_index", return_value={}),
                 patch("elite.loaner.unit_econ._to_candidate", side_effect=list(cands)),
                 patch("elite.loaner.unit_econ._used_gross_by_model", return_value=gross)]
 
-    def test_ranking_qx60_over_qx80(self):
+    def test_ranking_qx60_over_qx80_by_invoice_writedown(self):
+        # QX80 has the pricier invoice -> larger cumulative write-down -> lower net, so QX60 ranks first
         ctx = self._ctx([_cand("S80", "QX80", "2026"), _cand("S60", "QX60", "2026")],
-                        {"QX80": 3500, "QX60": 3000})
+                        {"QX80": 3500, "QX60": 3000}, invoices=[100000, 50000])
         with ctx[0], ctx[1], ctx[2], ctx[3]:
             res = build_placement_econ(self.app, SCOPE, "2026-01", n=2)
         self.assertEqual([i["econ"].model for i in res["ranked"]], ["QX60", "QX80"])
 
+    def test_missing_invoice_excludes_unit(self):
+        ctx = self._ctx([_cand("A", "QX60", "2026")], {"QX60": 3000}, invoices=[None])
+        with ctx[0], ctx[1], ctx[2], ctx[3]:
+            res = build_placement_econ(self.app, SCOPE, "2026-01", n=1)
+        self.assertFalse(res["have_economics"])       # write-down fails closed -> economics incomplete
+        self.assertTrue(any("Write-down" in " ".join(e["missing"]) for e in res["excluded"]))
+
     def test_sourcing_places_from_surplus_orders_the_rest(self):
-        # need 3 QX60; only 2 QX60 surplus units are economically placeable -> place 2, ORDER 1
         cands = [_cand("A", "QX60", "2026"), _cand("B", "QX60", "2026")]
-        ctx = self._ctx(cands, {"QX60": 3000})
+        ctx = self._ctx(cands, {"QX60": 3000}, invoices=[50000, 50000])
         with ctx[0], ctx[1], ctx[2], ctx[3]:
             sp = sourcing_plan(self.app, SCOPE, "2026-01", {"QX60": 3})
         ms = sp["by_model"]["QX60"]
-        self.assertEqual(ms.place_count, 2)           # 2 sourced from existing surplus (not ordered)
-        self.assertEqual(ms.order_count, 1)           # only 1 ordered specifically for Service Loaner
+        self.assertEqual(ms.place_count, 2)
+        self.assertEqual(ms.order_count, 1)
         self.assertFalse(ms.unresolved)
 
     def test_tenure_changes_placement_economics_via_scenario(self):
-        # monthly % write-down: a longer scenario tenure writes down more, lowering net — recomputed live,
-        # and the scenario NEVER overwrites official policy.
-        pol = SLPolicyStore(self.app.prefs, SCOPE)
-        pol.set_writedown("QX60", 2, kind="percent_icv", actor="k", at="t")   # 2%/month, official
         cands3 = [_cand("A", "QX60", "2026")]
         cands6 = [_cand("A", "QX60", "2026")]
-        with patch("elite.loaner.unit_econ.read_new_retail_units", return_value=[{"i": 0}]), \
-             patch("elite.loaner.unit_econ.certified_harm_index", return_value={}), \
-             patch("elite.loaner.unit_econ._to_candidate", side_effect=cands3), \
-             patch("elite.loaner.unit_econ._used_gross_by_model", return_value={"QX60": 3000}):
+        base = dict(certified=patch("elite.loaner.unit_econ.certified_harm_index", return_value={}),
+                    gross=patch("elite.loaner.unit_econ._used_gross_by_model", return_value={"QX60": 3000}))
+        with patch("elite.loaner.unit_econ.read_new_retail_units", return_value=[{"invoice": 50000}]), \
+             base["certified"], patch("elite.loaner.unit_econ._to_candidate", side_effect=cands3), base["gross"]:
             r3 = build_placement_econ(self.app, SCOPE, "2026-01", n=1, scenario={"tenure_months": 3})
-        with patch("elite.loaner.unit_econ.read_new_retail_units", return_value=[{"i": 0}]), \
+        with patch("elite.loaner.unit_econ.read_new_retail_units", return_value=[{"invoice": 50000}]), \
              patch("elite.loaner.unit_econ.certified_harm_index", return_value={}), \
              patch("elite.loaner.unit_econ._to_candidate", side_effect=cands6), \
              patch("elite.loaner.unit_econ._used_gross_by_model", return_value={"QX60": 3000}):
             r6 = build_placement_econ(self.app, SCOPE, "2026-01", n=1, scenario={"tenure_months": 6})
-        net3 = r3["all_econ"][0].net()
-        net6 = r6["all_econ"][0].net()
-        self.assertGreater(net3, net6)                # longer tenure -> more write-down -> lower net
-        self.assertIsNone(pol.projected_tenure_months())  # scenario did NOT overwrite official policy
+        self.assertGreater(r3["all_econ"][0].net(), r6["all_econ"][0].net())   # longer tenure -> lower net
+        self.assertEqual(SLPolicyStore(self.app.prefs, SCOPE).projected_tenure_months(), 6)  # official unchanged
 
     def test_sourcing_unresolved_when_economics_absent_orders_full(self):
-        SLPolicyStore(self.app.prefs, SCOPE).clear_writedown("QX60")   # break economics readiness
-        ctx = self._ctx([_cand("A", "QX60", "2026")], {})              # no gross either
+        ctx = self._ctx([_cand("A", "QX60", "2026")], {}, invoices=[None])   # no gross, no invoice
         with ctx[0], ctx[1], ctx[2], ctx[3]:
             sp = sourcing_plan(self.app, SCOPE, "2026-01", {"QX60": 3})
         ms = sp["by_model"]["QX60"]
-        self.assertTrue(ms.unresolved)                # cannot assess split -> conservative
-        self.assertEqual(ms.order_count, 3)           # order the full requirement, never under-order Retail
+        self.assertTrue(ms.unresolved)
+        self.assertEqual(ms.order_count, 3)
         self.assertEqual(ms.place_count, 0)
 
 

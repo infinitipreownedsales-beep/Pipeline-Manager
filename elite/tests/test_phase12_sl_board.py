@@ -128,17 +128,16 @@ class TestPolicyStore(unittest.TestCase):
     def tearDown(self):
         self.p.close()
 
-    def test_set_get_and_explicit_zero(self):
-        self.pol.set_writedown("qx60", 0, kind="amount", actor="k", at="t")   # a real $0 policy
-        d, _ = self.pol.resolve_writedown_dollars("QX60", icv=6500)
-        self.assertEqual(d, 0)                                     # 0, not None
-        self.assertIsNone(self.pol.writedown_spec("QX80"))        # unset stays UNKNOWN, never 0
-        self.pol.set_protection_buffer_days(21, actor="k", at="t")  # DAYS, a separate dimension
+    def test_rate_default_and_governed_override(self):
+        self.assertEqual(self.pol.writedown_monthly_rate()[0], 1.25)          # governed default
+        self.pol.set_writedown_rate(1.5, effective_month="2026-01", actor="k", at="t")
+        self.assertEqual(self.pol.writedown_monthly_rate("2026-02")[0], 1.5)  # governed value wins
+        self.pol.set_protection_buffer_days(21, actor="k", at="t")            # DAYS, a separate dimension
         self.assertEqual(self.pol.protection_buffer_days(), 21)
 
-    def test_blank_rejected(self):
+    def test_blank_rate_rejected(self):
         with self.assertRaises(ValueError):
-            self.pol.set_writedown("QX60", "", kind="amount", actor="k", at="t")
+            self.pol.set_writedown_rate("", effective_month="2026-01", actor="k", at="t")
 
 
 if __name__ == "__main__":

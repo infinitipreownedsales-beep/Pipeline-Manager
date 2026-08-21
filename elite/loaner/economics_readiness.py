@@ -95,15 +95,19 @@ def phase4_gates(app, scope):
     GOVERNED policy store, so entering those policies flips the gate to present."""
     icv_ok, vel_ok, icv_st, vel_st = _coverage_state(app, scope)
     used_ok = _used_evidence_defensible(app, scope)
+    # The write-down RATE policy is always available (governed default 1.25%/mo of invoice); the per-UNIT
+    # invoice is the fail-closed component, handled in the economics per unit — not a global gate.
     try:
         from .sl_policy import SLPolicyStore
-        pol = SLPolicyStore(app.prefs, scope)
-        wd = bool(pol.all_writedowns())          # at least one model's write-down policy recorded
+        rate, rsrc = SLPolicyStore(app.prefs, scope).writedown_monthly_rate()
+        wd, wd_detail = True, f"{rsrc} of original invoice (per-unit invoice fails closed when missing)"
     except Exception:   # noqa: BLE001
-        wd = False
-    return assess_gates(icv_complete=icv_ok, velocity_complete=vel_ok, used_evidence_defensible=used_ok,
-                        writedown_present=wd,
-                        icv_detail=f"ICV coverage {icv_st}", velocity_detail=f"Velocity coverage {vel_st}")
+        wd, wd_detail = False, "policy unavailable"
+    gates = assess_gates(icv_complete=icv_ok, velocity_complete=vel_ok, used_evidence_defensible=used_ok,
+                         writedown_present=wd, icv_detail=f"ICV coverage {icv_st}",
+                         velocity_detail=f"Velocity coverage {vel_st}")
+    return [g if g.key != "writedown" else Gate(g.key, "Governed write-down rate (of invoice)", wd, wd_detail)
+            for g in gates]
 
 
 def release_timing_buffer_days(app, scope):
