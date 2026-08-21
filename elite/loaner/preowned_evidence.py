@@ -173,42 +173,64 @@ def active_fleet_models(conn, scope):
     return out
 
 
+# Governed allowlist of AUTHORITATIVE model-year headers for the Service-Loaner fleet export. Explicit only —
+# a bare, unrelated "year" column is deliberately NOT accepted for this contract (it could be a snapshot/order
+# year), so an unrelated year-like field can never be silently read as the model year. Extend this list only
+# when a header is governed as authoritative for THIS source.
+MODEL_YEAR_SOURCE_HEADERS = ("model_year", "Model Year", "Model_Year", "MY", "modelYear")
+
+
+def _norm_model_year(v):
+    """A source cell -> a 4-digit model year, or None when it does not cleanly represent one (fail closed).
+    Accepts an integer-like '2026' or a float-like '2026.0'; rejects '26', '20260', '20xx', '2026-QX60'."""
+    s = str(v or "").strip()
+    if not s:
+        return None
+    head = s.split(".")[0].strip()          # '2026.0' -> '2026'; '2026' unchanged
+    return head if (head.isdigit() and len(head) == 4) else None
+
+
 def active_fleet_model_years(conn, scope):
-    """(vin -> MODEL YEAR, 4-digit string) for the authoritative active fleet, from the latest completed loaner
-    snapshot. Reads whatever model-year column the real export carries (model_year / year / MY / 'model year')
-    verbatim — never inferred from a VIN or model code. Read-only; {} when unavailable."""
+    """(resolved: {vin: 'YYYY'}, conflicts: {vin: reason}) for the authoritative active fleet, from the latest
+    completed loaner snapshot. GOVERNED and FAIL-CLOSED:
+
+      * only MODEL_YEAR_SOURCE_HEADERS are read — an unrelated 'year'-like column never matches;
+      * a value must normalise to exactly one 4-digit year; a malformed candidate FAILS CLOSED;
+      * two candidate columns disagreeing FAILS CLOSED (ambiguity is never silently resolved);
+      * MY is never inferred from a VIN or a model code.
+
+    A conflicted/malformed unit is absent from `resolved` (stays UNKNOWN downstream) and named in `conflicts`
+    for data-health. Read-only."""
     active_vins = {r[0] for r in conn.execute(
         "SELECT vin FROM service_loaner_unit WHERE store_scope=? AND superseded_by IS NULL "
         "AND active_fleet_presence=1 AND vin IS NOT NULL", (scope,)).fetchall()}
+    resolved, conflicts = {}, {}
     if not active_vins:
-        return {}
+        return resolved, conflicts
     batch = conn.execute(
         "SELECT id FROM import_batch WHERE source_id='src_p11_service_loaner_fleet' AND store_scope=? "
         "AND lifecycle_status='completed' ORDER BY received_at DESC, id DESC LIMIT 1", (scope,)).fetchone()
-    out = {}
     if not batch:
-        return out
-    cand_keys = ("model_year", "year", "MY", "my", "Model Year", "Model_Year", "modelYear")
+        return resolved, conflicts
     for obs in conn.execute("SELECT raw_values FROM source_observation WHERE import_batch_id=? "
                             "AND acceptance_status='accepted'", (batch[0],)).fetchall():
         raw = _json(obs[0])
         vin = str(raw.get("vin") or "").strip().upper()
         if vin not in active_vins:
             continue
-        val = None
-        for k in cand_keys:
-            if raw.get(k) not in (None, ""):
-                val = raw.get(k)
-                break
-        if val is None:                                    # last resort: any key whose normalised name is year-ish
-            for k, v in raw.items():
-                if str(k).strip().lower().replace("_", " ") in ("model year", "year", "my") and v not in (None, ""):
-                    val = v
-                    break
-        my = "".join(ch for ch in str(val or "") if ch.isdigit())[:4]
-        if len(my) == 4:
-            out[vin] = my
-    return out
+        present = {k: raw.get(k) for k in MODEL_YEAR_SOURCE_HEADERS if str(raw.get(k) or "").strip() != ""}
+        if not present:
+            continue                                     # MY genuinely absent -> stays UNKNOWN (honest)
+        norm = {k: _norm_model_year(v) for k, v in present.items()}
+        malformed = [k for k, nv in norm.items() if nv is None]
+        distinct = {nv for nv in norm.values() if nv is not None}
+        if malformed:
+            conflicts[vin] = f"malformed model-year value in column(s) {sorted(malformed)}"
+        elif len(distinct) > 1:
+            conflicts[vin] = f"conflicting model-year columns {sorted(present)} = {sorted(distinct)}"
+        elif len(distinct) == 1:
+            resolved[vin] = next(iter(distinct))
+    return resolved, conflicts
 
 
 def latest_retail_rows(conn, scope):

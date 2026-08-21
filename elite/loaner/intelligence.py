@@ -237,7 +237,7 @@ def build_intelligence(conn, scope, prefs, clock):
     pe = build_preowned_evidence(conn, scope)          # A: composition + DTS + sample depth
     vin_model = active_fleet_models(conn, scope)
     from .preowned_evidence import active_fleet_model_years
-    vin_my = active_fleet_model_years(conn, scope)      # authoritative MY per unit (never inferred)
+    vin_my, my_conflicts = active_fleet_model_years(conn, scope)   # authoritative MY (governed, fail-closed)
     retail_rows, as_of = latest_retail_rows(conn, scope)
     retail_loaded = bool(as_of)
 
@@ -325,6 +325,10 @@ def build_intelligence(conn, scope, prefs, clock):
         if mi.active_units and not any(c.gated for c in mi.resale_years) and not (mi.resale_model and mi.resale_model.gated):
             attention.append(Attention("no_resale_sample",
                                        f"{mi.model} — no defensible recorded-resale sample yet (evidence Thin)"))
+    # governed model-year source conflicts (ambiguous/malformed) — surfaced, never silently resolved
+    for cvin, reason in (my_conflicts or {}).items():
+        attention.append(Attention("model_year_conflict",
+                                   f"{cvin[-6:]} — model year unresolved: {reason}", None, cvin))
 
     meta = MetaPrefs(prefs, scope)
     return LoanerIntel(
