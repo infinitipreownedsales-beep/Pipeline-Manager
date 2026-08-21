@@ -191,6 +191,76 @@ def _fleet_position_card(app, scope):
             + '<p style="margin-top:6px"><a href="/ordering/sl-requirements">Open planning &amp; directives →</a></p></div>')
 
 
+_OUTCOME_BADGE = {
+    "ECONOMICALLY_RECOMMENDED": ("healthy", "economically recommended"),
+    "OPERATIONALLY_SAFE_ECON_INCOMPLETE": ("pending", "operationally safe · economics pending"),
+    "DO_NOT_PLACE": ("attention", "do not place"),
+    "UNRESOLVED": ("unresolved", "unresolved"),
+}
+
+
+def _sequential_placement_card(app, scope, add_n):
+    """The sequential portfolio answer to 'add N loaners': pick the best placement, recompute Retail coverage,
+    pick the next — with per-step outcome, human Why, a VIN/stock identity, provisional economics (Proof), the
+    Retail state left behind, the units that must NOT be pulled, and the remaining quantity to ORDER."""
+    if not add_n:
+        return ""
+    from ...loaner.sl_optimizer import optimize_sl_placement
+    from ...ordering.cross_domain import committed_vins
+    from ...clock import to_utc_iso
+    month = to_utc_iso(app.stack.clock.now())[:7]
+    try:
+        committed = frozenset(committed_vins(_conn(app), scope, app.prefs).keys())
+        res = optimize_sl_placement(app, scope, month, add_n, loaner_vins=committed)
+    except Exception:   # noqa: BLE001 — placement must never break the board
+        return ""
+    if not res.get("loaded"):
+        return ('<div class="card"><h2>What to do — add ' + esc(str(add_n)) + ' Service Loaners</h2>'
+                + empty("No New-Retail inventory snapshot is loaded yet — load Inventory in Data. No candidates "
+                        "are invented.") + '</div>')
+    head = ('<div class="card"><h2>What to do — add ' + esc(str(add_n)) + ' Service Loaners '
+            '<span class="badge">sequential portfolio</span></h2>'
+            '<p class="muted" style="font-size:12px">Each placement is chosen, then Retail coverage is '
+            'recomputed before the next — so a unit that would push its combination into a Retail shortage is '
+            'NOT pulled. Economics are provisional until the write-down treatment is governed, so no placement '
+            'is yet an economic certification.</p>')
+    rows = []
+    for st in res["steps"]:
+        vin_cell = (esc(st.vin[-8:]) if st.vin_authoritative and st.vin else safe(badge("unresolved", "no VIN")))
+        tone, label = _OUTCOME_BADGE.get(st.outcome, ("pending", st.outcome))
+        proof = kv([(f"{t.label} ({t.role})",
+                     safe(("Unknown" if t.value is None else f"${int(t.value):,}")
+                          + (f' <span class="muted" style="font-size:12px">{esc(t.source)}</span>'
+                             if t.source and any(c in t.source for c in "×%") else '')))
+                    for t in st.econ_terms]
+                   + ([("Provisional net", f"${st.net:,.0f}")] if st.net is not None else [])) if st.econ_terms \
+            else safe('<p class="muted" style="font-size:12px">Economics not computable — required inputs missing.</p>')
+        rows.append([esc(str(st.rank)), esc(st.stock or "—"), vin_cell,
+                     esc((st.model_year + " " if st.model_year else "") + st.identity),
+                     safe(badge(tone, label)), esc(st.retail_after.title()),
+                     safe(f'<span class="muted">{esc(st.why)}</span> ' + disclosure("Proof", proof))])
+    body = [head]
+    if rows:
+        body.append(table(["#", "Stock", "VIN", "Vehicle", "Outcome", "Retail after", "Why / Proof"], rows))
+    else:
+        body.append(empty("No unit can be safely placed from current surplus."))
+    if res["remaining_to_order"]:
+        body.append('<div class="callout"><strong>Order ' + esc(str(res["remaining_to_order"]))
+                    + ' specifically for Service Loaner.</strong> Only ' + esc(str(res["placed"])) + ' of '
+                    + esc(str(res["requested"])) + ' can be safely placed from existing Retail surplus; the '
+                    'remaining ' + esc(str(res["remaining_to_order"])) + ' become a Service-Loaner ORDER '
+                    'obligation (Retail demand unchanged). <a href="/ordering/sl-requirements">Record it</a>.</div>')
+    dnp = [x for x in res["rejected"] if x["outcome"] == "DO_NOT_PLACE"]
+    if dnp:
+        body.append(disclosure(f"Do NOT pull ({len(dnp)}) — would harm Retail",
+                               table(["Vehicle", "Stock", "Why"],
+                                     [[esc(x["identity"]), esc(x["stock"] or "—"), esc(x["why"])] for x in dnp])))
+    if res.get("sequential_diverges_from_static"):
+        body.append('<p class="muted" style="font-size:12px">Note: a naive top-N of the static shortlist would '
+                    'have over-placed here — the sequential recompute stopped at the real surplus.</p>')
+    return "".join(body) + '</div>'
+
+
 def _economic_ranking_card(app, scope, add_n):
     """When the authoritative economic inputs exist, this is the REAL answer to 'which N should we place' —
     ranked by total-dealership net (via the certified ideal_mix), with a human Why and a per-term Proof. Units
@@ -343,6 +413,8 @@ def _loaner_command_body(app, s, intel, placement, add_n):
                  'lose least value as loaners, and whether any should be ordered instead of pulled from Retail) is '
                  'reserved for Phase-4 authoritative economics — not guessed. Missing inputs before it can run:'
                  + _phase4_gates_html(app, s.scope) + '</div></div>')
+    # ---- WHAT TO DO: the sequential portfolio answer (primary), recomputing Retail coverage per placement ----
+    parts.append(_sequential_placement_card(app, s.scope, add_n))
     parts.append("".join(board))
 
     # ---- ECONOMIC PLACEMENT RANKING (only when authoritative economics exist; else the fallback above) ----

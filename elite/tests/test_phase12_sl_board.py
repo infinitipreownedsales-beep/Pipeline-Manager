@@ -87,6 +87,37 @@ class TestEconomicRankingSurface(unittest.TestCase):
         self.assertLess(b.index("2026 QX60 LUXE AWD"), b.index("2026 QX80 LUXE AWD"))  # QX60 ranked above QX80
 
 
+class TestSequentialCardSurface(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.p = Phase10(os.path.join(self.tmp, "elite.db"))
+        self.full = self.p.login(self.p.op_full)
+
+    def tearDown(self):
+        self.p.close()
+
+    def test_board_shows_sequential_answer(self):
+        from unittest.mock import patch
+        from elite.loaner.sl_optimizer import PlacementStep, OPS_SAFE
+        step = PlacementStep(rank=1, unit_id="V1", stock="S1", vin="5N1AZ2CS0PC900001", vin_authoritative=True,
+                             identity="QX60 LUXE AWD", model="QX60", model_year="2026", outcome=OPS_SAFE,
+                             provisional=True, net=8500.0, econ_terms=(), retail_after="COVERED",
+                             why="Operationally safe — surplus protects Retail coverage.")
+        res = {"loaded": True, "requested": 3, "placed": 1, "remaining_to_order": 2, "steps": [step],
+               "rejected": [{"identity": "QX80 SPORT", "stock": "S9", "model": "QX80", "outcome": "DO_NOT_PLACE",
+                             "why": "Placing this would reduce New-Retail coverage below plan — protected."}],
+               "sequential_diverges_from_static": True, "economics_certifiable": False}
+        import elite.tests.test_phase12_loaner_intelligence as INTEL
+        with patch("elite.loaner.intelligence.build_intelligence", return_value=INTEL._fake_intel()), \
+             patch("elite.loaner.sl_optimizer.optimize_sl_placement", return_value=res):
+            b = self.full.get("/service-loaner", add="3").body
+        self.assertIn("What to do — add 3 Service Loaners", b)
+        self.assertIn("sequential portfolio", b)
+        self.assertIn("Order 2 specifically for Service Loaner", b)   # remaining-to-order obligation
+        self.assertIn("Do NOT pull", b)                               # protected units surfaced
+        self.assertIn("PC900001", b)                                  # authoritative VIN tail
+
+
 class TestPolicyStore(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
