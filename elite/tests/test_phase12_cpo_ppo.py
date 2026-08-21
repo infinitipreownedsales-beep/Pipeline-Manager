@@ -78,9 +78,9 @@ class TestCpoPpo(unittest.TestCase):
         combo_id = self.conn.execute("SELECT id FROM sellable_combination WHERE canonical_identity LIKE ?",
                                      ("%model_code=8501|%",)).fetchone()["id"]
         self.full.post("/ordering/cpo/line", {"month": self.m, "combo": combo_id, "state": "confirmed"})
-        self.assertIn("Confirmed", self.full.get("/ordering/cpo", month=self.m).body)
+        self.assertIn("Ordered", self.full.get("/ordering/cpo", month=self.m).body)   # quantity-named confirm chip
         self.full.post("/ordering/cpo/line", {"month": self.m, "combo": combo_id, "state": "clear"})
-        self.assertNotIn("Confirmed", self.full.get("/ordering/cpo", month=self.m).body)
+        self.assertNotIn("Ordered", self.full.get("/ordering/cpo", month=self.m).body)
 
     def test_open_capacity_when_allocation_exceeds_justified(self):
         # QX65 has 1 justified combo; allocate 4 -> 3 intentionally open with a Why

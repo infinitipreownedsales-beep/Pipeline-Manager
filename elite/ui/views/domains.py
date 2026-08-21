@@ -235,14 +235,19 @@ def _unit_actions_card(app, scope, intel):
             second = max((v for k, v in nets.items() if k != d["action"]), default=None)
             if second is not None:
                 adv = f"${nets[d['action']] - second:,.0f}"
-        vel = ("preserved" if c["velocity_now"] or c["velocity_future"] else "at risk / forfeited")
+        vel = ("unknown" if f.get("velocity") is None
+               else "preserved" if c["velocity_now"] or c["velocity_future"] else "at risk / forfeited")
         rel = (f.get("release") or {}).get("release_by", "—") if f.get("release") else "—"
+        # unknown program values render as "—" (never a misleading $0); real computed zeros show $0
+        vel_cell = ("Unknown" if f.get("velocity") is None
+                    else f"{_money(c['velocity_now'])} / {_money(c['velocity_future'])}")
+        icv_cell = "Unknown" if f.get("icv") is None else _money(c["icv_earned_sunk"])
         proof = kv([("Adjusted basis now", _money(c["adjusted_basis_now"])),
                     ("Cumulative write-down now", _money(c["cumulative_write_down_now"])),
                     ("Front-end gross now", _money(c["front_end_gross_now"])),
                     ("Front-end gross if kept", _money(c["front_end_gross_future"])),
-                    ("Velocity (contingent) now / future", f"{_money(c['velocity_now'])} / {_money(c['velocity_future'])}"),
-                    ("ICV earned (sunk — not in delta)", _money(c["icv_earned_sunk"])),
+                    ("Velocity (contingent) now / future", vel_cell),
+                    ("ICV earned (sunk — not in delta)", icv_cell),
                     ("Expected used price now / future", f"{_money(f['price_now'])} / {_money(f['price_future'])}"),
                     ("Latest prudent release", esc(rel)),
                     ("Missing / gated", esc(", ".join(d["gated"]) or "none")),
