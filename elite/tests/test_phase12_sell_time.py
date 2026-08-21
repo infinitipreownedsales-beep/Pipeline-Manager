@@ -3,7 +3,7 @@ graceful degradation when sparse, no fabricated precision; release backsolves fr
 measured on the actual in-service date."""
 import unittest
 
-from elite.loaner.sell_time import estimate_sell_time, latest_prudent_release, MIN_SAMPLE
+from elite.loaner.sell_time import estimate_sell_time, latest_prudent_release, release_signal, MIN_SAMPLE
 
 
 def _sale(model, year, trim, dts, dr="AWD"):
@@ -63,6 +63,22 @@ class TestReleaseBacksolve(unittest.TestCase):
         longer = latest_prudent_release(in_service_date="2026-02-10", total_to_retail_days=240,
                                         expected_sell_time_days=60, process_buffer_days=20)["release_by"]
         self.assertLess(longer, base)                          # more sell time -> release sooner
+
+
+class TestReleaseSignal(unittest.TestCase):
+    def test_keep_runway(self):
+        self.assertEqual(release_signal("2026-05-01", "2026-08-04")["signal"], "KEEP_RUNWAY")
+
+    def test_release_due_within_window(self):
+        r = release_signal("2026-07-25", "2026-08-04")
+        self.assertEqual(r["signal"], "RELEASE_DUE")
+        self.assertEqual(r["days_to_release"], 10)
+
+    def test_release_overdue(self):
+        self.assertEqual(release_signal("2026-09-01", "2026-08-04")["signal"], "RELEASE_OVERDUE")
+
+    def test_unknown_when_no_release(self):
+        self.assertEqual(release_signal("2026-05-01", None)["signal"], "UNKNOWN")
 
 
 if __name__ == "__main__":

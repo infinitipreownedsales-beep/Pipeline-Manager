@@ -116,3 +116,28 @@ def latest_prudent_release(*, in_service_date, total_to_retail_days, expected_se
             "total_to_retail_days": int(total_to_retail_days),
             "expected_sell_time_days": round(expected_sell_time_days, 1),
             "process_buffer_days": int(process_buffer_days)}
+
+
+def release_signal(today, release_by, *, due_window_days=14):
+    """The OPERATIONAL keep-vs-release signal for an active loaner from its latest-prudent-release date. This
+    is the unambiguous, timing-only half of the KEEP/PULL decision — the full economic KEEP/PULL/SWAP net is
+    gated on the write-down accounting basis and is NOT decided here.
+
+      KEEP_RUNWAY     — comfortably before the release-by date
+      RELEASE_DUE     — within the due window of release-by (act soon to protect the deadline)
+      RELEASE_OVERDUE — past release-by; the total-to-retail deadline is at risk
+      UNKNOWN         — the backsolve could not be computed (missing authoritative input)
+    """
+    if not release_by or not today:
+        return {"signal": "UNKNOWN", "days_to_release": None}
+    try:
+        d = (_dt.date.fromisoformat(str(release_by)[:10]) - _dt.date.fromisoformat(str(today)[:10])).days
+    except (ValueError, TypeError):
+        return {"signal": "UNKNOWN", "days_to_release": None}
+    if d < 0:
+        sig = "RELEASE_OVERDUE"
+    elif d <= due_window_days:
+        sig = "RELEASE_DUE"
+    else:
+        sig = "KEEP_RUNWAY"
+    return {"signal": sig, "days_to_release": d}
