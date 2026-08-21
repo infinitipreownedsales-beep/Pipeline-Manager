@@ -92,7 +92,7 @@ class TestCpoMonthMemory(unittest.TestCase):
         self.assertEqual(_cur(remembered), "October 2026")
         self.assertEqual(_cur(explicit), "October 2026")
         for body in (remembered, explicit):
-            self.assertIn('<span class="rcall">ORDER 1</span>', body)  # certified discrete ORDER-now == 1
+            self.assertIn('<span class="rcall">ORDER 1 VEHICLE</span>', body)  # certified ORDER-now == 1
         self.assertEqual(current_version(self.conn), 12)               # schema untouched
 
 

@@ -117,7 +117,7 @@ class TestCpoMonthRoute(unittest.TestCase):
         far = self._select_month(FAR)
         # locate the QBE/G uniform row and read its ORDER call (worst month shortage is 9). In the recrow the
         # call precedes the identity, and both live in the SAME row (no intervening 'recrow').
-        card = re.search(r'<span class="rcall">ORDER (\d+)</span>(?:(?!recrow).)*?QX60 8481 QBE/G', far, re.S)
+        card = re.search(r'<span class="rcall">ORDER (\d+) VEHICLE</span>(?:(?!recrow).)*?QX60 8481 QBE/G', far, re.S)
         self.assertIsNotNone(card)
         self.assertEqual(card.group(1), "1")               # certified acquire_units, not the month shortage
 

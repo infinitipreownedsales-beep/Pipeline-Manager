@@ -569,6 +569,7 @@ def register(app):
         month = _cpo_resolve_month(app, s, req)
         alloc = _ws_get(app, s.scope, f"cpo_alloc::{month}", {}) or {}
         lines = _ws_get(app, s.scope, f"cpo_line::{month}", {}) or {}
+        qty = _ws_get(app, s.scope, f"cpo_line_qty::{month}", {}) or {}
         board = _acquire_board(app, s.scope, month)
         coverage = _model_coverage(app, s.scope, month)
         pmonths = _plan_months(app, s.scope)     # certified per-plan month rows (for the horizon sparkline)
@@ -624,10 +625,11 @@ def register(app):
             recs = models[mo]
             cap = int(alloc.get(mo, len(recs)) or 0)
             active, nextbest = recs[:cap], recs[cap:]
-            not_ordered_active = sum(1 for b in active if lines.get(b["combo"]) == "not_ordered")
+            stat = {b["combo"]: _cpo_status(lines, qty, b) for b in recs}
+            not_ordered_active = sum(1 for b in active if stat[b["combo"]]["status"] == "not_ordered")
             promoted = nextbest[:not_ordered_active]
             shown = active + promoted
-            worked = sum(1 for b in shown if lines.get(b["combo"]) in ("confirmed", "not_ordered"))
+            worked = sum(1 for b in shown if _cpo_worked(stat[b["combo"]]["status"]))
             remaining = len(shown) - worked
             open_cap = max(0, cap - len(recs))
 
@@ -663,11 +665,11 @@ def register(app):
             # human Why or actions are visible — so the whole allocation is scannable and #4..#N are not
             # subconsciously overlooked. Handled (worked) items collapse into a receded, still-undoable group.
             ranked = list(enumerate(shown, 1))     # (certified rank, rec)
-            unresolved = [(r, b) for r, b in ranked if lines.get(b["combo"]) not in ("confirmed", "not_ordered")]
-            worked = [(r, b) for r, b in ranked if lines.get(b["combo"]) in ("confirmed", "not_ordered")]
+            unresolved = [(r, b) for r, b in ranked if not _cpo_worked(stat[b["combo"]]["status"])]
+            worked = [(r, b) for r, b in ranked if _cpo_worked(stat[b["combo"]]["status"])]
             queue = []
             for i, (r, b) in enumerate(unresolved):
-                queue.append(_cpo_rec_row(s, b, r, lines.get(b["combo"]), month,
+                queue.append(_cpo_rec_row(s, b, r, stat[b["combo"]], month,
                                           promoted=b in promoted, horizon_html=_strip(b), ln=ln))
             if queue:
                 block.append('<div class="queue">' + "".join(queue) + '</div>')
@@ -675,10 +677,10 @@ def register(app):
                 block.append('<p class="muted" style="margin:8px 0">Every recommendation for this model is '
                              'handled — see the worked items below.</p>')
             if worked:
-                n_conf = sum(1 for _r, b in worked if lines.get(b["combo"]) == "confirmed")
+                n_conf = sum(1 for _r, b in worked if stat[b["combo"]]["status"] == "confirmed")
                 n_not = len(worked) - n_conf
                 bits = ([f"{n_conf} confirmed"] if n_conf else []) + ([f"{n_not} not ordering"] if n_not else [])
-                rows = "".join(_cpo_rec_row(s, b, r, lines.get(b["combo"]), month,
+                rows = "".join(_cpo_rec_row(s, b, r, stat[b["combo"]], month,
                                             promoted=b in promoted, horizon_html=_strip(b), ln=ln)
                                for r, b in worked)
                 block.append(work_group(f"Worked — {len(worked)} · {' · '.join(bits)}", safe(rows)))
@@ -731,13 +733,32 @@ def register(app):
         app.require(s, "workspace.view")
         month = req.form.get("month") or _default_month(app)
         combo, state = req.form.get("combo"), req.form.get("state")
+        order = _int_or0(req.form.get("order"))
         lines = _ws_get(app, s.scope, f"cpo_line::{month}", {}) or {}
-        if state in ("confirmed", "not_ordered"):
-            lines[combo] = state
+        qty = _ws_get(app, s.scope, f"cpo_line_qty::{month}", {}) or {}
+        if state == "confirmed":                          # full order secured (idempotent)
+            lines[combo] = "confirmed"
+            qty.pop(combo, None)
+        elif state == "not_ordered":
+            lines[combo] = "not_ordered"
+            qty.pop(combo, None)
+        elif state == "partial":                          # only k of N secured; remainder returns to unresolved
+            k = _int_or0(req.form.get("qty"))
+            lines.pop(combo, None)
+            if k <= 0:
+                qty.pop(combo, None)
+            elif order and k >= order:                    # k>=N is a full confirm, not a partial
+                lines[combo] = "confirmed"
+                qty.pop(combo, None)
+            else:
+                qty[combo] = k
         elif state == "clear":
             lines.pop(combo, None)
+            qty.pop(combo, None)
         _ws_put(app, s.scope, f"cpo_line::{month}", lines)
-        return Response.redirect(f"/ordering/cpo?month={month}")
+        _ws_put(app, s.scope, f"cpo_line_qty::{month}", qty)
+        anchor = f"#combo-{combo}" if combo else ""       # keep the operator's context, not back to the top
+        return Response.redirect(f"/ordering/cpo?month={month}{anchor}")
 
     @app.post("/ordering/cpo/revert")
     def cpo_revert(app, req):
@@ -1337,37 +1358,47 @@ def _cpo_human_why(b, month, ln):
     return " ".join(sent)
 
 
-def _cpo_rec_pieces(s, b, rank, state, month, promoted, ln=None):
-    """Compute the shared parts of a CPO recommendation (identity, hero call, position, human Why + Proof,
-    status chip, action group, resolved flag) ONCE, so every ranked row presents the SAME information and the
-    SAME actions — rank sets order, never how much is visible."""
-    ident = safe(f'<a href="/combination/{esc(b["pid"])}?month={esc(month)}">{esc(b["identity"])}</a>'
+def _cpo_rec_pieces(s, b, rank, st, month, promoted, ln=None):
+    """Compute the shared parts of a CPO recommendation ONCE. Quantity-aware: the ORDER call names the number
+    of VEHICLES so a >1 order cannot be missed, and a partial confirm shows 'k OF n ordered' with the remainder
+    still open. `st` is the _cpo_status dict."""
+    order = st["order"]
+    ident = safe(f'<span id="combo-{esc(b["combo"])}"></span>'
+                 f'<a href="/combination/{esc(b["pid"])}?month={esc(month)}">{esc(b["identity"])}</a>'
                  + (' ' + badge("completed", "promoted") if promoted else ''))
-    call = f'ORDER {b["order"]}'
+    call = f'ORDER {order} {"VEHICLES" if order != 1 else "VEHICLE"}'
     pos = safe(f'Current <strong>{esc(b["current"])}</strong> · By {esc(month)} <strong>{esc(b["future"])}</strong>')
     if b.get("m_present"):
         proof = kv([(f"Projected shortage — {month}", _num(b.get("m_shortage"))),
                     (f"Expected demand — {month}", _num(b.get("m_demand"))),
                     (f"Supply position by {month}", b.get("m_cum_supply")),
                     (f"Confidence — {month}", b.get("m_confidence") or "—"),
-                    ("Order now (certified action)", b["order"])])
+                    ("Order now (certified action)", order)])
     else:
         proof = kv([("Basis", "certified acquire-now decision for this combination"),
                     (f"Planning month {month}", "outside the certified planning horizon for this combination"),
-                    ("Order now (certified action)", b["order"])])
+                    ("Order now (certified action)", order)])
     why_body = safe(f'<p style="margin:2px 0 6px">{esc(_cpo_human_why(b, month, ln))}</p>'
                     + disclosure("Proof — certified figures", proof))
     common = dict(ident=ident, call=call, pos=pos, why_body=why_body, rank=rank)
-    if state == "confirmed":
-        return dict(resolved=True, chip=chip("done", "Confirmed"),
+    status = st["status"]
+    if status == "confirmed":
+        return dict(resolved=True, chip=chip("done", f"Ordered {order} of {order}"),
                     actions=action_group(_line_btn(s, b, "clear", "Undo", "secondary")), **common)
-    if state == "not_ordered":
+    if status == "not_ordered":
         return dict(resolved=True, chip=chip("skip", "Not ordering"),
                     actions=action_group(_line_btn(s, b, "clear", "Undo", "secondary")), **common)
-    actions = action_group(_line_btn(s, b, "confirmed", "Confirm order")
-                           + _line_btn(s, b, "not_ordered", "Not ordering", "secondary")
-                           + _bench_button(s, b["identity"], f"/ordering/cpo?month={month}"))
-    return dict(resolved=False, chip=chip("need", "Needs decision"), actions=actions, **common)
+    if status == "partial":
+        acts = (_line_btn(s, b, "confirmed", f"Confirm remaining {st['remaining']}")
+                + _partial_form(s, b, order, st["ordered"]) + _line_btn(s, b, "clear", "Undo", "secondary"))
+        return dict(resolved=False, chip=chip("attention", f"{st['ordered']} OF {order} ORDERED · {st['remaining']} left"),
+                    actions=action_group(acts), **common)
+    confirm_text = f"Confirm {order} ordered" if order != 1 else "Confirm ordered"
+    acts = _line_btn(s, b, "confirmed", confirm_text)
+    if order > 1:
+        acts += _partial_form(s, b, order)                 # only some secured -> remainder stays unresolved
+    acts += _line_btn(s, b, "not_ordered", "Not ordering", "secondary") + _bench_button(s, b["identity"], f"/ordering/cpo?month={month}")
+    return dict(resolved=False, chip=chip("need", f"Needs decision · order {order}"), actions=action_group(acts), **common)
 
 
 def _combo_horizon(pmonths, pid, window_months, month, current):
@@ -1398,26 +1429,64 @@ def _combo_horizon(pmonths, pid, window_months, month, current):
     return cells
 
 
-def _cpo_rec_row(s, b, rank, state, month, *, promoted=False, horizon_html="", ln=None):
+def _cpo_rec_row(s, b, rank, st, month, *, promoted=False, horizon_html="", ln=None):
     """The ONE CPO recommendation row used at every rank. Compact but information-complete: the ORDER call,
     the position, the certified horizon sparkline shown INLINE (never buried), a human Why, and the full
     action set. Rank determines order only — it never determines how much of this is visible, so #4..#N carry
     exactly the same information as #1 and are not subconsciously overlooked."""
-    p = _cpo_rec_pieces(s, b, rank, state, month, promoted, ln)
+    p = _cpo_rec_pieces(s, b, rank, st, month, promoted, ln)
     pos = safe(p["pos"] + horizon_html) if horizon_html else p["pos"]
     why = disclosure(f"Why #{rank}", p["why_body"])
     return rec_row(rank, p["ident"], p["call"], pos, why, p["actions"],
                    resolved=p["resolved"], chip_html=p["chip"])
 
 
-def _line_btn(s, b, state, text, cls="primary"):
-    from ..render import _js  # noqa
+def _cpo_status(lines, qty, b):
+    """The per-combination workflow status, quantity-aware. order = the certified ORDER-N. A partial confirm
+    (0 < ordered < order) is NOT 'worked' — the remaining quantity returns to the active queue so an ORDER-2
+    can never be silently completed as one."""
+    combo = b["combo"]
+    order = _int_or0(b.get("order"))
+    st = lines.get(combo)
+    if st == "not_ordered":
+        return {"status": "not_ordered", "ordered": 0, "order": order, "remaining": 0}
+    if st == "confirmed":
+        return {"status": "confirmed", "ordered": order, "order": order, "remaining": 0}
+    k = _int_or0(qty.get(combo))
+    if 0 < k < order:
+        return {"status": "partial", "ordered": k, "order": order, "remaining": order - k}
+    if k >= order and order > 0:
+        return {"status": "confirmed", "ordered": order, "order": order, "remaining": 0}
+    return {"status": "open", "ordered": 0, "order": order, "remaining": order}
+
+
+def _cpo_worked(status):
+    return status in ("confirmed", "not_ordered")
+
+
+def _line_btn(s, b, state, text, cls="primary", *, qty=None):
     return (f'<form class="mut" method="post" action="/ordering/cpo/line">'
             f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
             f'<input type=hidden name=month value="{esc(b.get("month", ""))}">'
             f'<input type=hidden name=combo value="{esc(b["combo"])}">'
+            f'<input type=hidden name=order value="{esc(b.get("order", ""))}">'
             f'<input type=hidden name=state value="{esc(state)}">'
-            f'<button type=submit class="{esc(cls)}" style="padding:3px 9px">{esc(text)}</button></form>')
+            + (f'<input type=hidden name=qty value="{esc(qty)}">' if qty is not None else '')
+            + f'<button type=submit class="{esc(cls)}" style="padding:3px 9px">{esc(text)}</button></form>')
+
+
+def _partial_form(s, b, order, ordered=0):
+    """Record that only SOME of an ORDER-N were secured — the remainder returns to unresolved work."""
+    return (f'<form class="mut" method="post" action="/ordering/cpo/line" '
+            'style="display:inline-flex;gap:4px;align-items:center">'
+            f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+            f'<input type=hidden name=month value="{esc(b.get("month", ""))}">'
+            f'<input type=hidden name=combo value="{esc(b["combo"])}">'
+            f'<input type=hidden name=order value="{esc(order)}">'
+            f'<input type=hidden name=state value="partial">'
+            f'<input name=qty type=number min=1 max="{esc(order)}" value="{esc(ordered or 1)}" '
+            'style="width:64px;padding:2px 4px" aria-label="how many ordered">'
+            f'<button type=submit class=secondary style="padding:3px 9px">of {esc(order)} ordered</button></form>')
 
 
 def _int_or0(v):

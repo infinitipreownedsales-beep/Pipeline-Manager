@@ -56,7 +56,7 @@ class TestCpoCockpit(unittest.TestCase):
             self.assertIn(label, b)
         self.assertIn("reviewed", b)                       # work-progress indicator
         self.assertIn('class="recrow', b)                  # uniform recommendation rows, not a table
-        self.assertIn('<span class="rcall">ORDER 1</span>', b)  # the call is present at every rank
+        self.assertIn('<span class="rcall">ORDER 1 VEHICLE</span>', b)  # the call names the quantity at every rank
 
     def test_resolved_cards_recede_and_sort_below_unresolved(self):
         # confirm the #1 (QX60 8481 XKJ/K) -> it leaves the active queue and collapses into the receded,
@@ -65,7 +65,7 @@ class TestCpoCockpit(unittest.TestCase):
                                     ("%model_code=8481|exterior=XKJ|interior=K",)).fetchone()["id"]
         self.full.post("/ordering/cpo/line", {"month": M, "combo": combo_a, "state": "confirmed"})
         b = self._body()
-        self.assertIn("Confirmed", b)                      # status chip
+        self.assertIn("Ordered 1 of 1", b)                 # status chip names the quantity ordered
         self.assertIn("Worked —", b)                       # handled items collapse into a receded group
         self.assertIn("recrow resolved", b)                # the worked item recedes (compact, receded row)
         self.assertIn("Undo", b)                           # completed item remains undoable
@@ -84,7 +84,7 @@ class TestCpoCockpit(unittest.TestCase):
         self._body()
         self.assertEqual(current_version(self.conn), 12)
         # ORDER-now stays certified 1 for every uniform row regardless of month shortage
-        calls = re.findall(r'<span class="rcall">ORDER (\d+)</span>', self._body())
+        calls = re.findall(r'<span class="rcall">ORDER (\d+) VEHICLE', self._body())
         self.assertTrue(calls)
         for m in calls:
             self.assertEqual(m, "1")
