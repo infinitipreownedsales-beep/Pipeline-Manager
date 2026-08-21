@@ -199,6 +199,76 @@ _OUTCOME_BADGE = {
 }
 
 
+_ACTION_TONE = {"KEEP": "healthy", "PULL": "attention", "SWAP": "pending", "UNRESOLVED": "unresolved"}
+
+
+def _unit_actions_card(app, scope, intel):
+    """Concise per-active-unit KEEP / PULL / SWAP / UNRESOLVED recommendation. The economic detail lives in
+    Proof; the operator sees the call, the advantage vs next-best, key facts, and one human Why."""
+    from ...loaner.sl_decision import build_unit_decision
+    from ...clock import to_utc_iso
+    units = [u for u in getattr(intel, "units", ()) if u.vin]
+    if not units:
+        return ""
+    mi_by_model = {(mi.model or "").upper(): mi for mi in getattr(intel, "models", ())}
+    today = to_utc_iso(app.stack.clock.now())[:10]
+    # one economic swap-candidate net (the strongest eligible New-Retail placement), computed once
+    swap_net = None
+    try:
+        from ...loaner.unit_econ import build_placement_econ
+        econ = build_placement_econ(app, scope, today[:7], n=1)
+        if econ.get("have_economics") and econ["all_econ"]:
+            swap_net = econ["all_econ"][0].net()
+    except Exception:   # noqa: BLE001
+        swap_net = None
+    rows = []
+    for u in units:
+        try:
+            d = build_unit_decision(app, scope, u, mi_by_model.get((u.model or "").upper()), today=today,
+                                    swap_candidate_net=swap_net)
+        except Exception:   # noqa: BLE001 — a single unit must never break the board
+            continue
+        c, f = d["components"], d["facts"]
+        nets = d["nets"]
+        adv = "—"
+        if len(nets) >= 2 and d["action"] in nets:
+            second = max((v for k, v in nets.items() if k != d["action"]), default=None)
+            if second is not None:
+                adv = f"${nets[d['action']] - second:,.0f}"
+        vel = ("preserved" if c["velocity_now"] or c["velocity_future"] else "at risk / forfeited")
+        rel = (f.get("release") or {}).get("release_by", "—") if f.get("release") else "—"
+        proof = kv([("Adjusted basis now", _money(c["adjusted_basis_now"])),
+                    ("Cumulative write-down now", _money(c["cumulative_write_down_now"])),
+                    ("Front-end gross now", _money(c["front_end_gross_now"])),
+                    ("Front-end gross if kept", _money(c["front_end_gross_future"])),
+                    ("Velocity (contingent) now / future", f"{_money(c['velocity_now'])} / {_money(c['velocity_future'])}"),
+                    ("ICV earned (sunk — not in delta)", _money(c["icv_earned_sunk"])),
+                    ("Expected used price now / future", f"{_money(f['price_now'])} / {_money(f['price_future'])}"),
+                    ("Latest prudent release", esc(rel)),
+                    ("Missing / gated", esc(", ".join(d["gated"]) or "none")),
+                    ("Nets (PULL / KEEP / SWAP)", esc(" / ".join(f"{k} ${v:,.0f}" for k, v in nets.items()) or "—")),
+                    ("Source", "invoice+write-down basis · front-end gross only (no backend) · maturity evidence")])
+        rows.append([
+            esc((f.get("vin") or "")[-8:]),
+            esc(" ".join(x for x in (f.get("model_year"), f.get("model")) if x)),
+            safe(badge(_ACTION_TONE.get(d["action"], "pending"), d["action"])),
+            esc(adv), _money(c["adjusted_basis_now"]), _money(c["front_end_gross_now"]), esc(vel), esc(rel),
+            esc(d["confidence"]),
+            safe(f'<span class="muted">{esc(d["why"])}</span> ' + disclosure("Proof", proof))])
+    return ('<div class="card"><h2>Recommended action per unit '
+            '<span class="badge">KEEP / PULL / SWAP</span></h2>'
+            '<p class="muted" style="font-size:12px">Incremental from now: already-earned ICV is sunk (shown in '
+            'Proof, not in the delta); Velocity is contingent on the 240-day deadline; write-down counts once in '
+            'the adjusted basis; gross is front-end only. A unit gates to UNRESOLVED when an authoritative input '
+            'is missing.</p>'
+            + table(["VIN", "Vehicle", "Action", "Advantage", "Adj. basis", "Front gross", "Velocity",
+                     "Release by", "Conf.", "Why / Proof"], rows) + '</div>')
+
+
+def _money(v):
+    return "—" if v is None else f"${v:,.0f}"
+
+
 def _sequential_placement_card(app, scope, add_n):
     """The sequential portfolio answer to 'add N loaners': pick the best placement, recompute Retail coverage,
     pick the next — with per-step outcome, human Why, a VIN/stock identity, provisional economics (Proof), the
@@ -419,6 +489,9 @@ def _loaner_command_body(app, s, intel, placement, add_n):
 
     # ---- ECONOMIC PLACEMENT RANKING (only when authoritative economics exist; else the fallback above) ----
     parts.append(_economic_ranking_card(app, s.scope, add_n))
+
+    # ---- PER-UNIT ACTION: KEEP / PULL / SWAP (incremental-from-now; gates cleanly when inputs are missing) ----
+    parts.append(_unit_actions_card(app, s.scope, intel))
 
     # ---- CURRENT FLEET (cascade) ----
     from .program_inputs import ProgramInputsStore

@@ -35,18 +35,26 @@ def _velocity(benefit, preserved):
 
 def compare_actions(*, invoice, monthly_rate, tenure_days_now, keep_extra_days,
                     used_price_now, used_price_future, recon=0,
-                    icv=0, velocity=0, velocity_preserved_now=True, velocity_preserved_future=True,
+                    velocity_contingent=0, velocity_preserved_now=True, velocity_preserved_future=True,
+                    icv_earned=0, icv_clawback_if_pull=0,
                     retail_opportunity_cost=0, swap_candidate_net=None):
-    """Total-dealership net of each action for this slot, and the best. Every term is explicit and each program
-    benefit is counted once. Returns a dict with per-action nets, the chosen action, the components, and any
-    inputs that were missing (which gate the affected action rather than fabricating a value).
+    """Total-dealership net of each action for this slot, computed INCREMENTALLY FROM THE DECISION MOMENT.
+
+    Only future / action-dependent differences drive the choice:
+      * cumulative write-down ALREADY earned is embedded in the current adjusted basis (counted once, never a
+        separate profit line); future incremental write-down under KEEP lowers the future basis (counted once);
+      * ICV already earned is SUNK and COMMON — it is NOT added to any action net (so KEEP cannot "re-earn" it);
+        it is shown in Proof for lifecycle context. `icv_clawback_if_pull` handles the rare case where pulling
+        now would forfeit an otherwise-earned ICV;
+      * Velocity is CONTINGENT on retailing within the 240-day deadline, so it enters each action net only when
+        that action preserves it.
 
     Actions:
-      PULL  — release now, retail the used unit:  front_gross(now) + ICV + Velocity(now)
-      KEEP  — hold longer, then exit:             front_gross(future, lower basis) + ICV + Velocity(future)
+      PULL  — release now, retail the used unit:  front_gross(now) + Velocity(now, contingent) − icv_clawback
+      KEEP  — hold longer, then exit:             front_gross(future, lower basis) + Velocity(future, contingent)
       SWAP  — PULL now AND place the best candidate into the slot: PULL + swap_candidate_net
-    Retail opportunity cost is charged equally to every action that keeps the slot occupied (it is a property
-    of the slot, not the action) and so does not distort the comparison; it is reported for transparency.
+    Retail opportunity cost is a property of the slot (occupied either way) and is reported for transparency,
+    not added asymmetrically. Missing invoice/price gates the affected action rather than fabricating a value.
     """
     missing = []
     if invoice is None:
@@ -55,24 +63,26 @@ def compare_actions(*, invoice, monthly_rate, tenure_days_now, keep_extra_days,
         missing.append("tenure/rate")
 
     def basis(extra):
+        if invoice is None:
+            return None, None
         wd, _e, _pa = cumulative_writedown(invoice=invoice, monthly_rate=monthly_rate,
                                            tenure_days=(tenure_days_now or 0) + extra)
-        return None if wd is None else round(float(invoice) - wd, 2), (wd if wd is not None else None)
+        return (None, None) if wd is None else (round(float(invoice) - wd, 2), wd)
 
-    basis_now, wd_now = basis(0) if invoice is not None else (None, None)
-    basis_future, wd_future = basis(max(0, keep_extra_days or 0)) if invoice is not None else (None, None)
+    basis_now, wd_now = basis(0)
+    basis_future, wd_future = basis(max(0, keep_extra_days or 0))
 
     g_now = expected_front_end_gross(used_price=used_price_now, adjusted_basis=basis_now, recon=recon)
     g_future = expected_front_end_gross(used_price=used_price_future, adjusted_basis=basis_future, recon=recon)
-    icv = float(icv or 0)
 
-    nets, why = {}, {}
+    nets = {}
     if g_now is not None:
-        nets["PULL"] = round(g_now + icv + _velocity(velocity, velocity_preserved_now), 2)
+        nets["PULL"] = round(g_now + _velocity(velocity_contingent, velocity_preserved_now)
+                             - float(icv_clawback_if_pull or 0), 2)
     else:
         missing.append("used_price_now")
     if g_future is not None:
-        nets["KEEP"] = round(g_future + icv + _velocity(velocity, velocity_preserved_future), 2)
+        nets["KEEP"] = round(g_future + _velocity(velocity_contingent, velocity_preserved_future), 2)
     else:
         missing.append("used_price_future")
     if "PULL" in nets and swap_candidate_net is not None:
@@ -83,8 +93,9 @@ def compare_actions(*, invoice, monthly_rate, tenure_days_now, keep_extra_days,
         "adjusted_basis_now": basis_now, "adjusted_basis_future": basis_future,
         "cumulative_write_down_now": wd_now, "cumulative_write_down_future": wd_future,
         "front_end_gross_now": g_now, "front_end_gross_future": g_future,
-        "velocity_now": _velocity(velocity, velocity_preserved_now),
-        "velocity_future": _velocity(velocity, velocity_preserved_future),
-        "icv": icv, "retail_opportunity_cost": float(retail_opportunity_cost or 0),
+        "velocity_now": _velocity(velocity_contingent, velocity_preserved_now),
+        "velocity_future": _velocity(velocity_contingent, velocity_preserved_future),
+        "icv_earned_sunk": float(icv_earned or 0),          # lifecycle context only (not in the action delta)
+        "retail_opportunity_cost": float(retail_opportunity_cost or 0),
     }
     return {"nets": nets, "best": best, "components": components, "missing": missing}
