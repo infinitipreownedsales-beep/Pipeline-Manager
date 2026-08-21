@@ -321,6 +321,28 @@ def _cpo_sl_program_banner(sb):
             f'<a href="/ordering/sl-requirements">Review the plan</a>.{lb}</div>')
 
 
+def _cpo_replacement_block(nb, model, recs, stat, month):
+    """Replacement search for a NOT-ORDERABLE recommendation. Reruns the CERTIFIED horizon (the issued plan
+    already reflects on-ground + inbound + demand) for same-family combinations that are still orderable and
+    carry their own certified order — never a nearest-code/trim/colour substitute. NO SUBSTITUTE is a valid,
+    explicit result (the unmet demand is left unfilled rather than manufacturing an unjustified order)."""
+    alts = [b for b in recs
+            if b["combo"] != nb["combo"] and _int_or0(b.get("order")) > 0
+            and stat[b["combo"]]["status"] == "open"]      # each alt has its OWN certified justification
+    head = (f'<div class="callout"><strong>{esc(nb["identity"])} — not orderable.</strong> '
+            'Replacement search re-ran the certified horizon for same-family orderable combinations '
+            '(no nearest-code substitution). ')
+    if not alts:
+        return head + ('<strong>NO SUBSTITUTE — LEAVE UNFILLED.</strong> No other orderable '
+                       f'{esc(model)} combination has a certified order to justify a replacement; the unmet '
+                       'demand is left unfilled rather than manufacturing an unjustified order.</div>')
+    opts = "".join(
+        f'<div class="pos" style="padding:2px 0"><a href="/combination/{esc(b["pid"])}?month={esc(month)}">'
+        f'{esc(b["identity"])}</a> — certified ORDER {esc(b["order"])} · Current {esc(b["current"])}</div>'
+        for b in alts)
+    return head + 'These orderable same-family combinations carry their own certified order:</div>' + opts
+
+
 def _read_production_orders(app, scope):
     """Latest completed authoritative Production Orders snapshot rows, or [] — best effort, never breaks CPO."""
     try:
@@ -732,6 +754,12 @@ def register(app):
                                for r, b in worked)
                 block.append(work_group(f"Worked — {len(worked)} · {' · '.join(bits)}", safe(rows)))
 
+            # NOT ORDERABLE -> FIND REPLACEMENT: re-run the certified horizon for a same-family orderable
+            # substitute; never substitute by nearest code/trim/colour, and allow NO SUBSTITUTE.
+            for b in shown:
+                if stat[b["combo"]]["status"] == "not_orderable":
+                    block.append(_cpo_replacement_block(b, mo, recs, stat, month))
+
             # intentionally-open capacity — a positive Elite judgment (restraint), not leftover work
             if open_cap:
                 block.append(restraint_note(safe(
@@ -786,8 +814,8 @@ def register(app):
         if state == "confirmed":                          # full order secured (idempotent)
             lines[combo] = "confirmed"
             qty.pop(combo, None)
-        elif state == "not_ordered":
-            lines[combo] = "not_ordered"
+        elif state in ("not_ordered", "not_orderable"):   # not_orderable also triggers replacement search
+            lines[combo] = state
             qty.pop(combo, None)
         elif state == "partial":                          # only k of N secured; remainder returns to unresolved
             k = _int_or0(req.form.get("qty"))
@@ -1435,6 +1463,9 @@ def _cpo_rec_pieces(s, b, rank, st, month, promoted, ln=None):
     if status == "not_ordered":
         return dict(resolved=True, chip=chip("skip", "Not ordering"),
                     actions=action_group(_line_btn(s, b, "clear", "Undo", "secondary")), **common)
+    if status == "not_orderable":
+        return dict(resolved=True, chip=chip("attention", "Not orderable · see replacement"),
+                    actions=action_group(_line_btn(s, b, "clear", "Undo", "secondary")), **common)
     if status == "partial":
         acts = (_line_btn(s, b, "confirmed", f"Confirm remaining {st['remaining']}")
                 + _partial_form(s, b, order, st["ordered"]) + _line_btn(s, b, "clear", "Undo", "secondary"))
@@ -1444,7 +1475,9 @@ def _cpo_rec_pieces(s, b, rank, st, month, promoted, ln=None):
     acts = _line_btn(s, b, "confirmed", confirm_text)
     if order > 1:
         acts += _partial_form(s, b, order)                 # only some secured -> remainder stays unresolved
-    acts += _line_btn(s, b, "not_ordered", "Not ordering", "secondary") + _bench_button(s, b["identity"], f"/ordering/cpo?month={month}")
+    acts += (_line_btn(s, b, "not_ordered", "Not ordering", "secondary")
+             + _line_btn(s, b, "not_orderable", "Not orderable", "secondary")
+             + _bench_button(s, b["identity"], f"/ordering/cpo?month={month}"))
     return dict(resolved=False, chip=chip("need", f"Needs decision · order {order}"), actions=action_group(acts), **common)
 
 
@@ -1495,6 +1528,8 @@ def _cpo_status(lines, qty, b):
     combo = b["combo"]
     order = _int_or0(b.get("order"))
     st = lines.get(combo)
+    if st == "not_orderable":
+        return {"status": "not_orderable", "ordered": 0, "order": order, "remaining": 0}
     if st == "not_ordered":
         return {"status": "not_ordered", "ordered": 0, "order": order, "remaining": 0}
     if st == "confirmed":
@@ -1508,7 +1543,7 @@ def _cpo_status(lines, qty, b):
 
 
 def _cpo_worked(status):
-    return status in ("confirmed", "not_ordered")
+    return status in ("confirmed", "not_ordered", "not_orderable")
 
 
 def _line_btn(s, b, state, text, cls="primary", *, qty=None):

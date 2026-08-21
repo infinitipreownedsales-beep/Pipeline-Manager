@@ -80,6 +80,26 @@ class TestCpoCockpit(unittest.TestCase):
         self.assertIn("Why open", b)
         self.assertIn("not unfinished work", b)   # explicitly framed as intentional, not incomplete
 
+    def test_not_orderable_finds_same_family_replacement(self):
+        # mark #1 (XKJ/K) NOT ORDERABLE -> the other orderable QX60 combo (QBE/G) is offered as a replacement
+        combo_a = self.conn.execute("SELECT id FROM sellable_combination WHERE canonical_identity LIKE ?",
+                                    ("%model_code=8481|exterior=XKJ|interior=K",)).fetchone()["id"]
+        self.full.post("/ordering/cpo/line", {"month": M, "combo": combo_a, "state": "not_orderable"})
+        b = self._body()
+        self.assertIn("not orderable", b)
+        self.assertIn("Replacement search re-ran the certified horizon", b)
+        self.assertIn("QX60 8481 QBE/G", b)                 # same-family orderable alternative offered
+        self.assertNotIn("NO SUBSTITUTE", b)                # a substitute exists here
+
+    def test_not_orderable_no_substitute_when_none_orderable(self):
+        # mark BOTH QX60 combos not orderable -> no same-family orderable alternative -> NO SUBSTITUTE
+        for suffix in ("%model_code=8481|exterior=XKJ|interior=K", "%model_code=8481|exterior=QBE|interior=G"):
+            cid = self.conn.execute("SELECT id FROM sellable_combination WHERE canonical_identity LIKE ?",
+                                    (suffix,)).fetchone()["id"]
+            self.full.post("/ordering/cpo/line", {"month": M, "combo": cid, "state": "not_orderable"})
+        b = self._body()
+        self.assertIn("NO SUBSTITUTE — LEAVE UNFILLED", b)  # unmet demand left unfilled, not fabricated
+
     def test_presentation_only_certified_unchanged(self):
         self._body()
         self.assertEqual(current_version(self.conn), 12)
