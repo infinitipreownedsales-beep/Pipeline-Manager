@@ -1676,13 +1676,16 @@ def _short_over(app, scope):
             dec = (json.loads(r["evidence"]) if r["evidence"] else {}).get("decision") or {}
         except Exception:   # noqa: BLE001
             dec = {}
-        readable = _readable(ident.get(r["combination_id"], r["combination_id"]))
+        canonical = ident.get(r["combination_id"], r["combination_id"])
+        readable = _readable(canonical)                     # COMPACT code form — machine-parseable (trade scorer)
+        readable_h = _readable_h(app, scope, canonical)     # HUMAN vehicle language for display (item 2)
+        model = _model_of(readable)
         acq = int(dec.get("acquire_units", 0) or 0)
         exc = int(dec.get("arrived_excess", 0) or 0)
         if acq > 0:
-            short.append({"identity": readable, "model": _model_of(readable), "qty": acq})
+            short.append({"identity": readable, "identity_h": readable_h, "model": model, "qty": acq})
         if exc > 0:
-            over.append({"identity": readable, "model": _model_of(readable), "qty": exc})
+            over.append({"identity": readable, "identity_h": readable_h, "model": model, "qty": exc})
     short.sort(key=lambda d: (-d["qty"], d["identity"]))
     over.sort(key=lambda d: (-d["qty"], d["identity"]))
     return short, over
@@ -1808,7 +1811,7 @@ def _callup_board(short):
     cards = ""
     for model in ("QX60", "QX65", "QX80"):
         picks = [b for b in short if b["model"] == model]
-        best = picks[0]["identity"] if picks else "none available in the current plan"
+        best = picks[0].get("identity_h", picks[0]["identity"]) if picks else "none available in the current plan"
         cards += f'<p><strong>Best available {model} demo:</strong> {esc(best)}</p>'
     return f'<div class="card"><h2>Call-Up Board</h2>{cards}</div>'
 
@@ -2064,16 +2067,16 @@ def _score_external_trade_candidate(unit, short):
 
         if code and code == need_code and ext == need_ext and interior == need_int:
             score = 1000 + qty * 100
-            reason = f"Exact shortage: {need['identity']} (need {qty})"
+            reason = f"Exact shortage: {need.get('identity_h', need['identity'])} (need {qty})"
         elif code and code == need_code and ext and ext == need_ext:
             score = 700 + qty * 50
-            reason = f"Same model code + exterior as shortage: {need['identity']}"
+            reason = f"Same model code + exterior as shortage: {need.get('identity_h', need['identity'])}"
         elif code and code == need_code and interior and interior == need_int:
             score = 650 + qty * 50
-            reason = f"Same model code + interior as shortage: {need['identity']}"
+            reason = f"Same model code + interior as shortage: {need.get('identity_h', need['identity'])}"
         elif code and code == need_code:
             score = 500 + qty * 40
-            reason = f"Same model code as shortage: {need['identity']}"
+            reason = f"Same model code as shortage: {need.get('identity_h', need['identity'])}"
         else:
             score = 100 + qty * 10
             reason = f"Model-level shortage relief: {need_model}"
@@ -2102,7 +2105,7 @@ def _their_trade(app, s, short, over):
     if req:
         # is what they asked for something WE are short on? then propose a lower-harm alternative from our over-stock
         harmful = any(b["model"] in req.upper() or b["identity"] in req for b in short)
-        alt = over[0]["identity"] if over else None
+        alt = over[0].get("identity_h", over[0]["identity"]) if over else None
         rec = (f'Releasing “{esc(req)}” is costly — it is a combination we are short on. '
                + (f'Lower-harm alternative to offer instead: <strong>{esc(alt)}</strong> (we are over-stocked there).'
                   if alt else 'No over-stocked alternative is available to offer instead.')) if harmful \
@@ -2198,7 +2201,7 @@ def _our_trade(app, s, short, over):
     demanded = st.get("demanded", "")
     if demanded:
         harmful = any(b["model"] in demanded.upper() or b["identity"] in demanded for b in short)
-        alt = over[0]["identity"] if over else None
+        alt = over[0].get("identity_h", over[0]["identity"]) if over else None
         rec = (f'They demand “{esc(demanded)}”, which we are short on — high business impact. '
                + (f'Best alternative to offer: <strong>{esc(alt)}</strong> (over-stocked).' if alt
                   else 'No over-stocked alternative is available to offer.')) if harmful \
