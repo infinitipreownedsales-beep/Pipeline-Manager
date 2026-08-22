@@ -297,6 +297,63 @@ class TestPpoEngine(unittest.TestCase):
         self.assertEqual(r.verdicts[0].recommended_qty, 2)
 
 
+class TestDemoEngine(unittest.TestCase):
+    """Executive-Demo three-pool engine (item 9/16): current/incoming physical unit can win; future order can
+    win; actual VIN shown when chosen; Retail scarcity (economics) can make current-stock lose; executive
+    preference cannot affect the economic choice; fail closed when Demo economics are not governed."""
+    from elite.operatorstd import demo_engine as DE
+
+    def _need(self):
+        return PHY.Need(combination_id="c1", label="QX80 LUXE 2WD")
+
+    def _cur(self, vin):
+        return SUP.NormalizedSupply(SUP.CURRENT_INVENTORY, SUP.ON_GROUND, combination_id="c1", vin=vin)
+
+    def _inc(self, vin):
+        return SUP.NormalizedSupply(SUP.CURRENT_INVENTORY, SUP.NEAR_IMMEDIATE, combination_id="c1", vin=vin)
+
+    def test_current_vin_can_win(self):
+        d = self.DE.decide(self._need(), current=[self._cur("VNOW")], incoming=[],
+                           score=lambda u: 5)
+        self.assertEqual(d.call, self.DE.USE_NOW)
+        self.assertEqual(d.unit.vin, "VNOW")               # actual VIN displayed
+
+    def test_incoming_vin_can_win_on_economics(self):
+        d = self.DE.decide(self._need(), current=[self._cur("VNOW")], incoming=[self._inc("VSOON")],
+                           score=lambda u: 9 if u.vin == "VSOON" else 1)
+        self.assertEqual(d.call, self.DE.WAIT_FOR_INCOMING)
+        self.assertEqual(d.unit.vin, "VSOON")
+
+    def test_retail_scarcity_makes_current_lose(self):
+        # economics say current on-ground is worth more as Retail (low Demo score) → don't force current stock
+        d = self.DE.decide(self._need(), current=[self._cur("VNOW")], incoming=[self._inc("VSOON")],
+                           score=lambda u: -10 if u.vin == "VNOW" else 3)
+        self.assertEqual(d.call, self.DE.WAIT_FOR_INCOMING)
+
+    def test_future_order_can_win(self):
+        d = self.DE.decide(self._need(), current=[], incoming=[], order_available=True, score=lambda u: 1)
+        self.assertEqual(d.call, self.DE.ORDER_FOR_DEMO)
+        self.assertEqual(d.order_combination, "QX80 LUXE 2WD")
+
+    def test_committed_vin_excluded(self):
+        d = self.DE.decide(self._need(), current=[self._cur("VBUSY")], incoming=[], order_available=True,
+                           committed_vins={"VBUSY"}, score=lambda u: 5)
+        self.assertEqual(d.call, self.DE.ORDER_FOR_DEMO)   # the only on-ground unit is committed elsewhere
+
+    def test_fail_closed_when_economics_not_governed(self):
+        d = self.DE.decide(self._need(), current=[self._cur("VNOW")], incoming=[self._inc("VSOON")])
+        self.assertEqual(d.call, self.DE.UNRESOLVED)
+        self.assertTrue(d.economics_gap)                   # names the exact missing Demo policy inputs
+        self.assertEqual([u.vin for u in d.current_pool], ["VNOW"])   # physical pool still enumerated
+        self.assertIn("expected Demo tenure", d.economics_gap)
+
+    def test_no_executive_preference_input_exists(self):
+        # structural guarantee: decide() takes no executive/preference argument — economics alone decide.
+        import inspect
+        params = set(inspect.signature(self.DE.decide).parameters)
+        self.assertFalse({"executive", "preference", "exec_pref"} & params)
+
+
 class TestWholesaleDealerCopy(unittest.TestCase):
     """The dealer-facing copy path (domains._readable_h) — human names lead, no internal codes/reasoning (item
     12/16). Also proves graceful degradation to the compact code form when nothing is governed yet."""

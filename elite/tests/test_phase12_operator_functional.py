@@ -71,7 +71,11 @@ class TestOperatorFunctional(unittest.TestCase):
         self.assertEqual(roster[0]["history"][0]["miles"], 1200)     # 1300-100
         b = self.full.get(f"/demos/user/{uid}").body
         self.assertIn("Nathan", b)
-        self.assertIn("Next demo", b)
+        # three-pool Demo decision (USE NOW / WAIT FOR INCOMING / ORDER FOR DEMO), physical-first
+        self.assertIn("Demo decision", b)
+        self.assertTrue(any(c in b for c in ("USE NOW", "WAIT FOR INCOMING", "ORDER FOR DEMO",
+                                             "PENDING DEMO ECONOMICS")))
+        self.assertIn("Current on-ground VINs", b)
         # call-up board answers by model
         self.assertIn("Best available QX60 demo", self.full.get("/demos").body)
 

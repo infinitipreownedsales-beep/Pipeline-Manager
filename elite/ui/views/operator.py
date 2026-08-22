@@ -1162,17 +1162,22 @@ def register(app):
                     '<label>Return / swap mileage</label><input name=mi type=number required style="max-width:160px">'
                     '<label>Swap date</label><input name=date type=date style="max-width:180px">',
                     csrf=s.csrf_token, submit="Record return / swap") if cur else "")
-        # preference-first next demo
-        short, _o = _short_over(app, s.scope)
+        # preference-first next demo — three-pool physical decision (USE NOW / WAIT / ORDER), not a combo pick
+        certs, _lk = _certified_positions(app, s.scope)
         pref = (u.get("model_pref") or "").upper()
-        picks = [b for b in short if b["model"] == pref] or short
-        nb = table(["Rank", "Best next demo"], [[esc(i + 1), esc(b["identity"])] for i, b in enumerate(picks[:3])]) \
-            if picks else empty("No available combination supports a next demo yet.")
+        needy = [c for c in certs if c["acquire_units"] > 0]
+        matching = [c for c in needy if _model_of(c["label"]) == pref] or needy
+        matching.sort(key=lambda c: -c["acquire_units"])
+        if matching:
+            top = matching[0]
+            nb = _demo_call_card(app, s.scope, top["key"], top["label"])
+        else:
+            nb = empty("No certified need supports a next demo right now.")
         hrows = [[esc(h.get("vin", "")), esc(h.get("mi_in", "")), esc(h.get("mi_out", "")),
                   esc(h.get("miles", "")), esc(h.get("start", "")), esc(h.get("end", ""))] for h in u.get("history", [])]
         body = (f'<p><a href="/demos">← Roster</a></p><div class="card"><h2>{esc(u["name"])}</h2>{info}</div>'
-                f'<div class="card"><h3>Next demo — prefers {esc(pref or "any")}</h3>{nb}</div>'
-                '<div class="card"><h3>Assign / swap</h3>' + assign + ret + '</div>'
+                + (nb if "card" in nb else f'<div class="card"><h3>Next demo — prefers {esc(pref or "any")}</h3>{nb}</div>')
+                + '<div class="card"><h3>Assign / swap</h3>' + assign + ret + '</div>'
                 '<div class="card"><h3>Demo history</h3>'
                 + table(["VIN", "Miles in", "Miles out", "Driven", "Start", "End"], hrows) + '</div>')
         return _resp(app, s, u["name"], body, "/demos")
@@ -1728,6 +1733,75 @@ def _certified_positions(app, scope):
         label_to_key[human] = cid
         label_to_key[_readable(canonical)] = cid       # older offers stored the compact code label
     return certs, label_to_key
+
+
+def _demo_pools(app, scope, cid):
+    """Physical Demo candidate pools for a combination need (CORE LAW: VIN-level). Returns
+    (current, incoming, order_available): current/incoming are NormalizedSupply with the ACTUAL VIN, committed
+    VINs excluded (count-once). order_available is True when an unbuilt future path exists or no physical unit
+    is available at all (so an ORDER-FOR-DEMO fallback call can always be produced)."""
+    from ...newinv.store import NewInvStore
+    from ...ordering.cross_domain import committed_vins
+    from ...operatorstd import supply as _S
+    conn = _conn(app)
+    st = NewInvStore(conn, app.stack.clock)
+    committed = set(committed_vins(conn, scope, app.prefs).keys())
+
+    def _vin(table, key):
+        try:
+            r = conn.execute(f"SELECT vin FROM {table} WHERE id=? AND store_scope=?", (key, scope)).fetchone()
+            return (r["vin"].strip().upper() if r and r["vin"] else None)
+        except Exception:   # noqa: BLE001
+            return None
+
+    current = []
+    for cs in st.current_supply_for(cid, scope):
+        vin = _vin("vehicle_unit", cs.vehicle_unit_id)
+        if vin and vin not in committed:
+            current.append(_S.NormalizedSupply(_S.CURRENT_INVENTORY, _S.ON_GROUND, combination_id=cid, vin=vin,
+                                               age_days=cs.age_days))
+    incoming, unbuilt = [], False
+    for fs in st.future_supply_for(cid, scope):
+        vin = _vin("production_order", fs.production_order_id)
+        if vin and vin not in committed:
+            avail = _S.classify_availability(_S.CURRENT_INVENTORY, production_month=fs.arrival_month) \
+                if fs.arrival_month else _S.NEAR_IMMEDIATE
+            incoming.append(_S.NormalizedSupply(_S.CURRENT_INVENTORY, avail, combination_id=cid, vin=vin,
+                                                arrival_month=fs.arrival_month))
+        else:
+            unbuilt = True
+    order_available = unbuilt or not (current or incoming)
+    return current, incoming, order_available
+
+
+def _demo_call_card(app, scope, cid, label):
+    """Render the three-pool Demo decision (USE NOW / WAIT FOR INCOMING / ORDER FOR DEMO) for one combination,
+    with the actual physical VINs. Demo economics are not governed, so Elite enumerates the physically-eligible
+    pools and states the exact economic gap rather than fabricating a pick or importing SL rules (item 9)."""
+    from ...operatorstd import demo_engine as _DE, physical as _P
+    cur, inc, order_ok = _demo_pools(app, scope, cid)
+    d = _DE.decide(_P.Need(combination_id=cid, label=label), current=cur, incoming=inc, order_available=order_ok)
+    if d.call == _DE.USE_NOW and d.unit:
+        head = safe(badge("completed", "USE NOW") + f' <strong>{esc(d.unit.vin)}</strong>')
+    elif d.call == _DE.WAIT_FOR_INCOMING and d.unit:
+        head = safe(badge("need", "WAIT FOR INCOMING") + f' <strong>{esc(d.unit.vin)}</strong> · '
+                    + esc(d.unit.arrival_month or d.unit.availability))
+    elif d.call == _DE.ORDER_FOR_DEMO:
+        head = safe(badge("pending", "ORDER FOR DEMO") + f' {esc(d.order_combination or label)}')
+    else:
+        head = safe(badge("stale", "PENDING DEMO ECONOMICS"))
+    poolA = ", ".join(u.vin for u in d.current_pool) or "—"
+    poolB = ", ".join(f'{u.vin} ({u.arrival_month or u.availability})' for u in d.incoming_pool) or "—"
+    gap = ""
+    if d.economics_gap:
+        gap = ('<p class="muted">Elite will not fabricate an economic Demo pick. Governed Demo economics are '
+               'required to rank these physical candidates — the exact missing inputs are:</p><ul>'
+               + "".join(f"<li>{esc(x)}</li>" for x in d.economics_gap) + "</ul>")
+    return ('<div class="card"><h3>Demo decision — ' + esc(label) + '</h3>'
+            f'<p>{head}</p>'
+            + kv([("A · Current on-ground VINs", poolA), ("B · Known incoming VINs", poolB),
+                  ("C · Order path", "available" if d.order_available else "—")])
+            + f'<p class="muted">{esc(d.why)}</p>' + gap + '</div>')
 
 
 def _callup_board(short):
