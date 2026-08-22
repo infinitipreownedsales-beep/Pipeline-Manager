@@ -57,8 +57,18 @@ def build_app(db_path=None):
     # Idempotent capability backfill: managers already authorized to govern (authority.grant) receive the newer
     # identity.govern capability, so the governed Translation bootstrap is not blocked on already-provisioned DBs.
     try:
-        from ..identity.provision import ensure_identity_governance_grants
+        from ..identity.provision import (ensure_identity_governance_grants,
+                                          ensure_single_operator_identity_govern, bootstrap_reviewed_translation)
         ensure_identity_governance_grants(app.stack)
+        # Single-operator pilot: the sole operator IS the store's authority — grant identity.govern at THIS
+        # store scope only (least privilege; no wildcard admin) so they can initialize/reconcile their own
+        # reviewed-chart dictionary.
+        if app.single_operator_pilot:
+            ensure_single_operator_identity_govern(app.stack, scope=app.pilot_scope)
+        # Automatic store initialization of the repo-governed reviewed dictionary (idempotent, provenance-
+        # preserving, prefs-only): a deployed store should not start with the standard INFINITI codes
+        # unresolved while the rest of the app expects the governed dictionary to exist.
+        bootstrap_reviewed_translation(app.prefs, app.pilot_scope)
     except Exception:   # noqa: BLE001 — provisioning must never prevent the app from starting
         pass
     return app
