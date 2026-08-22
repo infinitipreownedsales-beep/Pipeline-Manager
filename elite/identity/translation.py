@@ -369,6 +369,47 @@ class TranslationStore:
                 best = (m.canonical_token, m.display_name)        # scope-less fallback
         return best
 
+    def resolve_display(self, semantic_type, raw_value, *, model="", source_system=None):
+        """System-wide display resolver used by the operator vehicle-description standard. Returns
+        (canonical_token, display_name) for a raw value drawn ONLY from APPROVED, ACTIVE governed mappings —
+        never invented. Resolution order, most specific first:
+            (source, type, raw, model)  →  (any-source, type, raw, model)
+            → (source, type, raw, no-scope)  →  (any-source, type, raw, no-scope)
+        The any-source fallback exists because a code like exterior `QBE` is a manufacturer-wide code: the same
+        physical code appears in the DMS inventory feed and in the order portal, but the governed name was
+        seeded under the portal source. It is still the SAME authoritative code, so reusing that approved name
+        is correct; we never guess one. Returns None when nothing approved matches (caller fails honestly)."""
+        raw_value = (raw_value or "").strip()
+        if not raw_value:
+            return None
+        cands = [m for m in self.semantic_mappings()
+                 if m.active and m.approval == "approved"
+                 and m.semantic_type == semantic_type and m.raw_value == raw_value]
+        if not cands:
+            return None
+        def pick(pred):
+            for m in cands:
+                if pred(m):
+                    return (m.canonical_token, m.display_name)
+            return None
+        return (pick(lambda m: m.model_scope == model and m.model_scope and (source_system is None or m.source_system == source_system))
+                or pick(lambda m: m.model_scope == model and m.model_scope)
+                or pick(lambda m: not m.model_scope and (source_system is None or m.source_system == source_system))
+                or pick(lambda m: not m.model_scope))
+
+    def family_for_code(self, raw_code, *, approved_only=True):
+        """The governed commercial family (model + trim + drivetrain) for a raw order/model code, taken from an
+        APPROVED variant-row interpretation. This is how a bare inventory model_code (e.g. `86317`) becomes a
+        human `QX80 LUXE 2WD` without any hardcoded per-code dictionary. Returns a FamilyKey, or None when the
+        code's family/trim/drivetrain has not been governed yet (caller then fails honestly, never guesses)."""
+        raw_code = (raw_code or "").strip()
+        if not raw_code:
+            return None
+        for r in self.variant_rows(approved_only=approved_only):
+            if r.raw_code == raw_code:
+                return r.family
+        return None
+
     def unresolved_translations(self):
         """Raw observations that still carry NO interpretation — the Data-Health resolution queue. Resolved =
         either an approved active SAME_AS mapping, or (for a full order/model code) already placed into a family
