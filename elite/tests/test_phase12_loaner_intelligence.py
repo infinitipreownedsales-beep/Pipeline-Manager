@@ -88,7 +88,8 @@ class TestIntelligencePage(unittest.TestCase):
         with patch("elite.loaner.intelligence.build_intelligence", return_value=_fake_intel()):
             b = self.full.get("/service-loaner").body
         # command-board architecture (program state -> what needs me -> current fleet -> why)
-        for tok in ("Service Loaner Command Board", "Program state", "What needs me", "Current fleet", "Why —"):
+        for tok in ("Service Loaner Command Board", "Program state", "What needs me", "Current fleet", "Why —",
+                    "Fleet operating plan"):   # item 10: consolidated KEEP/PULL/SWAP/ADD/ORDER operating plan
             self.assertIn(tok, b)
         # Current / Desired / Ideal distinct, Ideal Undetermined (Pending Economics)
         self.assertIn("Ideal (Pending Economics)", b)

@@ -237,6 +237,151 @@ _OUTCOME_BADGE = {
 _ACTION_TONE = {"KEEP": "healthy", "PULL": "attention", "SWAP": "pending", "UNRESOLVED": "unresolved"}
 
 
+def _fleet_plan_card(app, scope, intel, add_n=0):
+    """The unmistakable operating plan (item 10): the per-unit economic decisions consolidated into KEEP /
+    PULL·RETIRE / SWAP·BALANCE / ADD / ORDER / UPCOMING, each naming the exact physical vehicle. It REUSES the
+    existing KEEP/PULL/SWAP economic core (build_unit_decision) and the certified placement econ — it does not
+    re-derive economics. SWAP names the incoming New-Retail replacement VIN whenever it is physically known;
+    ORDER is only the residual that physical placement/swap cannot satisfy (never a fabricated model order)."""
+    from ...loaner.sl_decision import build_unit_decision
+    from ...clock import to_utc_iso
+    units = [u for u in getattr(intel, "units", ()) if u.vin]
+    if not units:
+        return ""
+    mi_by_model = {(mi.model or "").upper(): mi for mi in getattr(intel, "models", ())}
+    today = to_utc_iso(app.stack.clock.now())[:10]
+
+    # strongest eligible New-Retail replacements (physical VIN/stock), grouped by model, for SWAP/ADD naming
+    repl_by_model, all_repl = {}, []
+    swap_net = None
+    try:
+        from ...loaner.unit_econ import build_placement_econ
+        econ = build_placement_econ(app, scope, today[:7], n=max(1, int(add_n or 1)))
+        if econ.get("have_economics") and econ.get("all_econ"):
+            swap_net = econ["all_econ"][0].net()
+            for pe in econ["all_econ"]:
+                repl_by_model.setdefault((pe.model or "").upper(), []).append(pe)
+                all_repl.append(pe)
+    except Exception:   # noqa: BLE001
+        repl_by_model, all_repl, swap_net = {}, [], None
+
+    keep, pull, swap, upcoming = [], [], [], []
+    used_repl = set()
+
+    def _take_replacement(model):
+        """Assign the best still-unused physical replacement, preferring the same model, then any (count-once)."""
+        for pe in repl_by_model.get((model or "").upper(), []):
+            if pe.unit_id not in used_repl:
+                used_repl.add(pe.unit_id)
+                return pe
+        for pe in all_repl:
+            if pe.unit_id not in used_repl:
+                used_repl.add(pe.unit_id)
+                return pe
+        return None
+
+    for u in units:
+        try:
+            d = build_unit_decision(app, scope, u, mi_by_model.get((u.model or "").upper()), today=today,
+                                    swap_candidate_net=swap_net)
+        except Exception:   # noqa: BLE001 — one unit must never break the plan
+            continue
+        f = d["facts"]
+        vin = (f.get("vin") or u.vin or "")
+        veh = " ".join(x for x in (f.get("model_year"), f.get("model")) if x)
+        rel = (f.get("release") or {}).get("release_by") if f.get("release") else None
+        if d["action"] == "PULL":
+            pull.append((vin, veh, rel, d["why"]))
+        elif d["action"] == "SWAP":
+            pe = _take_replacement(f.get("model"))
+            swap.append((vin, veh, pe, d["why"]))
+        elif d["action"] == "KEEP":
+            keep.append((vin, veh, rel))
+        if rel:
+            upcoming.append((rel, vin, veh, d["action"]))
+
+    def _vin8(v):
+        return esc((v or "")[-8:])
+
+    seg = []
+    # KEEP
+    seg.append('<h3 style="margin:10px 0 4px">KEEP — remain in the fleet</h3>'
+               + (table(["VIN", "Vehicle", "Watch release by"],
+                        [[_vin8(v), esc(veh), esc(rel or "—")] for v, veh, rel in keep])
+                  if keep else empty("No active unit is a clear KEEP right now.")))
+    # PULL / RETIRE
+    seg.append('<h3 style="margin:14px 0 4px">PULL / RETIRE — exit these</h3>'
+               + (table(["VIN", "Vehicle", "Latest prudent release", "Why"],
+                        [[_vin8(v), esc(veh), esc(rel or "—"), safe(f'<span class="muted">{esc(why)}</span>')]
+                         for v, veh, rel, why in pull])
+                  if pull else empty("No unit's best current decision is to exit.")))
+    # SWAP / BALANCE — PULL current → REPLACE WITH physical New-Retail unit
+    if swap:
+        srows = []
+        for v, veh, pe, why in swap:
+            if pe is not None:
+                repl = safe(f'<strong>{esc((pe.unit_id or "")[-8:])}</strong> · {esc(pe.identity)} '
+                            f'({_money(pe.net())} net)')
+            else:
+                repl = safe('<span class="muted">no physically-known New-Retail replacement — hold or order</span>')
+            srows.append([_vin8(v), esc(veh), repl, safe(f'<span class="muted">{esc(why)}</span>')])
+        seg.append('<h3 style="margin:14px 0 4px">SWAP / BALANCE — put the better physical vehicle in the slot</h3>'
+                   '<p class="muted" style="font-size:12px">Balance = the physical vehicle that should occupy the '
+                   'slot now for the highest total dealership outcome — never mileage/Velocity/model staggering.</p>'
+                   + table(["PULL (current SL)", "Vehicle", "REPLACE WITH (New-Retail VIN)", "Why"], srows))
+    # ADD — best physical candidate when the fleet needs another slot
+    if add_n:
+        best = next((pe for pe in all_repl if pe.unit_id not in used_repl), None)
+        seg.append('<h3 style="margin:14px 0 4px">ADD — fill an additional slot</h3>'
+                   + (safe(f'<p>Best physical unit to add: <strong>{esc((best.unit_id or "")[-8:])}</strong> · '
+                           f'{esc(best.identity)} ({_money(best.net())} net).</p>') if best
+                      else empty(f"No physically-available add candidate remains for {esc(add_n)} after swaps.")))
+    # ORDER — residual only (governed planned requirement minus physical surplus); never fabricated
+    seg.append(_fleet_order_residual(app, scope, all_repl, used_repl))
+    # UPCOMING — planned future exits/swaps before they become emergencies
+    upcoming = [x for x in upcoming if x[0]]
+    upcoming.sort(key=lambda t: t[0])
+    if upcoming:
+        seg.append('<h3 style="margin:14px 0 4px">UPCOMING — planned exits/swaps</h3>'
+                   + table(["Release by", "VIN", "Vehicle", "Planned action"],
+                           [[esc(rel), _vin8(v), esc(veh), esc(act)] for rel, v, veh, act in upcoming[:8]]))
+
+    return ('<div class="card"><h2>Fleet operating plan '
+            '<span class="badge">KEEP · PULL · SWAP · ADD · ORDER</span></h2>'
+            '<p class="muted">The economic KEEP/PULL/SWAP core, consolidated into the actual operating plan — '
+            'each line names the physical vehicle. Detail and Proof are in the per-unit table below.</p>'
+            + "".join(seg) + '</div>')
+
+
+def _fleet_order_residual(app, scope, all_repl, used_repl):
+    """ORDER = only the residual a governed planned Service-Loaner requirement cannot fill from physical surplus.
+    Fail-closed: if a model's future SL requirement is unresolved, say so — never manufacture a model order."""
+    try:
+        from ...ordering.cross_domain import PlannedRequirementStore
+        prs = PlannedRequirementStore(app.prefs, scope)
+        planned = prs.by_model()
+    except Exception:   # noqa: BLE001
+        planned = {}
+    if not planned:
+        return ('<h3 style="margin:14px 0 4px">ORDER — residual only</h3>'
+                + empty("No governed additive Service-Loaner requirement is set, so there is no residual to "
+                        "order. Physical placement/swap covers today's plan."))
+    avail_by_model = {}
+    for pe in all_repl:
+        if pe.unit_id not in used_repl:
+            avail_by_model[(pe.model or "").upper()] = avail_by_model.get((pe.model or "").upper(), 0) + 1
+    rows = []
+    for model, need in sorted(planned.items()):
+        have = avail_by_model.get(model, 0)
+        residual = max(0, need - have)
+        rows.append([esc(model), esc(need), esc(have), esc(residual),
+                     esc("order residual" if residual else "covered by physical surplus")])
+    return ('<h3 style="margin:14px 0 4px">ORDER — residual only</h3>'
+            '<p class="muted" style="font-size:12px">Order only what physical placement/swap cannot satisfy. '
+            'Residual = governed planned requirement − physically-available surplus.</p>'
+            + table(["Model", "Planned need", "Physical surplus", "Residual to order", "Call"], rows))
+
+
 def _unit_actions_card(app, scope, intel):
     """Concise per-active-unit KEEP / PULL / SWAP / UNRESOLVED recommendation. The economic detail lives in
     Proof; the operator sees the call, the advantage vs next-best, key facts, and one human Why."""
@@ -529,6 +674,9 @@ def _loaner_command_body(app, s, intel, placement, add_n):
 
     # ---- ECONOMIC PLACEMENT RANKING (only when authoritative economics exist; else the fallback above) ----
     parts.append(_economic_ranking_card(app, s.scope, add_n))
+
+    # ---- FLEET OPERATING PLAN: the consolidated KEEP / PULL / SWAP / ADD / ORDER answer (item 10) ----
+    parts.append(_fleet_plan_card(app, s.scope, intel, add_n))
 
     # ---- PER-UNIT ACTION: KEEP / PULL / SWAP (incremental-from-now; gates cleanly when inputs are missing) ----
     parts.append(_unit_actions_card(app, s.scope, intel))
