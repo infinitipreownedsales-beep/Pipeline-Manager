@@ -44,10 +44,10 @@ class Described:
     def has_family(self) -> bool:
         return bool(self.model and self.trim and self.drivetrain)
 
-    @property
-    def vehicle(self) -> str:
-        """Human model/trim/drivetrain with year when known: "2027 QX80 LUXE 2WD". Falls back to whatever is
-        governed; an unmapped model_code surfaces the code, never a guessed trim."""
+    def _vehicle(self, *, clean=False) -> str:
+        """Human model/trim/drivetrain with year when known: "2027 QX80 LUXE 2WD". In operator mode an unmapped
+        model_code surfaces the code with an explicit marker (never a guessed trim); in dealer mode (clean=True)
+        that internal-code noise is omitted — another dealer only ever sees governed human language."""
         parts = []
         if self.model_year:
             parts.append(str(self.model_year))
@@ -58,24 +58,31 @@ class Described:
         if self.drivetrain:
             parts.append(self.drivetrain)
         core = " ".join(parts)
+        if clean:
+            return core or (self.model or "—")
         if not self.model and self.model_code:
             core = f"{core} [{self.model_code}]".strip()
         if ("trim" in self.unresolved or "drivetrain" in self.unresolved) and self.model_code:
             core = f"{core} [{self.model_code} {UNMAPPED}]"
         return core or (f"[{self.model_code}]" if self.model_code else "—")
 
-    def _colour(self, code, name, unresolved_key, *, with_code):
+    @property
+    def vehicle(self) -> str:
+        return self._vehicle(clean=False)
+
+    def _colour(self, code, name, *, with_code, drop_unmapped):
         if name and code:
             return f"{name} ({code})" if with_code else name
-        if code:
+        if code and not drop_unmapped:
             return f"{code} {UNMAPPED}"
         return ""
 
-    def colours(self, *, with_code=True) -> str:
-        """"Radiant White (QBE) / Graphite (G)" — operator form. Dealer form (with_code=False) drops the codes.
-        An unmapped code shows as "QBE (unmapped)"; a missing code shows nothing (not a fake dash colour)."""
-        ext = self._colour(self.exterior_code, self.exterior_name, "exterior", with_code=with_code)
-        it = self._colour(self.interior_code, self.interior_name, "interior", with_code=with_code)
+    def colours(self, *, with_code=True, drop_unmapped=False) -> str:
+        """"Radiant White (QBE) / Graphite (G)" — operator form. Dealer form (with_code=False) drops the codes;
+        drop_unmapped additionally hides any code with no governed name (so a dealer never sees "QBE (unmapped)").
+        A missing code shows nothing — never a fabricated colour."""
+        ext = self._colour(self.exterior_code, self.exterior_name, with_code=with_code, drop_unmapped=drop_unmapped)
+        it = self._colour(self.interior_code, self.interior_name, with_code=with_code, drop_unmapped=drop_unmapped)
         if ext and it:
             return f"{ext} / {it}"
         return ext or it or ""
@@ -88,9 +95,11 @@ class Described:
 
     @property
     def dealer(self) -> str:
-        """Dealer-facing line: names lead, no codes. "2027 QX80 LUXE 2WD — Radiant White / Graphite"."""
-        c = self.colours(with_code=False)
-        return f"{self.vehicle} — {c}" if c else self.vehicle
+        """Dealer-facing line: names lead, no codes, no internal-code noise (item 12). Human colours only when
+        governed. "2027 QX80 LUXE 2WD — Radiant White / Graphite"."""
+        veh = self._vehicle(clean=True)
+        c = self.colours(with_code=False, drop_unmapped=True)
+        return f"{veh} — {c}" if c else veh
 
     @property
     def codes(self) -> str:

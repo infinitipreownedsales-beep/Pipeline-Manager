@@ -98,23 +98,25 @@ class TestCpoPpo(unittest.TestCase):
         self.assertIn("QX65 8501 QBE/G", b)
         self.assertIn(pid, b)
 
-    def test_ppo_firm_does_not_mutate_inventory(self):
+    def test_ppo_offer_is_evaluated_not_mutating(self):
+        # PPO is a decision engine: the operator enters the OFFER (combo + qty), and Elite recommends. Entering
+        # an offer must never mutate authoritative inventory and never migrate the schema.
         before = self.conn.execute("SELECT COUNT(*) FROM vehicle_unit").fetchone()[0]
         self.full.get("/ordering/ppo", window="August PPO")
         self.full.post("/ordering/ppo/offer", {"window": "August PPO", "combo": "QX60 LUXE QBE/G",
-                                               "decision": "FIRM"})
+                                               "quantity": "1"})
         b = self.full.get("/ordering/ppo", window="August PPO").body
-        self.assertIn("QX60 LUXE QBE/G", b)
-        self.assertIn("FIRM", b)
-        self.assertIn("1 firmed", b)
+        self.assertIn("QX60 LUXE QBE/G", b)             # the offered combination is shown
+        self.assertIn("OFFERED", b)                     # summary "N OFFERED · FIRM x · DENY y"
+        self.assertTrue(any(w in b for w in ("FIRM", "DENY", "REVIEW")))   # Elite recommends, operator doesn't
         after = self.conn.execute("SELECT COUNT(*) FROM vehicle_unit").fetchone()[0]
         self.assertEqual(before, after)                 # simulated only; no authoritative mutation
         self.assertEqual(current_version(self.conn), 12)
 
     def test_ppo_revert(self):
-        self.full.post("/ordering/ppo/offer", {"window": "W", "combo": "X", "decision": "FIRM"})
+        self.full.post("/ordering/ppo/offer", {"window": "W", "combo": "X", "quantity": "1"})
         self.full.post("/ordering/ppo/revert", {"window": "W"})
-        self.assertIn("0 firmed", self.full.get("/ordering/ppo", window="W").body)
+        self.assertIn("0 OFFERED", self.full.get("/ordering/ppo", window="W").body)
 
 
 if __name__ == "__main__":

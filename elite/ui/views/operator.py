@@ -17,7 +17,8 @@ from ..render import (ADMIN_NAV, badge, esc, page, safe, table, kv, empty, form,
                       action_group, rec_row, work_group, restraint_note, coverage_lane,
                       horizon_strip)
 from ..http import Response
-from .domains import _readable, _resp, _conn
+from .domains import _readable, _readable_h, _resp, _conn
+from ...operatorstd import ppo_engine as _PPO_ENGINE
 
 
 def _model_of(readable):
@@ -855,7 +856,6 @@ def register(app):
         app.require(s, "workspace.view")
         window = req.q("window") or _ws_get(app, s.scope, "ppo_current_window", "") or ""
         offers = _ws_get(app, s.scope, f"ppo_offers::{window}", []) if window else []
-        firmed = [o for o in offers if o["decision"] == "FIRM"]
         windows = _ws_get(app, s.scope, "ppo_windows", []) or []
         pick = (f'<form method="get" action="/ordering/ppo" class="mut"><label>Open PPO window</label>'
                 + _select("window", [(w, w) for w in windows] or [("", "— none yet —")], window, onchange=True)
@@ -863,29 +863,57 @@ def register(app):
         create = form("/ordering/ppo/new",
                       '<label>Create PPO window (month)</label>' + _month_select(app, "month", _default_month(app)),
                       csrf=s.csrf_token, submit="Create window")
-        parts = [f'<div class="card"><h2>PPO</h2>{pick}{create}'
-                 '<p class="muted">Enter each manufacturer-offered unit as you receive it. Firm adds it to this '
-                 'window\'s <strong>simulated</strong> future supply only — it never changes authoritative '
-                 'inventory. We only know what you enter, so there is no total-offer count.</p></div>']
+        parts = [f'<div class="card"><h2>PPO — portfolio decision</h2>{pick}{create}'
+                 '<p class="muted">Enter each manufacturer-<strong>offered</strong> unit (this is the offer, not '
+                 'your decision). Elite evaluates the whole offered set against the certified position and '
+                 'recommends <strong>FIRM / DENY</strong> for each — accepting one offer recomputes the rest. You '
+                 'then confirm or override. Firming is a simulated shadow commitment; it never changes '
+                 'authoritative inventory or the database.</p></div>']
         if window:
-            saved = _ws_get(app, s.scope, f"ppo_saved_at::{window}", None)
+            certs, label_to_key = _certified_positions(app, s.scope)
+            result = _PPO_ENGINE.evaluate(offers, certs,
+                                          key_for_offer=lambda o: label_to_key.get(o.get("combo", ""), o.get("combo", "")))
+            verdicts = {v.offer_id: v for v in result.verdicts}
             combos = [lbl for _cid, lbl in _known_combos(app, s.scope)]
             entry = form("/ordering/ppo/offer",
                          f'<input type=hidden name=window value="{esc(window)}">'
                          '<label>Offered combination (select a known combination; type only for a truly external one)</label>'
                          + _datalist_input("combo", "ppo_combos", combos, placeholder="select or type external")
-                         + '<label>Decision</label>'
-                         '<label class=mut><input type=radio name=decision value=FIRM checked> Firm</label> '
-                         '<label class=mut><input type=radio name=decision value=DENY> Deny</label>',
-                         csrf=s.csrf_token, submit="Record offer")
-            rows = [[esc(o["combo"]), safe(badge("completed" if o["decision"] == "FIRM" else "pending", o["decision"])),
-                     esc(o.get("at", ""))] for o in offers]
+                         + '<label>Quantity offered</label>'
+                         '<input name=quantity type=number min=1 value=1 style="max-width:90px">'
+                         '<label>VIN (optional — names the physical unit when known)</label>'
+                         '<input name=vin placeholder="VIN" style="max-width:240px" autocomplete=off>'
+                         '<label>Stock # (optional)</label><input name=stock placeholder="stock" style="max-width:140px">'
+                         '<label class=mut><input type=checkbox name=external value=1> Truly external offer '
+                         '(orderability unknown → REVIEW)</label>',
+                         csrf=s.csrf_token, submit="Add offer (Elite will evaluate)")
+
+            # summary + executable queue
             parts.append(f'<div class="card"><h3>{esc(window)}</h3>'
-                         + (f'<p class="muted">Saved simulation from {esc(saved)}.</p>' if saved else '')
-                         + f'<p>{len(firmed)} firmed → simulated future supply in this window.</p>'
-                         + entry + table(["Offer", "Decision", "Recorded"], rows)
+                         f'<p><strong>{esc(result.summary)}</strong></p>' + entry + '</div>')
+
+            # recommendation-first offer table: answer first, then physical/qty/timing/why, then operator action
+            orows = []
+            for o in offers:
+                v = verdicts.get(str(o.get("id") or o.get("combo")))
+                if v is None:
+                    continue
+                tone = {"FIRM": "completed", "DENY": "skip", "REVIEW": "pending"}.get(v.recommendation, "pending")
+                phys = (f'{esc(v.vin)}' if v.vin else (f'stk {esc(v.stock)}' if v.stock else
+                        '<span class="muted">combination-level (no VIN)</span>'))
+                op = o.get("operator_action")
+                override = bool(op) and (op != v.recommendation or int(o.get("operator_qty", v.recommended_qty)) != v.recommended_qty)
+                action_cell = (safe(badge("stale", f'override → {op} {o.get("operator_qty","")}') if override
+                                    else badge("completed", f'confirmed {op}')) if op
+                               else safe(_ppo_action_form(s, window, o, v)))
+                orows.append([esc(o.get("combo", "")), safe(phys), esc(v.recommended_qty if v.recommendation == "FIRM" else "—"),
+                              esc(v.availability or "—"),
+                              safe(badge(tone, v.recommendation)), esc(v.why), action_cell])
+            parts.append('<div class="card"><h3>Offers — Elite recommendation first</h3>'
+                         + (table(["Offered", "Physical unit", "Firm qty", "Timing", "Recommendation", "Why",
+                                   "Your action"], orows) if orows else '<p class="muted">No offers entered yet.</p>')
                          + form("/ordering/ppo/revert", f'<input type=hidden name=window value="{esc(window)}">',
-                                csrf=s.csrf_token, submit="Revert window") + '</div>')
+                                csrf=s.csrf_token, submit="Clear window") + '</div>')
         return _resp(app, s, "PPO Ordering", "".join(parts), "/ordering")
 
     @app.post("/ordering/ppo/new")
@@ -906,19 +934,49 @@ def register(app):
         s = req.session
         app.require(s, "workspace.view")
         from ...clock import to_utc_iso
+        from ...ids import new_id
         window = req.form.get("window") or ""
         combo = (req.form.get("combo") or "").strip()
-        decision = req.form.get("decision") if req.form.get("decision") in ("FIRM", "DENY") else "DENY"
+        try:
+            qty = max(1, int(req.form.get("quantity") or 1))
+        except (TypeError, ValueError):
+            qty = 1
         if window and combo:
             offers = _ws_get(app, s.scope, f"ppo_offers::{window}", []) or []
-            offers.append({"combo": combo, "decision": decision, "at": to_utc_iso(app.stack.clock.now())[:10]})
+            offers.append({"id": new_id("ppo"), "combo": combo, "quantity": qty,
+                           "vin": (req.form.get("vin") or "").strip().upper() or None,
+                           "stock": (req.form.get("stock") or "").strip() or None,
+                           "external": bool(req.form.get("external")),
+                           "at": to_utc_iso(app.stack.clock.now())[:10]})
             _ws_put(app, s.scope, f"ppo_offers::{window}", offers)
-            _ws_put(app, s.scope, f"ppo_saved_at::{window}", to_utc_iso(app.stack.clock.now())[:10])
             _ws_put(app, s.scope, "ppo_current_window", window)
             windows = _ws_get(app, s.scope, "ppo_windows", []) or []
             if window not in windows:
                 windows.append(window)
                 _ws_put(app, s.scope, "ppo_windows", windows)
+        return Response.redirect(f"/ordering/ppo?window={window}")
+
+    @app.post("/ordering/ppo/record")
+    def ppo_record(app, req):
+        """Record the operator's ACTUAL execution against Elite's preserved machine recommendation. The machine
+        recommendation is recomputed live from the evaluator; this only stores what the operator did, so an
+        override is always explicitly identifiable (item 7/13)."""
+        s = req.session
+        app.require(s, "workspace.view")
+        window = req.form.get("window") or ""
+        oid = req.form.get("offer") or ""
+        action = req.form.get("action") if req.form.get("action") in ("FIRM", "DENY", "PARTIAL") else "DENY"
+        try:
+            aqty = int(req.form.get("action_qty") or 0)
+        except (TypeError, ValueError):
+            aqty = 0
+        offers = _ws_get(app, s.scope, f"ppo_offers::{window}", []) or []
+        for o in offers:
+            if str(o.get("id")) == oid:
+                o["operator_action"] = "FIRM" if action == "PARTIAL" else action
+                o["operator_qty"] = aqty if action in ("FIRM", "PARTIAL") else 0
+                break
+        _ws_put(app, s.scope, f"ppo_offers::{window}", offers)
         return Response.redirect(f"/ordering/ppo?window={window}")
 
     @app.post("/ordering/ppo/revert")
@@ -927,7 +985,7 @@ def register(app):
         app.require(s, "workspace.view")
         window = req.form.get("window") or ""
         _ws_put(app, s.scope, f"ppo_offers::{window}", [])
-        s.flash = "PPO window reverted."
+        s.flash = "PPO window cleared."
         return Response.redirect(f"/ordering/ppo?window={window}")
 
     # ---- Wholesale — ranked disposition-readiness + dealer-safe copy list -----------------------------
@@ -948,9 +1006,11 @@ def register(app):
             except Exception:   # noqa: BLE001
                 dec = {}
             arr, inc = int(dec.get("arrived_excess", 0) or 0), int(dec.get("incoming_excess", 0) or 0)
-            readable = _readable(ident.get(r["combination_id"], r["combination_id"]))
+            canonical = ident.get(r["combination_id"], r["combination_id"])
+            readable = _readable_h(app, s.scope, canonical)                    # operator: human + codes
+            dealer_name = _readable_h(app, s.scope, canonical, dealer=True)    # dealer: names lead, no codes
             if arr > 0:
-                now.append({"identity": readable, "qty": arr, "pid": r["id"],
+                now.append({"identity": readable, "dealer": dealer_name, "qty": arr, "pid": r["id"],
                             "dts": dec.get("dts_burden", "—")})
             if inc > 0:
                 future.append({"identity": readable, "qty": inc, "pid": r["id"]})
@@ -960,7 +1020,7 @@ def register(app):
         nrows = [[esc(i + 1),
                   safe(f'<a href="/combination/{esc(d["pid"])}">{esc(d["identity"])}</a>'),
                   esc(d["qty"]), esc(d["dts"])] for i, d in enumerate(now)]
-        dealer_text = "\n".join(f'{d["identity"]} — {d["qty"]} available' for d in now)
+        dealer_text = "\n".join(f'{d["dealer"]} — {d["qty"]} available' for d in now)
         copy = ('<h3>Dealer list (safe to send)</h3>'
                 f'<textarea id="dl" readonly rows="{max(2, len(now)+1)}" '
                 'style="max-width:520px;font-family:monospace">' + esc(dealer_text) + '</textarea>'
@@ -1621,6 +1681,53 @@ def _short_over(app, scope):
     short.sort(key=lambda d: (-d["qty"], d["identity"]))
     over.sort(key=lambda d: (-d["qty"], d["identity"]))
     return short, over
+
+
+def _ppo_action_form(s, window, o, v):
+    """Operator execution control for one offer. Defaults to Elite's recommendation; anything else is an
+    override the render layer flags. The machine recommendation is never overwritten (it is recomputed live)."""
+    rec_qty = v.recommended_qty if v.recommendation == "FIRM" else 0
+    return (f'<form class="mut" method="post" action="/ordering/ppo/record">'
+            f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+            f'<input type=hidden name=window value="{esc(window)}">'
+            f'<input type=hidden name=offer value="{esc(str(o.get("id","")))}">'
+            f'<select name=action>'
+            f'<option value=FIRM{" selected" if v.recommendation=="FIRM" else ""}>Firm</option>'
+            f'<option value=PARTIAL>Partial</option>'
+            f'<option value=DENY{" selected" if v.recommendation!="FIRM" else ""}>Deny</option>'
+            f'</select> '
+            f'<input name=action_qty type=number min=0 value="{esc(rec_qty)}" style="max-width:70px"> '
+            f'<button type=submit style="padding:3px 9px">Record</button></form>')
+
+
+def _certified_positions(app, scope):
+    """Shared certified board for the incremental supply-opportunity evaluator (PPO / Supplemental / Dealer
+    Trade all consume this one reader — item 6/17). Returns (certs, label_to_key). Each cert carries the
+    whole-vehicle certified decision for one combination: acquire_units (actionable now-need), arrived_excess /
+    incoming_excess (covered), and future_gap (post-horizon monitor gaps — a shortage that is NOT yet
+    actionable). Read-only; no recompute of certified math."""
+    conn = _conn(app)
+    rows = conn.execute("SELECT * FROM inventory_plan_result WHERE store_scope=? AND status='issued'",
+                        (scope,)).fetchall()
+    ident = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
+        "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (scope,)).fetchall()}
+    certs, label_to_key = [], {}
+    for r in rows:
+        try:
+            dec = (json.loads(r["evidence"]) if r["evidence"] else {}).get("decision") or {}
+        except Exception:   # noqa: BLE001
+            dec = {}
+        cid = r["combination_id"]
+        canonical = ident.get(cid, cid)
+        human = _readable_h(app, scope, canonical)
+        certs.append({"key": cid, "label": human,
+                      "acquire_units": int(dec.get("acquire_units", 0) or 0),
+                      "arrived_excess": int(dec.get("arrived_excess", 0) or 0),
+                      "incoming_excess": int(dec.get("incoming_excess", 0) or 0),
+                      "future_gap": len(dec.get("monitor_months") or [])})
+        label_to_key[human] = cid
+        label_to_key[_readable(canonical)] = cid       # older offers stored the compact code label
+    return certs, label_to_key
 
 
 def _callup_board(short):

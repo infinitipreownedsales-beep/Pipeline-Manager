@@ -246,5 +246,89 @@ class TestOpportunityEvaluator(unittest.TestCase):
         self.assertTrue(denied["override"])
 
 
+class TestPpoEngine(unittest.TestCase):
+    """PPO decision-engine bridge (item 7/16): certified decision + entered offers → recommendation-first
+    portfolio via the shared evaluator. Offer input is NOT decision input — Elite decides."""
+    from elite.operatorstd import ppo_engine as PE
+
+    def _cert(self, key, *, acquire=0, arr=0, inc=0, future=0, label=""):
+        return {"key": key, "acquire_units": acquire, "arrived_excess": arr, "incoming_excess": inc,
+                "future_gap": future, "label": label or key}
+
+    def test_single_offer_firm_when_certified_short(self):
+        r = self.PE.evaluate([{"id": "1", "combo": "A", "vin": "V1"}],
+                             [self._cert("A", acquire=2)], key_for_offer=lambda o: o["combo"])
+        self.assertEqual(r.firm, 1)
+        self.assertEqual(r.verdicts[0].recommendation, OPP.FIRM)
+        self.assertTrue(r.verdicts[0].physical)                 # names the physical VIN (CORE LAW)
+
+    def test_covered_is_denied(self):
+        r = self.PE.evaluate([{"id": "1", "combo": "A"}], [self._cert("A", acquire=0, arr=3)],
+                             key_for_offer=lambda o: o["combo"])
+        self.assertEqual(r.verdicts[0].recommendation, OPP.DENY)
+
+    def test_future_only_shortage_not_acquired_today(self):
+        r = self.PE.evaluate([{"id": "1", "combo": "A"}], [self._cert("A", acquire=0, future=2)],
+                             key_for_offer=lambda o: o["combo"])
+        self.assertEqual(r.verdicts[0].recommendation, OPP.DENY)
+        self.assertIn("lead-time checkpoint", r.verdicts[0].why)
+
+    def test_external_offer_is_review(self):
+        r = self.PE.evaluate([{"id": "1", "combo": "A", "external": True}], [self._cert("A", acquire=1)],
+                             key_for_offer=lambda o: o["combo"])
+        self.assertEqual(r.verdicts[0].recommendation, OPP.REVIEW)
+
+    def test_40_offer_window_scales(self):
+        offers = [{"id": str(i), "combo": "BIG", "vin": f"V{i}"} for i in range(40)]
+        r = self.PE.evaluate(offers, [self._cert("BIG", acquire=12, label="QX80 LUXE 2WD")],
+                             key_for_offer=lambda o: o["combo"])
+        self.assertEqual((r.offered, r.firm, r.deny), (40, 12, 28))
+        self.assertEqual(len(r.queue), 12)
+
+    def test_early_accept_changes_later(self):
+        offers = [{"id": "1", "combo": "A"}, {"id": "2", "combo": "A"}]
+        r = self.PE.evaluate(offers, [self._cert("A", acquire=1)], key_for_offer=lambda o: o["combo"])
+        recs = [v.recommendation for v in r.verdicts]
+        self.assertEqual(recs, [OPP.FIRM, OPP.DENY])
+
+    def test_quantity_partial_firm(self):
+        r = self.PE.evaluate([{"id": "1", "combo": "A", "quantity": 5}], [self._cert("A", acquire=2)],
+                             key_for_offer=lambda o: o["combo"])
+        self.assertEqual(r.verdicts[0].recommended_qty, 2)
+
+
+class TestWholesaleDealerCopy(unittest.TestCase):
+    """The dealer-facing copy path (domains._readable_h) — human names lead, no internal codes/reasoning (item
+    12/16). Also proves graceful degradation to the compact code form when nothing is governed yet."""
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.p = Phase10(os.path.join(self.tmp, "elite.db"))
+        self.app = self.p.app
+        self.store = TranslationStore(self.app.prefs, SCOPE)
+        SEED.seed(self.store)
+        for r in self.store.variant_rows():
+            if r.raw_code == "86317":
+                self.store.approve_variant(r.family, r.raw_code, r.generation_id, r.package)
+
+    def test_dealer_copy_leads_with_human_names_no_codes(self):
+        from elite.ui.views import domains
+        ident = "dms_planning|model=QX80|model_code=86317|exterior=QBE|interior=G"
+        dealer = domains._readable_h(self.app, SCOPE, ident, dealer=True)
+        self.assertEqual(dealer, "QX80 LUXE 2WD — Radiant White / Graphite")
+        self.assertNotIn("86317", dealer)                    # no internal model code
+        self.assertNotIn("QBE", dealer)                      # no internal colour code
+        # operator form keeps the codes for precision
+        op = domains._readable_h(self.app, SCOPE, ident)
+        self.assertIn("Radiant White (QBE)", op)
+        self.assertIn("QX80 LUXE 2WD", op)
+
+    def test_ungoverned_identity_degrades_to_code_form(self):
+        from elite.ui.views import domains
+        ident = "dms_planning|model=QX99|model_code=99999|exterior=ZZZ|interior=Q"
+        # nothing governed for these codes → compact code form, never uglier than before
+        self.assertEqual(domains._readable_h(self.app, SCOPE, ident, dealer=True),
+                         domains._readable(ident))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

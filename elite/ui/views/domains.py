@@ -64,6 +64,41 @@ def _readable(canonical):
     return f"{model} {code} {ext}/{inte}".strip()
 
 
+def _identity_kv(canonical):
+    """Parse a 'dms_planning|model=..|model_code=..|exterior=..|interior=..' identity into a dict; {} otherwise."""
+    if not isinstance(canonical, str) or not canonical.startswith("dms_planning|"):
+        return {}
+    return dict(p.split("=", 1) for p in canonical.split("|")[1:] if "=" in p)
+
+
+def _describe(app, scope, canonical):
+    """Governed Described (operator-intelligence vehicle-description standard) for a planning identity, reusing
+    the Translation & Identity store — the single governed source of human vehicle language (item 2/3). Returns
+    None for a non-planning identity so callers fall back to the compact code form."""
+    kv_ = _identity_kv(canonical)
+    if not kv_:
+        return None
+    from ...identity.translation import TranslationStore
+    from ...operatorstd import description as _D
+    return _D.describe(TranslationStore(app.prefs, scope), model=kv_.get("model", ""),
+                       model_code=kv_.get("model_code", ""), exterior_code=kv_.get("exterior", ""),
+                       interior_code=kv_.get("interior", ""))
+
+
+def _readable_h(app, scope, canonical, *, dealer=False):
+    """Human vehicle language that ADDS governed names to codes ("QX80 LUXE 2WD — Radiant White (QBE) /
+    Graphite (G)"), preserving codes. Degrades gracefully: when the governed store has nothing to add for this
+    identity, it returns the compact code form (_readable) so an un-imported store never renders worse. With
+    dealer=True the names lead and internal codes are dropped entirely (item 12)."""
+    d = _describe(app, scope, canonical)
+    if d is None:
+        return _readable(canonical)
+    has_names = bool(d.exterior_name or d.interior_name or d.trim or d.drivetrain)
+    if not has_names:
+        return _readable(canonical)          # nothing governed to add — keep the compact code form (no regression)
+    return d.dealer if dealer else d.operator
+
+
 # --- Service Loaner Intelligence Layer (A + B) rendering (read-only; economics stay Undetermined) --------
 def _q_tone(label):
     return {"Strong": "done", "Moderate": "need", "Thin": "skip"}.get(label, "skip")
