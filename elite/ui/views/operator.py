@@ -1963,6 +1963,78 @@ def _ctp_pipeline_rows(app, scope):
             continue                                    # already covered by the certified projection
         _emit(onum, vin, None, None, str(pr.get("model") or "").strip(),
               str(pr.get("eta_month") or pr.get("eta") or "").strip())
+
+    # 3) the LIVE DMS inventory / pipeline export the operator actually loads (new_inventory_pipeline_summary /
+    #    new_inventory_current). There is no separate Production Orders import path, and the DMS pipeline carries
+    #    on-order (ONS/SIT/NNA-INV) units whose factory ORDER number is the DMS `serial` (no VIN assigned yet).
+    #    Elite matches the OEM CTP Order# against that serial (EXACT), resolving each to its certified board
+    #    combination by the year-agnostic planning identity so a matched order is evaluable.
+    for pr in _ctp_inventory_pipeline_rows(app, scope, ident):
+        onum, vin = pr["order_number"], pr["vin"]
+        if not onum and not vin:
+            continue
+        if (onum and _ctp_norm_key(onum) in seen_orders) or (vin and _ctp_norm_key(vin) in seen_vins):
+            continue
+        _emit(onum, vin, pr["combination_id"], pr["canonical"], pr["model"], pr["arrival_month"])
+    return out
+
+
+def _ctp_inventory_pipeline_rows(app, scope, ident_by_cid=None):
+    """Incoming (on-order) units from the live DMS inventory / pipeline export, as CTP-reconcilable rows. The
+    operator loads this source today (Data shows it current); Elite treats the on-order unit's DMS `serial` as
+    its factory ORDER number and resolves each unit to its certified board combination by the year-agnostic
+    planning identity (model_code / ext / int), so a matched order can be evaluated. Exact match only; nothing
+    is fabricated. Only INCOMING stages (ONS / SIT / NNA-INV) contribute an order number — an in-stock unit's
+    serial is never treated as an order."""
+    try:
+        from ...loaner.placement import read_new_retail_units, _authoritative_vin
+        from ...newinv.dms_cohort import dms_source_stage, INCOMING_STAGES
+        from ...newinv.dms_identity import dms_planning_identity
+    except Exception:   # noqa: BLE001
+        return []
+    try:
+        inv = read_new_retail_units(app, scope)
+    except Exception:   # noqa: BLE001
+        inv = []
+    if not inv:
+        return []
+    conn = _conn(app)
+    if ident_by_cid is None:
+        ident_by_cid = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
+            "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (scope,)).fetchall()}
+    cid_by_ident = {}
+    for cid, canonical in ident_by_cid.items():
+        cid_by_ident.setdefault(canonical, cid)
+    # normalized (alnum only, lowercased) header names that denote an OEM/factory order number
+    _ORDER_HEADERS = {"order", "orderno", "ordernumber", "manufacturerorderid", "factoryorder",
+                      "vehicleorder", "oemorder", "oemorderno"}
+    out = []
+    for r in inv:
+        try:
+            stage = dms_source_stage(r)
+        except Exception:   # noqa: BLE001
+            stage = ""
+        vin, ok, serial = _authoritative_vin(r)
+        vin = vin if ok else ""
+        # order number: an EXPLICIT order-like column if the export carries one, else the on-order serial
+        order_number = ""
+        for k, v in r.items():
+            if _ctp_norm_key(k).lower() in _ORDER_HEADERS and v not in (None, ""):
+                order_number = str(v).strip()
+                break
+        if not order_number and stage in INCOMING_STAGES and serial:
+            order_number = str(serial).strip()
+        if not order_number and not vin:
+            continue
+        try:
+            canonical = dms_planning_identity(r)
+        except Exception:   # noqa: BLE001
+            canonical = None
+        cid = cid_by_ident.get(canonical)
+        model = str(r.get("model") or "").strip() or (_model_of(_readable(canonical)) if canonical else "")
+        arrival = str(r.get("eta") or r.get("production_month") or "").strip()
+        out.append({"order_number": order_number, "vin": vin, "combination_id": cid,
+                    "canonical": (canonical if cid else None), "model": model, "arrival_month": arrival})
     return out
 
 
@@ -2000,17 +2072,26 @@ def _ctp_pipeline_age(app, scope):
             return (r["t"] or "")[:16].replace("T", " ")
     except Exception:   # noqa: BLE001
         pass
-    # fall back to the Production Orders snapshot's own load time
+    # fall back to the newest load time of any authoritative incoming-order source the operator can load:
+    # the Production Orders snapshot, or the live DMS inventory / pipeline export (which carries on-order units).
     try:
         from ...newinv.snapshots import SnapshotReader
         ops = _ops_stack(app)
         ops_store = getattr(ops, "ops", None) if ops else None
         if ops_store is not None:
             reader = SnapshotReader(ops_store, ops.data)
-            snap = reader.latest_snapshot(ops.source_id("production_orders"), scope)
-            if snap is not None:
-                t = getattr(snap, "observed_time", None) or getattr(snap, "received_at", None) or ""
-                return (t or "")[:16].replace("T", " ")
+            best = ""
+            for key in ("production_orders", "new_inventory_pipeline_summary", "new_inventory_current"):
+                try:
+                    snap = reader.latest_snapshot(ops.source_id(key), scope)
+                except Exception:   # noqa: BLE001
+                    snap = None
+                if snap is not None:
+                    t = getattr(snap, "observed_time", None) or getattr(snap, "received_at", None) or ""
+                    if t and t > best:
+                        best = t
+            if best:
+                return best[:16].replace("T", " ")
     except Exception:   # noqa: BLE001
         pass
     return ""

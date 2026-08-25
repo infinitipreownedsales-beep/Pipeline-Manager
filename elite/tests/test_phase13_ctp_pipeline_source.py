@@ -164,3 +164,51 @@ class TestCtpSixOrdersEndToEnd(unittest.TestCase):
         self.assertEqual(summ["orders"], 6)
         self.assertEqual(summ["keep"], 6)          # all matched, board position, no excess -> all KEEP
         self.assertEqual(summ["attention"], 0)
+
+
+# ---- LIVE ingestion: CTP reads the DMS inventory/pipeline export the operator actually loads ----
+class TestCtpReadsLiveInventoryPipeline(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from elite.ui.fixtures import Phase10
+        self.p = Phase10(os.path.join(tempfile.mkdtemp(), "e.db"))
+        self.scope = "store:HG"
+
+    def tearDown(self):
+        self.p.close()
+
+    def _rows(self, inv):
+        from unittest.mock import patch
+        with patch("elite.loaner.placement.read_new_retail_units", return_value=inv):
+            return OP._ctp_inventory_pipeline_rows(self.p.app, self.scope)
+
+    def test_on_order_serial_is_treated_as_order_number(self):
+        from elite.newinv.dms_cohort import INVENTORY_STATE_FIELD as LOC
+        rows = self._rows([{"serial": "TK76329", LOC: "ONS", "model": "QX60", "model_code": "84317",
+                            "ext": "KAD", "int": "K", "eta": "2026-11"}])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["order_number"], "TK76329")
+        self.assertEqual(rows[0]["arrival_month"], "2026-11")
+
+    def test_in_stock_serial_is_not_an_order(self):
+        from elite.newinv.dms_cohort import INVENTORY_STATE_FIELD as LOC
+        rows = self._rows([{"serial": "SER1", LOC: "DLR-INV", "model": "QX60", "model_code": "84317",
+                            "ext": "KAD", "int": "K"}])
+        self.assertEqual(rows, [])                       # no order number, no authoritative VIN -> not emitted
+
+    def test_explicit_order_column_wins(self):
+        from elite.newinv.dms_cohort import INVENTORY_STATE_FIELD as LOC
+        rows = self._rows([{"serial": "SER9", "Order #": "TK76340", LOC: "SIT", "model": "QX60",
+                            "model_code": "84617", "ext": "XKJ", "int": "P"}])
+        self.assertEqual(rows[0]["order_number"], "TK76340")
+
+    def test_ctp_finds_order_from_live_inventory_end_to_end(self):
+        from unittest.mock import patch
+        from elite.newinv.dms_cohort import INVENTORY_STATE_FIELD as LOC
+        from elite.workflow import ctp_intake as CTP
+        inv = [{"serial": "TK76329", LOC: "ONS", "model": "QX60", "model_code": "84317",
+                "ext": "KAD", "int": "K", "eta": "2026-11"}]
+        with patch("elite.loaner.placement.read_new_retail_units", return_value=inv):
+            pipeline = OP._ctp_pipeline_rows(self.p.app, self.scope)   # full merge, inventory source included
+        cand = CTP.to_candidate({"order": "TK76329", "model": "QX60"})
+        self.assertEqual(CTP.reconcile([cand], pipeline)[0].status, CTP.MATCHED)
