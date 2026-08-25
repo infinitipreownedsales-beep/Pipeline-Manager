@@ -92,3 +92,75 @@ class TestCtpPipelineSource(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ---- end-to-end: the six live QX60 orders reconcile AND evaluate through the real /ctp page ----
+class TestCtpSixOrdersEndToEnd(unittest.TestCase):
+    def setUp(self):
+        from elite.ui.fixtures import Phase10
+        self.tmp = tempfile.mkdtemp()
+        self.p = Phase10(os.path.join(self.tmp, "e.db"))
+        self.full = self.p.login(self.p.op_full)
+
+    def tearDown(self):
+        self.p.close()
+
+    def _fixture(self):
+        here = os.path.dirname(__file__)
+        with open(os.path.join(here, "fixtures", "ctp_qx60_html.xls"), "rb") as fh:
+            return fh.read()
+
+    def test_six_orders_reconcile_and_evaluate(self):
+        # the six real QX60 orders, mapped to a seeded certified Pipeline + board
+        pipeline = [
+            {"order_number": "TK76329", "vin": "", "combination_id": "cidA", "canonical": "dms_planning|model=QX60",
+             "model": "QX60", "arrival_month": "2026-11"},
+            {"order_number": "TK76327", "vin": "", "combination_id": "cidA", "canonical": "dms_planning|model=QX60",
+             "model": "QX60", "arrival_month": "2026-11"},
+            {"order_number": "TK76337", "vin": "", "combination_id": "cidB", "canonical": "dms_planning|model=QX60",
+             "model": "QX60", "arrival_month": "2026-12"},
+            {"order_number": "TK76338", "vin": "", "combination_id": "cidB", "canonical": "dms_planning|model=QX60",
+             "model": "QX60", "arrival_month": "2026-12"},
+            {"order_number": "TK76339", "vin": "", "combination_id": None, "canonical": None,
+             "model": "QX60", "arrival_month": "2026-12"},   # snapshot-only: no board position
+            {"order_number": "TK76340", "vin": "", "combination_id": "cidC", "canonical": "dms_planning|model=QX60",
+             "model": "QX60", "arrival_month": "2027-01"},
+        ]
+        board = {
+            "cidA": {"canonical": "dms_planning|model=QX60", "line": "QX60 LUXE FWD", "colors": "Graphite Shadow",
+                     "model": "QX60", "excess": 2, "short": 0},
+            "cidB": {"canonical": "dms_planning|model=QX60", "line": "QX60 AUTOGRAPH AWD", "colors": "Mineral Black",
+                     "model": "QX60", "excess": 0, "short": 3},   # the certified-short CHANGE target
+            "cidC": {"canonical": "dms_planning|model=QX60", "line": "QX60 LUXE AWD", "colors": "Moonbow Blue",
+                     "model": "QX60", "excess": 0, "short": 0},
+        }
+        self.full.post("/ctp/upload", {}, files={"file": ("CTP (1).xls", self._fixture())})
+        from unittest.mock import patch
+        with patch.object(OP, "_ctp_pipeline_rows", return_value=pipeline), \
+             patch.object(OP, "_ctp_board", return_value=board):
+            b = self.full.get("/ctp").body
+        # all six reconciled and evaluated — not "not in the Pipeline"
+        for o in ("TK76329", "TK76327", "TK76337", "TK76338", "TK76339", "TK76340"):
+            self.assertIn(o, b)
+        self.assertNotIn("not in the Pipeline file currently loaded", b)
+        # real decisions present: CHANGE (excess->short), KEEP, and one honest NEEDS ATTENTION (no board position)
+        self.assertIn("CHANGE", b)
+        self.assertIn("KEEP", b)
+        self.assertIn("NEEDS ATTENTION", b)
+
+    def test_reconcile_evaluate_counts(self):
+        from elite.workflow import ctp_intake as CTP
+        cands = [CTP.to_candidate(r, source_file="CTP (1).xls")
+                 for r in CTP.parse_ctp_file("CTP (1).xls", self._fixture())]
+        cands = [c for c in cands if c]
+        self.assertEqual(len(cands), 6)
+        pipeline = [{"order_number": c.order_number, "vin": "", "combination_id": "cidB",
+                     "canonical": "dms_planning|model=QX60", "model": "QX60", "arrival_month": "2026-12"}
+                    for c in cands]
+        board = {"cidB": {"canonical": "dms_planning|model=QX60", "line": "QX60 AUTOGRAPH AWD",
+                          "colors": "Mineral Black", "model": "QX60", "excess": 0, "short": 0}}
+        recs = CTP.evaluate(CTP.reconcile(cands, pipeline), board, now="2026-08-25")
+        summ = CTP.summarize(recs)
+        self.assertEqual(summ["orders"], 6)
+        self.assertEqual(summ["keep"], 6)          # all matched, board position, no excess -> all KEEP
+        self.assertEqual(summ["attention"], 0)
