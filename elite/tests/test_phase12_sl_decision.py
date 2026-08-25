@@ -95,6 +95,16 @@ class TestUnitDecision(unittest.TestCase):
         self.assertIsNone(price2)
         self.assertEqual(conf2, "none")
 
+    def test_unknown_model_year_age_gates_not_oldest_cohort(self):
+        # a unit whose model-year age is UNKNOWN must NOT be priced off the oldest ("5+") maturity cohort
+        # (the ~$18,993 near-new bug). It gates honestly instead.
+        mi = ModelIntel(model="QX60", active_units=10, sales_count=60, dts=None, resale_model=None,
+                        maturity=(MaturityBin("0", 15, 48250.0, False), MaturityBin("5+", 22, 18993.0, False)))
+        self.assertEqual(_price_at_model_year_age(mi, 5)[0], 18993.0)     # the 5+ cohort is the $18,993 source
+        price, _basis, conf = _price_at_model_year_age(mi, None)          # unknown age -> gate, never the 5+ cohort
+        self.assertIsNone(price)
+        self.assertEqual(conf, "none")
+
 
 class TestBoardSurface(unittest.TestCase):
     def setUp(self):
