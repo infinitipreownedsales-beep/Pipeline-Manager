@@ -28,6 +28,39 @@ def _norm_model(m):
     return (m or "").upper().strip()
 
 
+def parse_invoice_csv(data):
+    """Parse the operator-provided invoice checklist (bytes/str) into [{vin, amount, vehicle}], tolerant of
+    header naming (Full VIN / VIN; Original Invoice / Invoice; Current Fleet ID / Stock for the label). Only
+    maps columns; validity is enforced on import. Never raises on malformed input."""
+    import csv
+    import io
+    text = data.decode("utf-8", "replace") if isinstance(data, (bytes, bytearray)) else str(data or "")
+    text = text.lstrip("﻿")
+    try:
+        reader = csv.DictReader(io.StringIO(text))
+    except Exception:   # noqa: BLE001
+        return []
+    if not reader.fieldnames:
+        return []
+
+    def key(h):
+        return "".join(str(h or "").split()).lower()
+
+    idx = {key(h): h for h in reader.fieldnames}
+    vin_col = next((idx[key(a)] for a in ("full vin", "vin") if key(a) in idx), None)
+    amt_col = next((idx[key(a)] for a in ("original invoice", "invoice", "original authoritative invoice")
+                    if key(a) in idx), None)
+    veh_col = next((idx[key(a)] for a in ("current fleet id", "fleet id", "vehicle", "stock") if key(a) in idx), None)
+    if vin_col is None or amt_col is None:
+        return []
+    out = []
+    for row in reader:
+        out.append({"vin": (row.get(vin_col) or "").strip(),
+                    "amount": (row.get(amt_col) or "").strip(),
+                    "vehicle": ((row.get(veh_col) or "").strip() if veh_col else "")})
+    return out
+
+
 def _to_num(v):
     try:
         return float(str(v).replace(",", "").replace("$", "").replace("%", "").strip())
@@ -136,6 +169,55 @@ class SLPolicyStore:
 
     def all_invoices(self):
         return {k: int(v) for k, v in self._doc()["invoice_by_vin"].items() if v is not None}
+
+    def invoice_records(self):
+        """Visible per-VIN invoice overrides for readback: [{vin, amount, actor, at}] — the current active value
+        per VIN with the recorded_at/actor from the most recent governing history entry. Sorted by VIN. This is
+        what the operator sees after saving (previously there was no readback — the value appeared to vanish)."""
+        d = self._doc()
+        latest = {}
+        for h in d.get("history", []):
+            if h.get("kind") == "invoice" and h.get("vin"):
+                latest[h["vin"]] = h                       # history is append-order; last wins
+        out = []
+        for vin, amount in d["invoice_by_vin"].items():
+            if amount is None:
+                continue
+            h = latest.get(vin, {})
+            out.append({"vin": vin, "amount": int(amount), "actor": h.get("actor", ""), "at": h.get("at", "")})
+        return sorted(out, key=lambda r: r["vin"])
+
+    def remove_invoice(self, vin, *, actor, at):
+        """Retire a per-VIN invoice override — removed from active resolution; the action is kept in history
+        (append-only audit). Returns True if an active value was removed."""
+        key = (vin or "").strip().upper()
+        d = self._doc()
+        if key not in d["invoice_by_vin"]:
+            return False
+        prior = d["invoice_by_vin"].pop(key)
+        d["history"].append({"kind": "invoice_retired", "vin": key, "prior_amount": prior, "actor": actor, "at": at})
+        self.prefs.set_pref(self._sk, self.KEY, d)
+        return True
+
+    def bulk_set_invoices(self, records, *, actor, at):
+        """One-time governed bulk load. `records`: iterable of {vin, amount}. Each positive amount for a VIN not
+        already carrying that exact value is applied via the same governed set path. Returns
+        {applied, skipped_existing, skipped_invalid, vins}. Idempotent — re-running does not duplicate."""
+        applied, skipped_existing, skipped_invalid, vins = 0, 0, 0, []
+        for rec in records:
+            vin = (rec.get("vin") or "").strip().upper()
+            amt = _to_num(rec.get("amount"))
+            if not vin or amt is None or amt <= 0:
+                skipped_invalid += 1
+                continue
+            if self.invoice_for_vin(vin) == int(round(amt)):
+                skipped_existing += 1
+                continue
+            self.set_invoice(vin, amt, actor=actor, at=at)
+            applied += 1
+            vins.append(vin)
+        return {"applied": applied, "skipped_existing": skipped_existing,
+                "skipped_invalid": skipped_invalid, "vins": vins}
 
     # ---- protection buffer (DAYS — release-timing only; NEVER dollars) --------------------------------
     def protection_buffer_days(self):

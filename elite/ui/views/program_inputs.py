@@ -99,17 +99,22 @@ def phase4_gate_line(app, scope):
     ranking can proceed."""
     from ...loaner.economics_readiness import phase4_gates, ready, missing
     gates = phase4_gates(app, scope)
+    unit_note = (' <span class="muted">Per-unit KEEP/PULL/SWAP economics are separate — they resolve for any '
+                 'individual unit once that unit\'s own invoice and used-market evidence are present, and do not '
+                 'wait on full program coverage.</span>')
     if ready(gates):
         return ('<p class="muted" style="font-size:12px">' + safe(badge("healthy", "ready"))
                 + ' All required authoritative economic inputs are present — the Service-Loaner economic '
-                'placement ranking can proceed under its certified contract.</p>')
+                'placement ranking can proceed under its certified contract (the ADD / acquisition ranking).'
+                + unit_note + '</p>')
     miss = missing(gates)
     cov_incomplete = any(g.key in ("icv", "velocity") and not g.present for g in gates)
     lead = ("Historical program coverage is incomplete." if cov_incomplete
             else "Program coverage complete.")
     items = "; ".join(f"{esc(g.label)} ({esc(g.detail)})" for g in miss)
     return ('<p class="muted" style="font-size:12px">' + safe(badge("attention", "pending")) + f' {lead} '
-            f'Economic calls remain Pending until these authoritative inputs exist: {items}.</p>')
+            f'The economic placement (ADD) ranking stays Pending until these authoritative inputs exist: {items}.'
+            + unit_note + '</p>')
 
 
 def coverage_summary(app, scope, *, heading=True):
@@ -122,6 +127,61 @@ def coverage_summary(app, scope, *, heading=True):
             + phase4_gate_line(app, scope))
     head = '<h3 style="margin:2px 0 4px">Program coverage</h3>' if heading else ""
     return head + body
+
+
+def _sl_fleet_vin_map(app, scope):
+    """{normalized VIN: UnitIntel} for the active fleet — for vehicle labels beside each stored invoice."""
+    try:
+        from ...loaner.intelligence import build_intelligence
+        intel = build_intelligence(app.stack.db.conn, scope, app.prefs, app.stack.clock)
+        return {(u.vin or "").strip().upper(): u for u in intel.units}
+    except Exception:   # noqa: BLE001
+        return {}
+
+
+def _invoice_readback(app, s, pol):
+    """The visible list of stored per-VIN invoice overrides — VIN / Vehicle / Invoice / Recorded by / Recorded
+    at / Status / Action. This is the readback that was missing (a saved invoice appeared to vanish); each row
+    can be retired, and re-saving the same VIN corrects it (history kept in policy audit)."""
+    records = pol.invoice_records()
+    units = _sl_fleet_vin_map(app, s.scope)
+    fleet_vins = set(units)
+    on_file = {r["vin"] for r in records}
+    missing = sorted(fleet_vins - on_file)
+    cov = stat_row([metric(len(records), "Invoices on file"),
+                    metric(len(fleet_vins) or "—", "Active fleet VINs"),
+                    metric(len(missing) if fleet_vins else "—", "Fleet VINs still unresolved",
+                           attn=bool(fleet_vins and missing))])
+    if not records:
+        listing = empty("No per-unit invoices recorded yet. Add one below, or bulk-import the checklist CSV.")
+    else:
+        rows = []
+        for r in records:
+            u = units.get(r["vin"])
+            vehicle = (u.model if u and u.model else "—")
+            retire = (f'<form class="mut" method="post" action="/program-inputs/invoice/retire">'
+                      f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+                      f'<input type=hidden name=vin value="{esc(r["vin"])}">'
+                      f'<button type=submit class=secondary style="padding:3px 9px" '
+                      'onclick="return confirm(&quot;Retire this invoice? The write-down basis for this VIN '
+                      'becomes unresolved.&quot;)">Retire</button></form>')
+            rows.append([esc(r["vin"]), esc(vehicle), f'${r["amount"]:,}',
+                         esc("operator-provided invoice entry"), esc(r["actor"] or "—"),
+                         esc((r["at"] or "—")[:16].replace("T", " ")),
+                         safe(badge("healthy", "active")), safe(retire)])
+        listing = table(["VIN", "Vehicle", "Original invoice", "Source", "Recorded by", "Recorded at",
+                         "Status", "Action"], rows)
+    return cov + listing
+
+
+def _invoice_import_form(s):
+    return (f'<form method="post" action="/program-inputs/invoice/import" enctype="multipart/form-data">'
+            f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+            '<p class="muted" style="font-size:12px">One-time bulk load of the completed invoice checklist. '
+            'Columns recognized: <code>Full VIN</code> and <code>Original Invoice</code>. Idempotent — a VIN '
+            'whose invoice already matches is skipped, so re-running is safe.</p>'
+            '<input type=file name=file accept=".csv,text/csv" required style="margin:6px 0"> '
+            '<button type=submit>Import invoice CSV</button></form>')
 
 
 def register(app):
@@ -227,8 +287,11 @@ def register(app):
                 + '<h3 style="margin:12px 0 4px">Per-unit original invoice (write-down basis)</h3>'
                 + '<p class="muted" style="font-size:12px">The write-down is a % of the vehicle\'s original '
                 'authoritative invoice. When the inventory source carries it, Elite reads it automatically; use '
-                'this only to supply an authoritative invoice the source is missing. Never MSRP/ICV.</p>'
-                + disclosure("Set a unit invoice", inv_form)
+                'this to supply an authoritative invoice the source is missing. Never MSRP/ICV. Saved invoices '
+                'are listed below and can be retired or re-saved.</p>'
+                + _invoice_readback(app, s, pol)
+                + disclosure("Add / correct a unit invoice", inv_form)
+                + disclosure("Bulk-import the invoice checklist CSV", _invoice_import_form(s))
                 + '<h3 style="margin:12px 0 4px">Projected program tenure (months)</h3><p style="margin:2px 0">'
                 + (f'<strong>{tenure} months</strong>' if tenure is not None else safe(badge("unresolved", "not set")))
                 + ' <span class="muted" style="font-size:12px">— a monthly % write-down needs this to become a '
@@ -290,6 +353,36 @@ def register(app):
             s.flash = "Unit invoice saved (applied) — used as the write-down basis."
         except ValueError as e:
             s.flash = f"Not saved — {e}."
+        return Response.redirect("/program-inputs")
+
+    @app.post("/program-inputs/invoice/retire")
+    def program_invoice_retire(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        from ...loaner.sl_policy import SLPolicyStore
+        removed = SLPolicyStore(app.prefs, s.scope).remove_invoice(req.f("vin", ""), actor=s.principal_id, at=_now(app))
+        s.flash = ("Invoice retired — the write-down basis for that VIN is now unresolved." if removed
+                   else "No active invoice was found for that VIN.")
+        return Response.redirect("/program-inputs")
+
+    @app.post("/program-inputs/invoice/import")
+    def program_invoice_import(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        from ...loaner.sl_policy import SLPolicyStore, parse_invoice_csv
+        f = req.files.get("file")
+        if not f or not f[1]:
+            s.flash = "No CSV file was uploaded; nothing was imported."
+            return Response.redirect("/program-inputs")
+        rows = parse_invoice_csv(f[1])
+        if not rows:
+            s.flash = ("Could not read any invoice rows — the CSV needs a VIN column (Full VIN / VIN) and an "
+                       "invoice column (Original Invoice / Invoice). Nothing was imported.")
+            return Response.redirect("/program-inputs")
+        res = SLPolicyStore(app.prefs, s.scope).bulk_set_invoices(rows, actor=s.principal_id, at=_now(app))
+        s.flash = (f"Imported {res['applied']} invoice(s); {res['skipped_existing']} already on file, "
+                   f"{res['skipped_invalid']} skipped (missing VIN or non-positive amount). Unit economics "
+                   "recomputed on the Service Loaner board.")
         return Response.redirect("/program-inputs")
 
     @app.post("/program-inputs/tenure")
