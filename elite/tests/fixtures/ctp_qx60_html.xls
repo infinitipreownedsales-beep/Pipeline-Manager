@@ -1,0 +1,15 @@
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:x="urn:schemas-microsoft-com:office:excel"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head><meta http-equiv=Content-Type content="text/html; charset=windows-1252"></head>
+<body>
+<table border=1 cellpadding=0 cellspacing=0>
+ <tr><td>Order#</td><td>C*</td><td>Model</td><td>Color/Trim</td><td>Packages/Options</td><td>Accessories</td><td>ETA</td></tr>
+ <tr><td>TK76329</td><td>C</td><td>84317 QX60 LUXE FWD</td><td>KAD-K Graphite Shadow / Stone Gray</td><td>PA1</td><td>Cargo Package</td><td>2026-11</td></tr>
+ <tr><td>TK76327</td><td>C</td><td>84317 QX60 LUXE FWD</td><td>KCG-K Moonbow Blue / Stone Gray</td><td>PA1</td><td>&nbsp;</td><td>2026-11</td></tr>
+ <tr><td>TK76337</td><td>C</td><td>84617 QX60 AUTOGRAPH AWD</td><td>GAT-K Mineral Black / Stone Gray</td><td>TPA</td><td>Illuminated Kick Plates</td><td>2026-12</td></tr>
+ <tr><td>TK76338</td><td>C</td><td>84617 QX60 AUTOGRAPH AWD</td><td>XKJ-P 2T Radiant White / Saddle Brown</td><td>TPA</td><td>&nbsp;</td><td>2026-12</td></tr>
+ <tr><td>TK76339</td><td>C</td><td>84617 QX60 AUTOGRAPH AWD</td><td>XKJ-P 2T Radiant White / Saddle Brown</td><td>TPA</td><td>&nbsp;</td><td>2026-12</td></tr>
+ <tr><td>TK76340</td><td>C</td><td>84617 QX60 AUTOGRAPH AWD</td><td>XKJ-P 2T Radiant White / Saddle Brown</td><td>TPA</td><td>&nbsp;</td><td>2027-01</td></tr>
+</table>
+</body></html>

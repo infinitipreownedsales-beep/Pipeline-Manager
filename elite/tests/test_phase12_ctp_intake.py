@@ -43,6 +43,42 @@ def _mini_xlsx(header, rows):
     return buf.getvalue()
 
 
+class TestOemHtmlXls(unittest.TestCase):
+    """The real OEM export: an HTML table saved with an .xls extension (not an XLSX workbook). It must be
+    detected by CONTENT and parsed directly, preserving every column."""
+    def _fixture(self):
+        import os
+        path = os.path.join(os.path.dirname(__file__), "fixtures", "ctp_qx60_html.xls")
+        with open(path, "rb") as fh:
+            return fh.read()
+
+    def test_html_detected_by_content_not_extension(self):
+        rows = CTP.parse_ctp_file("CTP (1).xls", self._fixture())     # .xls extension, HTML content
+        self.assertEqual(len(rows), 6)
+        self.assertIn("order", rows[0])
+        self.assertIn("colortrim", rows[0])                            # every column preserved
+
+    def test_six_qx60_orders_fully_parsed(self):
+        cands = [c for c in (CTP.to_candidate(r, source_file="CTP (1).xls")
+                             for r in CTP.parse_ctp_file("CTP (1).xls", self._fixture())) if c]
+        self.assertEqual([c.order_number for c in cands],
+                         ["TK76329", "TK76327", "TK76337", "TK76338", "TK76339", "TK76340"])
+        c0 = cands[0]      # TK76329 — 84317 QX60 LUXE FWD — KAD-K Graphite Shadow / Stone Gray
+        self.assertEqual((c0.model_code, c0.model, c0.trim, c0.drivetrain), ("84317", "QX60", "LUXE", "FWD"))
+        self.assertEqual((c0.exterior, c0.interior), ("KAD", "K"))
+        self.assertEqual((c0.exterior_name, c0.interior_name), ("Graphite Shadow", "Stone Gray"))
+        self.assertEqual(c0.color_trim_raw, "KAD-K Graphite Shadow / Stone Gray")   # raw preserved
+        self.assertEqual((c0.packages, c0.accessories, c0.arrival_month), ("PA1", "Cargo Package", "2026-11"))
+        c3 = cands[3]      # TK76338 — 84617 QX60 AUTOGRAPH AWD — XKJ-P 2T Radiant White / Saddle Brown
+        self.assertEqual((c3.model_code, c3.trim, c3.drivetrain), ("84617", "AUTOGRAPH", "AWD"))
+        self.assertEqual((c3.exterior, c3.interior, c3.exterior_name, c3.interior_name),
+                         ("XKJ", "P", "2T Radiant White", "Saddle Brown"))   # model-scoped P handled by source
+
+    def test_all_reconcilable_by_order_number(self):
+        cands = [c for c in (CTP.to_candidate(r) for r in CTP.parse_ctp_file("CTP (1).xls", self._fixture())) if c]
+        self.assertTrue(all(c.key for c in cands))                     # every row has an Order # to reconcile on
+
+
 class TestParse(unittest.TestCase):
     def test_parse_csv(self):
         data = b"Order #,VIN,Model,Ext,Int,Production Month\nP100,VIN1,QX80,QBE,G,2026-11\nP101,VIN2,QX60,DAT,K,2026-12\n"

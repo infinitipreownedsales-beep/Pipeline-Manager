@@ -33,35 +33,93 @@ CONFLICT = "conflict"           # order matched but VIN (or other identity) disa
 
 # flexible source-column aliases → canonical candidate field (header-agnostic; case/space/punct-insensitive).
 _ALIASES = {
-    "order_number": ("order", "order#", "ordernumber", "orderno", "orderno", "moid", "manufacturerorderid",
+    "order_number": ("order", "order#", "ordernumber", "orderno", "moid", "manufacturerorderid",
                      "productionorder", "productionorderid", "ponumber", "po"),
     "vin": ("vin", "vinnumber", "serial", "fullvin"),
     "model": ("model", "modelline", "modelname", "carline"),
-    "model_code": ("modelcode", "code", "ordercode", "optioncode"),
-    "exterior": ("ext", "exterior", "exteriorcode", "exteriorcolor", "extcolor"),
-    "interior": ("int", "interior", "interiorcode", "interiorcolor", "intcolor"),
+    "model_code": ("modelcode", "ordercode", "optioncode"),
+    "exterior": ("ext", "exterior", "exteriorcode", "extcolor"),
+    "interior": ("int", "interior", "interiorcode", "intcolor"),
     "trim": ("trim", "trimlevel", "grade"),
     "drivetrain": ("drivetrain", "drive", "driveline"),
     "description": ("description", "desc", "vehicle", "vehicledescription"),
     "arrival_month": ("productionmonth", "prodmonth", "arrivalmonth", "eta", "arrival", "buildmonth"),
     "editability": ("editability", "status", "ctpstatus", "changeable", "eligible", "eligibility"),
+    # combined OEM columns (parsed specially, raw preserved)
+    "color_trim": ("colortrim", "colourtrim", "colorinterior", "exteriorinterior", "color", "colour"),
+    "packages": ("packagesoptions", "packages", "options", "packageoptions"),
+    "accessories": ("accessories", "accessory", "accessorysummary"),
 }
+
+_DRIVETRAINS = ("2WD", "4WD", "AWD", "FWD", "RWD")
+
+
+def _split_model(model_value):
+    """"84317 QX60 LUXE FWD" → (model_code, model, trim, drivetrain, description). Leading all-digit token is the
+    model code; the remainder is the human description (model + trim + drivetrain). Nothing is guessed — only
+    what the source states is used."""
+    toks = str(model_value or "").split()
+    if not toks:
+        return "", "", "", "", ""
+    code, rest = "", toks
+    if toks[0].isdigit():
+        code, rest = toks[0], toks[1:]
+    desc = " ".join(rest)
+    model = rest[0] if rest else ""
+    trim = drivetrain = ""
+    body = rest[1:]
+    if body and body[-1].upper() in _DRIVETRAINS:
+        drivetrain = body[-1].upper()
+        body = body[:-1]
+    trim = " ".join(body).strip()
+    return code, model, trim, drivetrain, desc
+
+
+def _split_color_trim(value):
+    """"KAD-K Graphite Shadow / Stone Gray" → (ext_code, int_code, ext_name, int_name), raw preserved by caller.
+    "XKJ-P 2T Radiant White / Saddle Brown" → ("XKJ","P","2T Radiant White","Saddle Brown"). Format is
+    `<EXT>-<INT> <ExtName> / <IntName>`; missing parts return "" (never guessed)."""
+    v = " ".join(str(value or "").split())
+    if not v:
+        return "", "", "", ""
+    codes, _, names = v.partition(" ")
+    ext_code, _, int_code = codes.partition("-")
+    ext_name, int_name = "", ""
+    if "/" in names:
+        left, _, right = names.partition("/")
+        ext_name, int_name = left.strip(), right.strip()
+    else:
+        ext_name = names.strip()
+    return ext_code.strip().upper(), int_code.strip().upper(), ext_name, int_name
 
 
 def _norm_header(h):
     return "".join(ch for ch in str(h or "").strip().lower() if ch.isalnum())
 
 
+def _looks_like_html(text):
+    head = (text or "")[:4096].lower()
+    return ("<table" in text.lower()) or ("<tr" in head) or head.lstrip().startswith("<!doctype html") \
+        or head.lstrip().startswith("<html") or ("</td>" in head)
+
+
 def parse_ctp_file(filename, data):
-    """Parse one uploaded CTP file into a list of normalized-header dict rows. Supports CSV/TSV/TXT (stdlib csv)
-    and XLSX (stdlib zipfile + ElementTree, first worksheet). Returns [] for an empty/unreadable file — never
-    raises, never fabricates rows."""
-    name = (filename or "").lower()
+    """Parse one uploaded CTP file into a list of normalized-header dict rows. Detects the format by CONTENT
+    signature (not just extension), so an OEM export saved as `.xls` that is really an HTML table still parses:
+      * ZIP signature (PK) / .xlsx → stdlib XLSX;
+      * HTML table markup (common for OEM `.xls` exports) → stdlib HTML-table parse;
+      * otherwise CSV/TSV.
+    Returns [] for an empty/unreadable file — never raises, never fabricates rows."""
     try:
-        if name.endswith(".xlsx"):
+        is_bytes = isinstance(data, (bytes, bytearray))
+        # XLSX / zip by magic bytes or extension
+        if (is_bytes and bytes(data[:2]) == b"PK") or (filename or "").lower().endswith(".xlsx"):
             return _parse_xlsx_rows(data)
-        text = data.decode("utf-8", "ignore") if isinstance(data, (bytes, bytearray)) else str(data)
-        delim = "\t" if (name.endswith(".tsv") or ("\t" in text.splitlines()[0] if text.splitlines() else False)) else ","
+        text = data.decode("utf-8", "ignore") if is_bytes else str(data)
+        if _looks_like_html(text):
+            return _parse_html_table(text)
+        delim = "\t" if ((filename or "").lower().endswith(".tsv")
+                         or ("\t" in text.splitlines()[0] if text.splitlines() else False)) else ","
         rows = list(csv.reader(io.StringIO(text), delimiter=delim))
         if not rows:
             return []
@@ -74,6 +132,65 @@ def parse_ctp_file(filename, data):
         return out
     except Exception:   # noqa: BLE001 — a bad file must never break the session
         return []
+
+
+def _parse_html_table(text):
+    """Parse an HTML document/table (the natural format of many OEM `.xls` exports) into normalized-header dict
+    rows. Uses the stdlib HTML parser; takes the widest table (most columns) as the data table; first row with
+    cells is the header. Cell text is whitespace-collapsed and HTML entities are decoded. No source text lost —
+    every column is preserved under its normalized header key."""
+    from html.parser import HTMLParser
+
+    class _T(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.tables = []      # list of tables; each a list of rows; each row a list of cell strings
+            self._row = None
+            self._cell = None
+            self._buf = []
+
+        def handle_starttag(self, tag, attrs):
+            t = tag.lower()
+            if t == "table":
+                self.tables.append([])
+            elif t == "tr":
+                self._row = []
+            elif t in ("td", "th"):
+                self._cell = []
+                self._buf = []
+
+        def handle_data(self, d):
+            if self._cell is not None:
+                self._buf.append(d)
+
+        def handle_endtag(self, tag):
+            t = tag.lower()
+            if t in ("td", "th") and self._cell is not None:
+                self._row.append(" ".join("".join(self._buf).split()))
+                self._cell = None
+            elif t == "tr" and self._row is not None:
+                if self.tables:
+                    self.tables[-1].append(self._row)
+                self._row = None
+            elif t == "br" and self._cell is not None:
+                self._buf.append(" ")
+
+    p = _T()
+    p.feed(text)
+    tables = [t for t in p.tables if any(r for r in t)]
+    if not tables:
+        return []
+    table = max(tables, key=lambda t: max((len(r) for r in t), default=0))   # widest = the data table
+    data_rows = [r for r in table if any(str(c).strip() for c in r)]
+    if not data_rows:
+        return []
+    header = [_norm_header(h) for h in data_rows[0]]
+    out = []
+    for raw in data_rows[1:]:
+        if not any(str(c).strip() for c in raw):
+            continue
+        out.append({header[i]: (str(raw[i]).strip() if i < len(raw) else "") for i in range(len(header))})
+    return out
 
 
 def _parse_xlsx_rows(data):
@@ -147,11 +264,16 @@ class Candidate:
     model_code: str = ""
     exterior: str = ""
     interior: str = ""
+    exterior_name: str = ""
+    interior_name: str = ""
     trim: str = ""
     drivetrain: str = ""
     description: str = ""
+    packages: str = ""
+    accessories: str = ""
     arrival_month: str = ""
     editability: str = ""
+    color_trim_raw: str = ""
     source_file: str = ""
     raw: dict = field(default_factory=dict)
 
@@ -162,17 +284,44 @@ class Candidate:
 
 def to_candidate(row, *, source_file=""):
     """Map a normalized-header row to a Candidate via flexible aliases. Only real source values are copied —
-    nothing is inferred. Returns None when neither an order# nor a VIN is present (cannot reconcile)."""
+    nothing is inferred. The OEM 'Model' column ("84317 QX60 LUXE FWD") is split into model code + human
+    description; the OEM 'Color/Trim' column ("KAD-K Graphite Shadow / Stone Gray") is split into exterior/
+    interior codes + human names, with the raw value preserved. Packages/Options, Accessories and ETA are
+    carried. Returns None when neither an order# nor a VIN is present (cannot reconcile)."""
     def pick(field_name):
         for a in _ALIASES[field_name]:
             if a in row and str(row[a]).strip():
                 return str(row[a]).strip()
         return ""
-    c = Candidate(order_number=pick("order_number"), vin=pick("vin").upper(), model=pick("model"),
-                  model_code=pick("model_code"), exterior=pick("exterior").upper(),
-                  interior=pick("interior").upper(), trim=pick("trim"), drivetrain=pick("drivetrain"),
-                  description=pick("description"), arrival_month=pick("arrival_month"),
-                  editability=pick("editability"), source_file=source_file, raw=dict(row))
+
+    model = pick("model")
+    model_code = pick("model_code")
+    trim, drivetrain, description = pick("trim"), pick("drivetrain"), pick("description")
+    # a Model column that carries the order code + human words ("84317 QX60 LUXE FWD")
+    if model and (model_code == "" or trim == "" or drivetrain == ""):
+        m_code, m_model, m_trim, m_drive, m_desc = _split_model(model)
+        model_code = model_code or m_code
+        # if the model cell was a code+words string, the human model is its first word
+        if m_code or len(model.split()) > 1:
+            model = m_model or model
+            description = description or m_desc
+            trim = trim or m_trim
+            drivetrain = drivetrain or m_drive
+
+    exterior, interior = pick("exterior").upper(), pick("interior").upper()
+    exterior_name = interior_name = ""
+    color_trim_raw = pick("color_trim")
+    if color_trim_raw and (not exterior or not interior):
+        ec, ic, en, iname = _split_color_trim(color_trim_raw)
+        exterior, interior = exterior or ec, interior or ic
+        exterior_name, interior_name = en, iname
+
+    c = Candidate(order_number=pick("order_number"), vin=pick("vin").upper(), model=model, model_code=model_code,
+                  exterior=exterior, interior=interior, exterior_name=exterior_name, interior_name=interior_name,
+                  trim=trim, drivetrain=drivetrain, description=description, packages=pick("packages"),
+                  accessories=pick("accessories"), arrival_month=pick("arrival_month"),
+                  editability=pick("editability"), color_trim_raw=color_trim_raw, source_file=source_file,
+                  raw=dict(row))
     return c if c.key else None
 
 
