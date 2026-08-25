@@ -347,8 +347,8 @@ def _cpo_replacement_block(nb, model, recs, stat, month):
 def _read_production_orders(app, scope):
     """Latest completed authoritative Production Orders snapshot rows, or [] — best effort, never breaks CPO."""
     try:
-        from ..newinv.supply_bridge import read_latest_snapshot_rows
-        from ..newinv.snapshots import SnapshotReader
+        from ...newinv.supply_bridge import read_latest_snapshot_rows
+        from ...newinv.snapshots import SnapshotReader
         ops = _ops_stack(app)
         ops_store = getattr(ops, "ops", None) if ops else None
         if ops_store is None:
@@ -1908,13 +1908,39 @@ def _certified_positions(app, scope):
     return certs, label_to_key
 
 
+def _ctp_norm_key(v):
+    """Order#/VIN dedup key — matches the CTP intake normalization (uppercase, strip, alnum+-_/ only)."""
+    o = str(v or "").strip().lstrip("'").upper()
+    return "".join(ch for ch in o if ch.isalnum() or ch in "-_/")
+
+
 def _ctp_pipeline_rows(app, scope):
-    """Current Pipeline as CTP-reconcilable rows: one dict per incoming production order (future supply), with
-    order_number, vin, combination_id, canonical, model, arrival_month. Read-only; no fabrication."""
+    """Current Pipeline as CTP-reconcilable rows: one dict per incoming production order, with order_number,
+    vin, combination_id, canonical, model, arrival_month. Read-only; no fabrication; no rows created FROM CTP.
+
+    Reads the SAME authoritative incoming-order sources the rest of the app treats as the Pipeline, in order:
+      1. the certified future-supply projection (`future_supply_projection` + `production_order`) — carries the
+         combination_id / canonical board position, so a matched order is fully evaluable; then
+      2. the authoritative Production Orders snapshot (`production_orders` source: manufacturer_order_id / vin /
+         model / eta_month) for any order that is loaded but not yet projected onto the certified board.
+    Without (2), an order the operator has loaded but Elite has not yet projected would read as 'not in the
+    Pipeline' even though it is — the live disconnect. Matching stays EXACT (Order# or VIN); a snapshot-only
+    match resolves reconciliation but has no board position, so the evaluator gates it honestly rather than
+    fabricating one."""
     conn = _conn(app)
     ident = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
         "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (scope,)).fetchall()}
-    out = []
+    out, seen_orders, seen_vins = [], set(), set()
+
+    def _emit(order_number, vin, cid, canonical, model, arrival_month):
+        out.append({"order_number": order_number, "vin": vin, "combination_id": cid, "canonical": canonical,
+                    "model": model, "arrival_month": arrival_month})
+        if order_number:
+            seen_orders.add(_ctp_norm_key(order_number))
+        if vin:
+            seen_vins.add(_ctp_norm_key(vin))
+
+    # 1) certified future-supply projection (has the board combination)
     try:
         rows = conn.execute(
             "SELECT f.combination_id AS cid, f.arrival_month AS am, o.manufacturer_order_id AS onum, o.vin AS vin "
@@ -1924,9 +1950,19 @@ def _ctp_pipeline_rows(app, scope):
         rows = []
     for r in rows:
         canonical = ident.get(r["cid"], r["cid"])
-        out.append({"order_number": (r["onum"] or ""), "vin": (r["vin"] or ""), "combination_id": r["cid"],
-                    "canonical": canonical, "model": _model_of(_readable(canonical)),
-                    "arrival_month": (r["am"] or "")})
+        _emit((r["onum"] or ""), (r["vin"] or ""), r["cid"], canonical, _model_of(_readable(canonical)),
+              (r["am"] or ""))
+
+    # 2) authoritative Production Orders snapshot — loaded orders not (yet) projected onto the certified board
+    for pr in _read_production_orders(app, scope):
+        onum = str(pr.get("manufacturer_order_id") or "").strip()
+        vin = str(pr.get("vin") or "").strip()
+        if not onum and not vin:
+            continue
+        if (onum and _ctp_norm_key(onum) in seen_orders) or (vin and _ctp_norm_key(vin) in seen_vins):
+            continue                                    # already covered by the certified projection
+        _emit(onum, vin, None, None, str(pr.get("model") or "").strip(),
+              str(pr.get("eta_month") or pr.get("eta") or "").strip())
     return out
 
 
@@ -1954,13 +1990,30 @@ def _ctp_board(app, scope, descriptions=None):
 
 
 def _ctp_pipeline_age(app, scope):
-    """Human 'Pipeline updated' timestamp (newest future-supply projection), or '' when none loaded."""
+    """Human 'Pipeline updated' timestamp — newest certified future-supply projection, else the authoritative
+    Production Orders snapshot load time (so a loaded-but-not-yet-projected Pipeline is not reported as 'not
+    loaded'). '' only when neither source has any incoming orders for this store."""
     try:
         r = _conn(app).execute("SELECT MAX(calculation_timestamp) AS t FROM future_supply_projection "
                                "WHERE store_scope=?", (scope,)).fetchone()
-        return (r["t"] or "")[:16].replace("T", " ") if r and r["t"] else ""
+        if r and r["t"]:
+            return (r["t"] or "")[:16].replace("T", " ")
     except Exception:   # noqa: BLE001
-        return ""
+        pass
+    # fall back to the Production Orders snapshot's own load time
+    try:
+        from ...newinv.snapshots import SnapshotReader
+        ops = _ops_stack(app)
+        ops_store = getattr(ops, "ops", None) if ops else None
+        if ops_store is not None:
+            reader = SnapshotReader(ops_store, ops.data)
+            snap = reader.latest_snapshot(ops.source_id("production_orders"), scope)
+            if snap is not None:
+                t = getattr(snap, "observed_time", None) or getattr(snap, "received_at", None) or ""
+                return (t or "")[:16].replace("T", " ")
+    except Exception:   # noqa: BLE001
+        pass
+    return ""
 
 
 def _demo_pools(app, scope, cid):
