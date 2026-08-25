@@ -80,9 +80,9 @@ class TestTranslationBootstrapAuthority(unittest.TestCase):
         st = TranslationStore(self.p.app.prefs, SCOPE)
         n1 = (len(st.semantic_mappings()), len(st.variant_rows()))
         self.assertGreater(n1[0], 0)
-        # colour/model-line SAME_AS are approved out-of-the-box; interpretations stay proposed (human governance)
+        # colour/model-line SAME_AS approved; deterministic family identity auto-resolved (approved) out-of-the-box
         self.assertTrue(any(m.approval == "approved" for m in st.semantic_mappings()))
-        self.assertTrue(all(r.approval == "proposed" for r in st.variant_rows()))
+        self.assertTrue(st.variant_rows() and all(r.approval == "approved" for r in st.variant_rows()))
         bootstrap_reviewed_translation(self.p.app.prefs, SCOPE)
         n2 = (len(st.semantic_mappings()), len(st.variant_rows()))
         self.assertEqual(n1, n2)                           # no duplicates on re-run

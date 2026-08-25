@@ -81,19 +81,25 @@ def bootstrap_reviewed_translation(prefs, scope, *, actor="system:translation-bo
     the rest of the app expects the governed dictionary to exist. Idempotent, provenance-preserving, and safe:
 
       * seeds the reviewed QX60/QX65/QX80 raw observations + the reviewed colour/model-line SAME_AS mappings
-        (approved) + the family/variant interpretations (left `proposed` for human governance, unchanged from
-        the manual-import contract — approving an interpretation stays an explicit human decision);
+        (approved) + the deterministic family/variant IDENTITY of an exact order code (auto-resolved, audited);
+      * surfaces the review-gated demand-SHARING relationships (cross-generation SAME FAMILY, package sharing)
+        as governed proposals — never auto-approved;
       * insert-if-absent everywhere — a re-run adds no duplicates and never reverts an operator's
-        approve/edit/retire or a more-specific operator mapping;
+        approve/edit/retire, a rejection, or a more-specific operator mapping;
       * writes governed JSON prefs only — no schema change (stays v12), no touch to the permanent inventory DB.
 
-    This activates the human COLOUR/model-line dictionary out-of-the-box; unknown/unreviewed codes stay honestly
-    unresolved and are never auto-approved. Returns the seed counts, or {} on any failure (bootstrap must never
-    block startup)."""
+    This activates the human COLOUR/model-line/identity dictionary out-of-the-box; unknown/unreviewed codes stay
+    honestly unresolved and are never auto-approved. Returns the seed counts, or {} on any failure (bootstrap
+    must never block startup)."""
     try:
         from .translation import TranslationStore
         from . import seed_infiniti as SEED
+        from .lineage import LineageStore, ensure_lineage_proposals
         store = TranslationStore(prefs, scope)
-        return SEED.seed(store, actor=actor)
+        counts = SEED.seed(store, actor=actor)
+        # Surface the review-gated demand-sharing relationships implied by the auto-resolved identity as governed
+        # PROPOSALS (never auto-approved; insert-if-absent so a rejected relationship is not re-prompted).
+        counts["lineage_proposed"] = ensure_lineage_proposals(store, LineageStore(prefs, scope), actor=actor)
+        return counts
     except Exception:   # noqa: BLE001
         return {}

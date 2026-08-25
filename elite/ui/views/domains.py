@@ -71,26 +71,50 @@ def _identity_kv(canonical):
     return dict(p.split("=", 1) for p in canonical.split("|")[1:] if "=" in p)
 
 
-def _describe(app, scope, canonical):
+def _source_descriptions(app, scope):
+    """Read-only lookup {(model, model_code, ext, int): DMS Description} from the latest inventory snapshot. The
+    Description ("QX80 LUXE 2WD") is the authoritative human trim/drivetrain for a physical VIN (item 6/22).
+    Read-only — never writes to the permanent DB; returns {} when no snapshot is loaded."""
+    try:
+        from ...loaner.placement import read_new_retail_units
+        from ...newinv.dms_identity import dms_planning_key
+        out = {}
+        for r in read_new_retail_units(app, scope) or []:
+            k = dms_planning_key(r)
+            desc = (r.get("description") or r.get("Description") or r.get("desc") or "").strip()
+            if k and desc:
+                out.setdefault(k, desc)
+        return out
+    except Exception:   # noqa: BLE001 — inventory availability must never break a page
+        return {}
+
+
+def _describe(app, scope, canonical, *, descriptions=None):
     """Governed Described (operator-intelligence vehicle-description standard) for a planning identity, reusing
-    the Translation & Identity store — the single governed source of human vehicle language (item 2/3). Returns
-    None for a non-planning identity so callers fall back to the compact code form."""
+    the Translation & Identity store — the single governed source of human vehicle language (item 2/3). When a
+    `descriptions` map is supplied, the physical VIN's DMS Description supplies human trim/drivetrain (agreement-
+    checked, model number stays king). Returns None for a non-planning identity so callers fall back to codes."""
     kv_ = _identity_kv(canonical)
     if not kv_:
         return None
     from ...identity.translation import TranslationStore
     from ...operatorstd import description as _D
+    src_desc = ""
+    if descriptions:
+        key = (kv_.get("model", ""), kv_.get("model_code", ""), kv_.get("exterior", ""), kv_.get("interior", ""))
+        src_desc = descriptions.get(key, "")
     return _D.describe(TranslationStore(app.prefs, scope), model=kv_.get("model", ""),
                        model_code=kv_.get("model_code", ""), exterior_code=kv_.get("exterior", ""),
-                       interior_code=kv_.get("interior", ""))
+                       interior_code=kv_.get("interior", ""), source_description=src_desc)
 
 
-def _readable_h(app, scope, canonical, *, dealer=False):
+def _readable_h(app, scope, canonical, *, dealer=False, descriptions=None):
     """Human vehicle language that ADDS governed names to codes ("QX80 LUXE 2WD — Radiant White (QBE) /
     Graphite (G)"), preserving codes. Degrades gracefully: when the governed store has nothing to add for this
     identity, it returns the compact code form (_readable) so an un-imported store never renders worse. With
-    dealer=True the names lead and internal codes are dropped entirely (item 12)."""
-    d = _describe(app, scope, canonical)
+    dealer=True the names lead and internal codes are dropped entirely (item 12). `descriptions` (optional) lets
+    the physical VIN's DMS Description supply human trim/drivetrain."""
+    d = _describe(app, scope, canonical, descriptions=descriptions)
     if d is None:
         return _readable(canonical)
     has_names = bool(d.exterior_name or d.interior_name or d.trim or d.drivetrain)

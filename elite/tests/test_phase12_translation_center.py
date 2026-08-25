@@ -31,7 +31,7 @@ class TestTranslationCenter(unittest.TestCase):
     def test_get_is_read_only(self):
         r = self.full.get("/admin/translation")
         self.assertEqual(r.status, 200)
-        self.assertIn("Not initialized", r.body)
+        self.assertIn("Reviewed dictionary", r.body)
         self.assertFalse(self._store().is_initialized())          # GET did NOT seed anything
         self.full.get("/admin/translation")                       # a second view still creates nothing
         self.assertFalse(self._store().is_initialized())
@@ -42,7 +42,7 @@ class TestTranslationCenter(unittest.TestCase):
         self.assertEqual(r.status, 403)                           # view-only operator is walled out
         self.assertFalse(self._store().is_initialized())         # nothing created
 
-    # governed import initializes; distinguishes observations / approved mappings / proposed interpretations
+    # governed import initializes; SAME_AS colours approved; deterministic family identity AUTO-RESOLVED
     def test_governed_import_and_idempotent(self):
         r = self.full.post("/admin/translation/import-reviewed-charts", {})
         self.assertEqual(r.status, 303)
@@ -50,20 +50,23 @@ class TestTranslationCenter(unittest.TestCase):
         self.assertTrue(st.is_initialized())
         self.assertGreater(len(st.observations()), 0)
         self.assertTrue(any(m.approval == "approved" for m in st.semantic_mappings()))   # SAME_AS approved
-        self.assertTrue(all(r.approval == "proposed" for r in st.variant_rows()))        # interpretation proposed
+        # deterministic identity from the reviewed charts auto-resolves (no operator click needed)
+        self.assertTrue(st.variant_rows() and all(r.approval == "approved" for r in st.variant_rows()))
         n_obs, n_map, n_rows = len(st.observations()), len(st.semantic_mappings()), len(st.variant_rows())
         self.full.post("/admin/translation/import-reviewed-charts", {})                  # re-run
         st2 = self._store()
         self.assertEqual((len(st2.observations()), len(st2.semantic_mappings()), len(st2.variant_rows())),
                          (n_obs, n_map, n_rows))                                          # idempotent, no dupes
 
-    def test_corrected_colors_approved_families_proposed(self):
+    def test_corrected_colors_and_families_auto_resolved(self):
         self.full.post("/admin/translation/import-reviewed-charts", {})
         b = self.full.get("/admin/translation").body
         self.assertIn("2T Dynamic Metal", b)                     # XLF corrected, approved
         self.assertIn("2T Radiant White", b)                     # XKJ
-        self.assertIn("QX80·LUXE·2WD", b)                        # appears as a PROPOSED interpretation
-        self.assertIn("Proposed interpretations", b)
+        self.assertIn("QX80·LUXE·2WD", b)                        # family identity auto-resolved (Approved families)
+        self.assertIn("Approved families", b)
+        # cross-generation demand SHARING is surfaced as a review — never auto-activated
+        self.assertIn("demand lineage", b.lower())
 
     # approving the interpretation moves the family into the approved preferred-order view (still unresolved order)
     def test_approve_interpretation_then_preferred_order(self):
@@ -107,7 +110,10 @@ class TestTranslationCenter(unittest.TestCase):
         log = self._store().audit_log()
         self.assertTrue(log)
         self.assertTrue(all(a.get("actor") and a.get("at") for a in log))    # who + when on every entry
-        self.assertEqual({a["actor"] for a in log}, {self.p.op_full})
+        # the operator triggered the import; deterministic auto-resolutions are attributed to the same operator
+        # with an explicit ':auto-resolve-identity' marker (visible in history), never a hidden system write.
+        self.assertTrue(all(a["actor"].startswith(self.p.op_full) for a in log))
+        self.assertTrue(any(a["actor"].endswith(":auto-resolve-identity") for a in log))
 
     # the live store shows only REAL observed unresolved values (no synthetic records)
     def test_no_synthetic_unresolved_after_import(self):

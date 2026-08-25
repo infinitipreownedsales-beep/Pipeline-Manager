@@ -999,6 +999,8 @@ def register(app):
                             (s.scope,)).fetchall()
         ident = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
             "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (s.scope,)).fetchall()}
+        from .domains import _source_descriptions
+        descs = _source_descriptions(app, s.scope)      # physical DMS Descriptions for human trim/drivetrain
         now, future = [], []
         for r in rows:
             try:
@@ -1007,8 +1009,8 @@ def register(app):
                 dec = {}
             arr, inc = int(dec.get("arrived_excess", 0) or 0), int(dec.get("incoming_excess", 0) or 0)
             canonical = ident.get(r["combination_id"], r["combination_id"])
-            readable = _readable_h(app, s.scope, canonical)                    # operator: human + codes
-            dealer_name = _readable_h(app, s.scope, canonical, dealer=True)    # dealer: names lead, no codes
+            readable = _readable_h(app, s.scope, canonical, descriptions=descs)                 # operator: human + codes
+            dealer_name = _readable_h(app, s.scope, canonical, dealer=True, descriptions=descs)  # dealer: names lead
             if arr > 0:
                 now.append({"identity": readable, "dealer": dealer_name, "qty": arr, "pid": r["id"],
                             "dts": dec.get("dts_burden", "—")})

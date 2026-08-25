@@ -37,6 +37,7 @@ class Described:
     exterior_name: str = ""
     interior_name: str = ""
     unresolved: tuple = ()            # axes with no governed evidence: any of model/trim/drivetrain/exterior/interior
+    description_conflict: bool = False  # DMS Description model disagrees with canonical model → one review (item 6)
     proof: dict = field(default_factory=dict)
 
     # ---- presentations -------------------------------------------------------------------------------------
@@ -108,14 +109,41 @@ class Described:
         return " ".join(x for x in (self.model_code, col) if x)
 
 
+# Drivetrain tokens a DMS Description may carry, in canonical human form.
+_DRIVETRAINS = ("2WD", "4WD", "AWD", "FWD", "RWD")
+
+
+def parse_dms_description(desc, *, model=""):
+    """Parse a DMS `Description` (e.g. "QX80 LUXE 2WD") into (trim, drivetrain, agrees_with_model).
+
+    Model number remains king: this reads the source's OWN human wording for a physical VIN — it never decodes
+    a model code and never overrides the canonical model. `agrees_with_model` is True only when the description
+    leads with the canonical model line, so a caller can auto-resolve on agreement and raise ONE conflict review
+    on disagreement (item 6). Returns ("", "", False) when nothing usable is present — never a guess."""
+    d = " ".join(str(desc or "").split())
+    if not d:
+        return "", "", False
+    toks = d.split(" ")
+    desc_model = toks[0].upper()
+    agrees = (not model) or (desc_model == str(model).strip().upper())
+    drivetrain = ""
+    body = toks[1:]
+    if body and body[-1].upper() in _DRIVETRAINS:
+        drivetrain = body[-1].upper()
+        body = body[:-1]
+    trim = " ".join(body).strip()
+    return trim, drivetrain, agrees
+
+
 def describe(store, *, model="", trim="", drivetrain="", model_year="", model_code="",
-             exterior_code="", interior_code="", source_system=DEFAULT_SOURCE) -> Described:
+             exterior_code="", interior_code="", source_description="", source_system=DEFAULT_SOURCE) -> Described:
     """Build a Described from whatever a source row carries, resolving human language from the governed
     TranslationStore. `store` is an identity.translation.TranslationStore (or None → codes-only, all unresolved).
 
     Family resolution: if trim/drivetrain are not supplied but a model_code is, resolve the governed commercial
-    family for that code (approved variant interpretation). Colour resolution uses the governed display resolver
-    scoped to the resolved model. Nothing is guessed; every gap is flagged in `.unresolved`."""
+    family for that code (approved variant interpretation). For a physical VIN the DMS Description supplies
+    trim/drivetrain when it agrees with the canonical model (item 6). Colour resolution uses the governed display
+    resolver scoped to the resolved model. Nothing is guessed; every gap is flagged in `.unresolved`."""
     model = (model or "").strip()
     trim = (trim or "").strip()
     drivetrain = (drivetrain or "").strip()
@@ -125,6 +153,19 @@ def describe(store, *, model="", trim="", drivetrain="", model_year="", model_co
     interior_code = (interior_code or "").strip()
     unresolved = []
     proof = {}
+    description_conflict = False
+
+    # ---- physical VIN: the DMS Description is the authoritative human trim/drivetrain, used ONLY when it agrees
+    #      with the canonical model (model number stays king). Disagreement is surfaced, never silently chosen. ----
+    if source_description and (not trim or not drivetrain):
+        s_trim, s_drive, agrees = parse_dms_description(source_description, model=model or model_code[:2])
+        if agrees:
+            trim = trim or s_trim
+            drivetrain = drivetrain or s_drive
+            if s_trim or s_drive:
+                proof["dms_description"] = source_description
+        else:
+            description_conflict = True         # DMS Description model disagrees with canonical — one review
 
     # ---- model / trim / drivetrain from the governed family (only where not already supplied) ----
     if (not model or not trim or not drivetrain) and model_code and store is not None:
@@ -164,14 +205,18 @@ def describe(store, *, model="", trim="", drivetrain="", model_year="", model_co
         else:
             unresolved.append("interior")
 
+    if description_conflict:
+        proof["description_conflict"] = source_description
     return Described(model=model, trim=trim, drivetrain=drivetrain, model_year=model_year, model_code=model_code,
                      exterior_code=exterior_code, interior_code=interior_code, exterior_name=exterior_name,
-                     interior_name=interior_name, unresolved=tuple(unresolved), proof=proof)
+                     interior_name=interior_name, unresolved=tuple(unresolved), proof=proof,
+                     description_conflict=description_conflict)
 
 
 def describe_row(store, row, *, source_system=DEFAULT_SOURCE) -> Described:
     """Convenience: describe a DMS/inventory-style dict row (keys model, model_year, model_code, ext/exterior,
-    int/interior, trim, drivetrain). Franchise/source-agnostic aliases mirror identity.ingest.IDENTITY_COLUMNS."""
+    int/interior, trim, drivetrain, description). Franchise/source-agnostic aliases mirror
+    identity.ingest.IDENTITY_COLUMNS."""
     def g(*keys):
         for k in keys:
             v = row.get(k)
@@ -184,4 +229,5 @@ def describe_row(store, row, *, source_system=DEFAULT_SOURCE) -> Described:
                     model_code=g("model_code"),
                     exterior_code=g("exterior", "exterior_code", "ext", "exterior_color"),
                     interior_code=g("interior", "interior_code", "int", "interior_color"),
+                    source_description=g("description", "Description", "desc"),
                     source_system=source_system)
