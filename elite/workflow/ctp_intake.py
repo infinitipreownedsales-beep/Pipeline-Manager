@@ -23,13 +23,16 @@ import io
 from dataclasses import dataclass, field
 from typing import Optional
 
+# business decision states — KEEP is a decision, never a fallback for unresolved data.
 KEEP = "KEEP"
 CHANGE = "CHANGE"
+CANT_EVALUATE = "CANT_EVALUATE"
 
 # reconciliation status
 MATCHED = "matched"
-UNMATCHED = "unmatched"          # candidate not found in current pipeline — verify source alignment
-CONFLICT = "conflict"           # order matched but VIN (or other identity) disagrees — surface both
+UNMATCHED = "unmatched"          # no current pipeline unit matches
+CONFLICT = "conflict"           # order# and VIN point to different pipeline units — surface both
+AMBIGUOUS = "ambiguous"         # more than one possible pipeline match — cannot choose safely
 
 # flexible source-column aliases → canonical candidate field (header-agnostic; case/space/punct-insensitive).
 _ALIASES = {
@@ -95,6 +98,16 @@ def _split_color_trim(value):
 
 def _norm_header(h):
     return "".join(ch for ch in str(h or "").strip().lower() if ch.isalnum())
+
+
+def _norm_order(o):
+    """Canonical order-number key for matching — lossless normalization only: trim whitespace, drop an Excel
+    leading-apostrophe text marker, uppercase, and strip hidden/punctuation noise while keeping alphanumerics
+    and -_/. Never fuzzy (no character deletion until something matches)."""
+    s = str(o or "").strip().upper()
+    if s.startswith("'"):
+        s = s[1:]
+    return "".join(ch for ch in s if ch.isalnum() or ch in "-_/")
 
 
 def _looks_like_html(text):
@@ -282,17 +295,43 @@ class Candidate:
         return (self.order_number or "").strip().upper() or (self.vin or "").strip().upper()
 
 
+def _valid_order_signature(order):
+    """A real OEM order number (e.g. `TK76329`) is a single alphanumeric token — no spaces, no `=`, not a
+    legend/footer marker (`*`, `C=Customer Order`). Reusable, not hard-coded to `TK`: it rejects obvious
+    non-order text while accepting any compact alphanumeric order id."""
+    o = str(order or "").strip()
+    if not o or o.startswith("*") or "=" in o or " " in o or "\t" in o:
+        return False
+    if not any(ch.isdigit() for ch in o):        # a real order id carries digits; pure words are legend text
+        return False
+    return 2 <= len(o) <= 20 and all(ch.isalnum() or ch in "-_/" for ch in o)
+
+
+def _is_legend_row(row):
+    """Detect a legend / footer / note row (e.g. "* C=Customer Order") so it never becomes a Candidate."""
+    joined = " ".join(str(v) for v in row.values()).strip().lower()
+    if not joined:
+        return True
+    return joined.startswith("*") or "=customerorder" in joined.replace(" ", "") \
+        or joined.startswith("legend") or joined.startswith("note")
+
+
 def to_candidate(row, *, source_file=""):
-    """Map a normalized-header row to a Candidate via flexible aliases. Only real source values are copied —
-    nothing is inferred. The OEM 'Model' column ("84317 QX60 LUXE FWD") is split into model code + human
-    description; the OEM 'Color/Trim' column ("KAD-K Graphite Shadow / Stone Gray") is split into exterior/
-    interior codes + human names, with the raw value preserved. Packages/Options, Accessories and ETA are
-    carried. Returns None when neither an order# nor a VIN is present (cannot reconcile)."""
+    """Map a normalized-header row to a Candidate — but ONLY when the row carries a genuine vehicle-order
+    signature: a valid Order # (or VIN) AND vehicle-identity evidence (model or model code). Legend/footer/note
+    rows (e.g. "* C=Customer Order") are rejected so they never inflate the candidate count, enter reconciliation
+    or receive a recommendation. Raw source is always preserved on the Candidate. Returns None for a non-order
+    row. Nothing is inferred — the OEM 'Model' and 'Color/Trim' columns are split into their real parts."""
+    if _is_legend_row(row):
+        return None
+
     def pick(field_name):
         for a in _ALIASES[field_name]:
             if a in row and str(row[a]).strip():
                 return str(row[a]).strip()
         return ""
+
+    order_number, vin = pick("order_number"), pick("vin").upper()
 
     model = pick("model")
     model_code = pick("model_code")
@@ -301,12 +340,17 @@ def to_candidate(row, *, source_file=""):
     if model and (model_code == "" or trim == "" or drivetrain == ""):
         m_code, m_model, m_trim, m_drive, m_desc = _split_model(model)
         model_code = model_code or m_code
-        # if the model cell was a code+words string, the human model is its first word
         if m_code or len(model.split()) > 1:
             model = m_model or model
             description = description or m_desc
             trim = trim or m_trim
             drivetrain = drivetrain or m_drive
+
+    # qualification: a reconciliation key AND vehicle identity — else this is not a vehicle order
+    has_key = _valid_order_signature(order_number) or (len(vin) >= 8 and vin.isalnum())
+    has_vehicle = bool(model or model_code)
+    if not (has_key and has_vehicle):
+        return None
 
     exterior, interior = pick("exterior").upper(), pick("interior").upper()
     exterior_name = interior_name = ""
@@ -316,134 +360,209 @@ def to_candidate(row, *, source_file=""):
         exterior, interior = exterior or ec, interior or ic
         exterior_name, interior_name = en, iname
 
-    c = Candidate(order_number=pick("order_number"), vin=pick("vin").upper(), model=model, model_code=model_code,
-                  exterior=exterior, interior=interior, exterior_name=exterior_name, interior_name=interior_name,
-                  trim=trim, drivetrain=drivetrain, description=description, packages=pick("packages"),
-                  accessories=pick("accessories"), arrival_month=pick("arrival_month"),
-                  editability=pick("editability"), color_trim_raw=color_trim_raw, source_file=source_file,
-                  raw=dict(row))
-    return c if c.key else None
+    return Candidate(order_number=order_number, vin=vin, model=model, model_code=model_code,
+                     exterior=exterior, interior=interior, exterior_name=exterior_name, interior_name=interior_name,
+                     trim=trim, drivetrain=drivetrain, description=description, packages=pick("packages"),
+                     accessories=pick("accessories"), arrival_month=pick("arrival_month"),
+                     editability=pick("editability"), color_trim_raw=color_trim_raw, source_file=source_file,
+                     raw=dict(row))
 
 
 @dataclass
 class Reconciled:
     candidate: Candidate
-    status: str
-    pipeline: Optional[dict] = None      # matched pipeline row: {order_number, vin, combination_id, canonical, ...}
-    conflict_detail: str = ""
+    status: str                          # MATCHED / UNMATCHED / CONFLICT / AMBIGUOUS
+    pipeline: Optional[dict] = None      # matched pipeline row (only when MATCHED)
+    detail: str = ""                     # plain-English reconciliation detail
+    match_method: str = ""               # "order#" / "vin" — for proof/audit
+    audit: dict = field(default_factory=dict)
 
 
 def reconcile(candidates, pipeline_rows):
-    """Match each candidate to the CURRENT pipeline by Order# (then VIN). `pipeline_rows` are dicts with
-    order_number, vin, combination_id, canonical, model, arrival_month. Never creates pipeline rows; each
-    candidate maps to at most one pipeline unit (count-once)."""
+    """Match each candidate to the CURRENT pipeline. Match-key hierarchy: (1) exact normalized Order #,
+    (2) exact VIN; when both exist they must resolve to the SAME pipeline unit. Never fuzzy-matches on model/
+    colour/ETA, never creates pipeline rows. Ambiguity (an order# or VIN mapping to more than one pipeline unit)
+    is AMBIGUOUS, not a guess. Every result carries the attempted keys for proof/audit."""
     by_order, by_vin = {}, {}
     for p in pipeline_rows or []:
-        o = (p.get("order_number") or "").strip().upper()
+        o = _norm_order(p.get("order_number"))
         v = (p.get("vin") or "").strip().upper()
         if o:
-            by_order.setdefault(o, p)
+            by_order.setdefault(o, []).append(p)
         if v:
-            by_vin.setdefault(v, p)
+            by_vin.setdefault(v, []).append(p)
     out = []
     for c in candidates:
-        o, v = (c.order_number or "").strip().upper(), (c.vin or "").strip().upper()
-        p = by_order.get(o) if o else None
-        if p is not None:
-            # order matched — check VIN agreement when both sides carry one
-            pv = (p.get("vin") or "").strip().upper()
-            if v and pv and v != pv:
-                out.append(Reconciled(c, CONFLICT, p, f"CTP VIN {v} ≠ pipeline VIN {pv} for order {o}"))
-            else:
-                out.append(Reconciled(c, MATCHED, p))
+        o, v = _norm_order(c.order_number), (c.vin or "").strip().upper()
+        audit = {"ctp_order": c.order_number, "ctp_order_normalized": o, "ctp_vin": v or "none",
+                 "pipeline_units": len(pipeline_rows or [])}
+        po, pv = by_order.get(o, []), by_vin.get(v, []) if v else []
+        audit["order_match_count"], audit["vin_match_count"] = len(po), len(pv)
+        if o and len(po) > 1:
+            out.append(Reconciled(c, AMBIGUOUS, None, f"more than one Pipeline unit matches order {c.order_number}",
+                                  audit=audit))
             continue
-        p = by_vin.get(v) if v else None
-        if p is not None:
-            out.append(Reconciled(c, MATCHED, p))
-        else:
-            out.append(Reconciled(c, UNMATCHED, None,
-                                  "CTP candidate not found in current Pipeline — verify source alignment"))
+        if v and len(pv) > 1:
+            out.append(Reconciled(c, AMBIGUOUS, None, f"more than one Pipeline unit matches VIN {v}", audit=audit))
+            continue
+        p_order = po[0] if po else None
+        p_vin = pv[0] if pv else None
+        if p_order is not None and p_vin is not None and p_order is not p_vin:
+            out.append(Reconciled(c, CONFLICT, None,
+                       f"the CTP file and Pipeline disagree on this unit (order {c.order_number} and VIN {v} "
+                       f"point to different Pipeline units)", audit=audit))
+            continue
+        if p_order is not None:
+            pv_of = (p_order.get("vin") or "").strip().upper()
+            if v and pv_of and v != pv_of:
+                out.append(Reconciled(c, CONFLICT, None,
+                           f"the CTP file and Pipeline disagree on the VIN for order {c.order_number} "
+                           f"(CTP {v} vs Pipeline {pv_of})", audit={**audit, "pipeline_vin": pv_of}))
+                continue
+            out.append(Reconciled(c, MATCHED, p_order, "matched by order #", "order#", audit))
+            continue
+        if p_vin is not None:
+            out.append(Reconciled(c, MATCHED, p_vin, "matched by VIN", "vin", audit))
+            continue
+        out.append(Reconciled(c, UNMATCHED, None,
+                   f"{c.order_number or v} is not in the Pipeline file currently loaded", audit=audit))
     return out
 
 
 @dataclass
-class Verdict:
-    reconciled: Reconciled
-    recommendation: str                  # KEEP / CHANGE
-    proposed_combination: Optional[str] = None      # canonical of the CHANGE target (a certified-short combo)
-    proposed_label: str = ""
-    why: str = ""
+class Recommendation:
+    """One order's decision (spec 03 contract). KEEP/CHANGE are business decisions reached only after a matched,
+    evaluable order; any reconciliation or essential-fact gap is CANT_EVALUATE — never a silent KEEP."""
+    decision_state: str                  # KEEP | CHANGE | CANT_EVALUATE
+    order_number: str = ""
+    vin: str = ""
+    reconciliation: str = ""
+    current_line: str = ""               # "QX60 LUXE FWD"
+    current_colors: str = ""             # "Graphite Shadow / Stone Gray"
+    current_codes: str = ""              # "84317 • KAD-K"
+    proposed_line: str = ""
+    proposed_colors: str = ""
+    reason_plain: str = ""
+    operator_action_plain: str = ""
+    blocking_reason: str = ""
     proof: dict = field(default_factory=dict)
+    source_provenance: dict = field(default_factory=dict)
+    evaluation_timestamp: str = ""
+    candidate: Optional[Candidate] = None
 
 
 def _model_of(label):
     return (label or "").split(" ", 1)[0]
 
 
-def evaluate(reconciled, board):
-    """Judge all reconciled candidates TOGETHER, sequentially against a DISPOSABLE copy of the certified board,
-    re-running the full horizon after each accepted CHANGE (one change alters another need).
+def human_build(candidate):
+    """(line, colors, codes) for a candidate's current build, from the source's OWN human wording (exterior/
+    interior equally first-class). "QX60 LUXE FWD" / "Graphite Shadow / Stone Gray" / "84317 • KAD-K"."""
+    line = " ".join(x for x in (candidate.model, candidate.trim, candidate.drivetrain) if x)
+    ext, it = candidate.exterior_name or candidate.exterior, candidate.interior_name or candidate.interior
+    colors = " / ".join(x for x in (ext, it) if x)
+    code = candidate.model_code
+    cc = "-".join(x for x in (candidate.exterior, candidate.interior) if x)
+    codes = " • ".join(x for x in (code, cc) if x)
+    return line, colors, codes
 
-    `board` is a dict keyed by combination_id → {"canonical", "label", "model", "excess", "short"} where
-    `excess` is the certified over-supply on that combination and `short` the certified acquire-now need. A CTP
-    order currently scheduled to an EXCESS combination is a CHANGE candidate: it is re-specified to a
-    genuinely-SHORT combination OF THE SAME MODEL LINE (never a fabricated/nearest target, never a colour
-    preference). The proof is the full-horizon coverage effect: source excess −1, target short −1. Everything
-    else KEEPs (no proven superior replacement)."""
-    # disposable planning state
+
+def evaluate(reconciled, board, *, now=""):
+    """Turn reconciled candidates into business Recommendations via the state machine:
+        PARSED → RECONCILED → EVALUABLE → KEEP | CHANGE   (any earlier gap → CANT_EVALUATE)
+
+    `board` is keyed by combination_id → {canonical, line, colors, model, excess, short}: `excess` the certified
+    over-supply, `short` the certified need. Only a MATCHED order with the essentials (a board position for its
+    combination AND known arrival timing) is EVALUABLE. Evaluated together, sequentially, against a disposable
+    copy of the board so the horizon re-runs after each CHANGE. CHANGE re-specifies the slot to a genuinely
+    certified-short combination OF THE SAME MODEL — never fabricated, never nearest-code, never colour
+    preference. KEEP only after a completed evaluation found no superior target."""
     state = {cid: {"excess": int(b.get("excess", 0) or 0), "short": int(b.get("short", 0) or 0),
-                   "canonical": b.get("canonical", cid), "label": b.get("label", ""), "model": b.get("model", "")}
+                   "canonical": b.get("canonical", cid), "line": b.get("line", ""), "colors": b.get("colors", ""),
+                   "model": (b.get("model") or _model_of(b.get("line", ""))).upper()}
              for cid, b in (board or {}).items()}
-    # short targets grouped by model line, strongest need first (deterministic; economics via `short` magnitude)
+
     def short_targets(model):
-        return sorted([(cid, st) for cid, st in state.items()
-                       if st["short"] > 0 and (st["model"] or _model_of(st["label"])) == model],
+        return sorted([(cid, st) for cid, st in state.items() if st["short"] > 0 and st["model"] == model],
                       key=lambda t: (-t[1]["short"], t[1]["canonical"]))
 
-    verdicts = []
-    # evaluate matched candidates in a stable order; unmatched/conflict cannot be evaluated (surfaced as-is)
+    recs = []
     for rc in reconciled:
+        c = rc.candidate
+        line, colors, codes = human_build(c)
+        prov = {"source_file": c.source_file, "reconciliation": rc.status, "match_method": rc.match_method,
+                "audit": rc.audit}
+        base = dict(order_number=c.order_number, vin=c.vin, reconciliation=rc.status, current_line=line,
+                    current_colors=colors, current_codes=codes, source_provenance=prov,
+                    evaluation_timestamp=now, candidate=c)
+
+        # --- gate 1: reconciliation must be a clean single MATCH ---
         if rc.status != MATCHED or rc.pipeline is None:
-            verdicts.append(Verdict(rc, KEEP, why=(rc.conflict_detail or
-                            "not reconciled to the current pipeline — cannot evaluate a change"),
-                                    proof={"reconciliation": rc.status}))
+            reason = {UNMATCHED: f"Can't evaluate — {rc.detail}.",
+                      CONFLICT: f"Can't evaluate — {rc.detail}.",
+                      AMBIGUOUS: f"Can't evaluate — {rc.detail}."}.get(rc.status, "Can't evaluate — unresolved.")
+            recs.append(Recommendation(decision_state=CANT_EVALUATE, blocking_reason=rc.detail,
+                        reason_plain=reason,
+                        operator_action_plain="Update Pipeline or verify this order number.",
+                        proof={"reconciliation": rc.status, **rc.audit}, **base))
             continue
+
         cid = rc.pipeline.get("combination_id")
-        src = state.get(cid)
-        model = (rc.pipeline.get("model") or (_model_of(src["label"]) if src else "")).upper() or \
-            (rc.candidate.model or "").upper()
-        if src is None or src["excess"] <= 0:
-            verdicts.append(Verdict(rc, KEEP,
-                            why="current configuration is not over-supplied — no proven superior change",
-                            proof={"current_excess": (src["excess"] if src else 0)}))
+        pos = state.get(cid)
+        # --- gate 2: essential facts to compare the future position ---
+        if pos is None:
+            recs.append(Recommendation(decision_state=CANT_EVALUATE,
+                        blocking_reason="no certified supply/demand position for this combination",
+                        reason_plain="Can't evaluate — Elite doesn't have a current supply/demand position for "
+                                     "this build yet.",
+                        operator_action_plain="Refresh the plan / inventory, then re-check.",
+                        proof={"combination_id": cid}, **base))
             continue
-        targets = short_targets(model)
-        if not targets:
-            verdicts.append(Verdict(rc, KEEP,
-                            why="over-supplied here, but no certified-short target of the same model exists to "
-                                "re-specify into — Elite will not fabricate a target",
-                            proof={"current_excess": src["excess"], "candidate_targets": 0}))
+        if not (c.arrival_month or rc.pipeline.get("arrival_month")):
+            recs.append(Recommendation(decision_state=CANT_EVALUATE,
+                        blocking_reason="arrival timing missing",
+                        reason_plain="Can't evaluate — arrival timing is missing, so Elite can't test the future "
+                                     "inventory position.",
+                        operator_action_plain="Add the production/ETA month for this order.",
+                        proof={"combination_id": cid}, **base))
             continue
-        # proven superior replacement: move this one unit excess→short. Re-run the horizon (mutate state).
+
+        # --- EVALUABLE: KEEP unless a proven superior target exists ---
+        model = pos["model"] or (c.model or "").upper()
+        targets = short_targets(model) if pos["excess"] > 0 else []
+        if pos["excess"] <= 0 or not targets:
+            recs.append(Recommendation(decision_state=KEEP,
+                        reason_plain=("Keep it. By arrival this build is still at or below its needed supply, and "
+                                      "no eligible alternative improves the future position."
+                                      if pos["excess"] <= 0 else
+                                      "Keep it. Elite found no better proven use of this production slot."),
+                        operator_action_plain=f"Leave {c.order_number or c.vin} exactly as it is.",
+                        proof={"current_combination": pos["canonical"], "current_excess": pos["excess"],
+                               "eligible_targets": len(targets)}, **base))
+            continue
+
+        # proven superior replacement: re-specify one unit excess→short; re-run the horizon (mutate state)
         tcid, tgt = targets[0]
-        before = {"source_excess": src["excess"], "target_short": tgt["short"]}
-        src["excess"] -= 1
+        before = {"source_excess": pos["excess"], "target_short": tgt["short"]}
+        pos["excess"] -= 1
         tgt["short"] -= 1
-        verdicts.append(Verdict(rc, CHANGE, proposed_combination=tgt["canonical"], proposed_label=tgt["label"],
-                        why=(f"current configuration is over-supplied and {tgt['label']} is certified short; "
-                             f"re-specifying this incoming order covers a real need and reduces excess "
-                             f"(full-horizon net improvement)."),
-                        proof={"source_combination": src["canonical"], "target_combination": tgt["canonical"],
-                               "before": before,
-                               "after": {"source_excess": src["excess"], "target_short": tgt["short"]}}))
-    return verdicts
+        recs.append(Recommendation(decision_state=CHANGE, proposed_line=tgt["line"], proposed_colors=tgt["colors"],
+                    reason_plain=(f"Change it to {tgt['colors'] or tgt['line']}. Elite projects enough "
+                                  f"{colors or line} supply by arrival, while {tgt['colors'] or tgt['line']} "
+                                  f"remains short."),
+                    operator_action_plain=(f"In the Infiniti CTP portal, change {c.order_number or c.vin} to "
+                                           f"{tgt['line']} {tgt['colors']}".strip()),
+                    proof={"source_combination": pos["canonical"], "target_combination": tgt["canonical"],
+                           "before": before, "after": {"source_excess": pos["excess"], "target_short": tgt["short"]}},
+                    **base))
+    return recs
 
 
-def summarize(reconciled, verdicts):
-    """Session headline counts for the UI."""
-    return {"candidates": len(reconciled),
-            "matched": sum(1 for r in reconciled if r.status == MATCHED),
-            "unmatched": sum(1 for r in reconciled if r.status == UNMATCHED),
-            "conflict": sum(1 for r in reconciled if r.status == CONFLICT),
-            "keep": sum(1 for v in verdicts if v.recommendation == KEEP),
-            "change": sum(1 for v in verdicts if v.recommendation == CHANGE)}
+def summarize(recommendations):
+    """Business-language session counts for the top summary. KEEP/CHANGE only count evaluated orders; unresolved
+    orders count as 'need attention', never KEEP."""
+    keep = sum(1 for r in recommendations if r.decision_state == KEEP)
+    change = sum(1 for r in recommendations if r.decision_state == CHANGE)
+    attention = sum(1 for r in recommendations if r.decision_state == CANT_EVALUATE)
+    return {"orders": len(recommendations), "ready": keep + change, "keep": keep, "change": change,
+            "attention": attention}

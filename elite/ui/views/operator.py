@@ -1224,82 +1224,145 @@ def register(app):
         s = req.session
         app.require(s, "workspace.view")
         from ...workflow import ctp_intake as CTP
+        from .domains import _source_descriptions
+        from ...clock import to_utc_iso
         sess = _ws_get(app, s.scope, "ctp_session", {}) or {}
-        files = sess.get("files", [])                  # [{name, model, rows}]
-        cand_dicts = [c for f in files for c in f.get("candidates", [])]
-        candidates = [CTP.Candidate(**c) for c in cand_dicts]
+        files = sess.get("files", [])
 
-        # controls: start/update session + add a CTP file (temporary eligibility overlay — not the pipeline)
+        head = ('<div class="wshead"><h1>CTP — What Should I Change?</h1></div>'
+                '<p class="muted">Upload the current Infiniti CTP files. Elite will tell you which production '
+                'orders to leave alone and which ones to change.</p>')
+
+        # SECTION A — upload + loaded-file chips
         add = ('<form method="post" action="/ctp/upload" enctype="multipart/form-data" class="mut">'
                f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
-               '<label>Add a CTP model file (QX60 / QX65 / QX80 / other) — CSV or XLSX</label>'
-               '<input type=file name=file accept=".csv,.tsv,.txt,.xlsx" required> '
-               '<button type=submit>Add CTP file</button></form>'
-               '<form method="post" action="/ctp/clear" class="mut" style="display:inline">'
-               f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
-               '<button type=submit class=secondary>Clear CTP session</button></form>')
-        parts = ['<div class="card"><h2>CTP — Change The Production</h2>'
-                 '<p class="muted">The OEM decides which existing production orders are still changeable. Upload '
-                 'the operator\'s CTP model files — a <strong>temporary eligibility overlay</strong> reconciled to '
-                 'the current Pipeline by Order # / VIN. It creates no inventory and changes no source.</p>'
-                 + add + '</div>']
+               '<input type=file name=file accept=".csv,.tsv,.txt,.xls,.xlsx" required> '
+               '<button type=submit>Add CTP File</button>'
+               '<span class="muted" style="margin-left:10px">Add QX60, QX65, QX80, or any other current Infiniti '
+               'CTP file. You can add more than one.</span></form>')
+        chips = ""
+        for i, f in enumerate(files):
+            chips += (f'<span class="chip">{esc(f.get("model") or "?")} — {len(f.get("candidates", []))} orders '
+                      f'<form class="mut" method="post" action="/ctp/remove" style="display:inline">'
+                      f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}"><input type=hidden name=idx value="{i}">'
+                      f'<button type=submit title="Remove file" '
+                      f'style="padding:0 4px;background:none;border:none;color:var(--muted);cursor:pointer">✕</button>'
+                      f'</form></span> ')
+        clear = ('<form class="mut" method="post" action="/ctp/clear" style="display:inline;margin-left:6px">'
+                 f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+                 '<button type=submit class=secondary>Clear session</button></form>') if files else ""
+        upload_card = f'<div class="card"><h2>Add CTP File</h2>{add}<div style="margin-top:10px">{chips}{clear}</div></div>'
 
         if not files:
-            parts.append('<div class="card"><p>No current CTP candidate files loaded.</p></div>')
-            return _resp(app, s, "CTP", "".join(parts), "/ctp")
+            return _resp(app, s, "CTP", head + upload_card + '<div class="card"><p>No CTP files loaded yet.</p></div>',
+                         "/ctp")
 
-        # reconcile to the current pipeline, then evaluate the whole set together (full-horizon, sequential)
+        # parse session → reconcile → evaluate (state machine)
+        candidates = [CTP.Candidate(**c) for f in files for c in f.get("candidates", [])]
+        descs = _source_descriptions(app, s.scope)
         pipeline = _ctp_pipeline_rows(app, s.scope)
         reconciled = CTP.reconcile(candidates, pipeline)
-        board = _ctp_board(app, s.scope)
-        verdicts = CTP.evaluate(reconciled, board)
-        summ = CTP.summarize(reconciled, verdicts)
+        board = _ctp_board(app, s.scope, descriptions=descs)
+        now = to_utc_iso(app.stack.clock.now())[:16].replace("T", " ")
+        recs = CTP.evaluate(reconciled, board, now=now)
+        summ = CTP.summarize(recs)
+        pipe_age = _ctp_pipeline_age(app, s.scope)
 
-        loaded = ", ".join(f'{esc(f["name"])} ({esc(f.get("model") or "?")}, {len(f.get("candidates", []))})'
-                           for f in files)
-        parts.append('<div class="card"><h3>Session</h3>'
-                     + stat_row([metric(len(files), "Files"), metric(summ["candidates"], "Candidates"),
-                                 metric(summ["matched"], "Matched"),
-                                 metric(summ["unmatched"] + summ["conflict"], "Reconcile issues",
-                                        attn=bool(summ["unmatched"] + summ["conflict"])),
-                                 metric(summ["keep"], "KEEP"), metric(summ["change"], "CHANGE", attn=bool(summ["change"]))])
-                     + f'<p class="muted">Loaded: {loaded}</p></div>')
+        changes = [r for r in recs if r.decision_state == CTP.CHANGE]
+        keeps = [r for r in recs if r.decision_state == CTP.KEEP]
+        attention = [r for r in recs if r.decision_state == CTP.CANT_EVALUATE]
 
-        # reconciliation issues (unmatched / identity conflict)
-        issues = [r for r in reconciled if r.status != CTP.MATCHED]
-        if issues:
-            irows = [[esc(r.candidate.order_number or "—"), esc(r.candidate.vin or "—"),
-                      safe(badge("blocked" if r.status == CTP.CONFLICT else "pending", r.status)),
-                      esc(r.conflict_detail)] for r in issues]
-            parts.append('<div class="card"><h3>Reconciliation issues</h3>'
-                         + table(["Order #", "VIN", "Status", "Detail"], irows) + '</div>')
+        # SECTION B — business summary
+        model_label = ", ".join(sorted({(f.get("model") or "?") for f in files})) or "OEM"
+        b_cards = stat_row([metric(summ["orders"], "Orders available"), metric(summ["ready"], "Ready"),
+                            metric(summ["change"], "Change", attn=bool(summ["change"])),
+                            metric(summ["keep"], "Keep"),
+                            metric(summ["attention"], "Need Attention", attn=bool(summ["attention"]))])
+        if summ["ready"] == 0 and summ["attention"]:
+            msg = ('<p class="callout">Elite cannot make CTP recommendations until these orders are found in the '
+                   'current Pipeline.</p>')
+        elif summ["change"] and summ["attention"]:
+            msg = (f'<p class="muted">{summ["change"]} change(s) recommended. {summ["keep"]} to keep. '
+                   f'{summ["attention"]} order(s) need attention before Elite can decide.</p>')
+        elif summ["change"]:
+            msg = (f'<p class="muted">{summ["change"]} change(s) recommended. {summ["keep"]} order(s) should stay '
+                   f'as they are.</p>')
+        elif summ["attention"]:
+            msg = f'<p class="muted">{summ["keep"]} ready to keep. {summ["attention"]} need attention.</p>'
+        else:
+            msg = f'<p class="muted">All {summ["keep"]} orders should stay as they are.</p>'
+        summary_card = f'<div class="card"><h2>{summ["orders"]} {esc(model_label)} orders available</h2>{b_cards}{msg}</div>'
 
-        # the decision table: Order -> Current -> Recommendation -> Proposed -> Why -> Proof
-        drows = []
-        for v in verdicts:
-            c = v.reconciled.candidate
-            cur = ""
-            if v.reconciled.pipeline:
-                cur = _readable_h(app, s.scope, v.reconciled.pipeline.get("canonical", ""))
-            cur = cur or esc(c.description or c.model_code or "—")
-            tone = "completed" if v.recommendation == CTP.KEEP else "attention"
-            proposed = esc(v.proposed_label) if v.recommendation == CTP.CHANGE else '<span class="muted">— keep —</span>'
-            proof = kv([("Source combination", v.proof.get("source_combination", "—")),
-                        ("Target combination", v.proof.get("target_combination", "—")),
-                        ("Before (excess / target short)",
-                         f'{v.proof.get("before", {}).get("source_excess", "—")} / {v.proof.get("before", {}).get("target_short", "—")}'),
-                        ("After (excess / target short)",
-                         f'{v.proof.get("after", {}).get("source_excess", "—")} / {v.proof.get("after", {}).get("target_short", "—")}'),
-                        ("Reconciliation", v.proof.get("reconciliation", "matched"))])
-            drows.append([esc(c.order_number or c.vin or "—"), safe(str(cur)),
-                          safe(badge(tone, v.recommendation)), safe(str(proposed)),
-                          safe(f'<span class="muted">{esc(v.why)}</span> ' + disclosure("Proof", proof))])
-        parts.append('<div class="card"><h3>Candidates — KEEP / CHANGE</h3>'
-                     '<p class="muted">Evaluated together against the certified board; a CHANGE requires a proven '
-                     'superior target (a certified-short combination of the same model) and the full horizon is '
-                     're-run after each change. No fabricated targets, no colour preference.</p>'
-                     + table(["Order", "Current configuration", "Recommendation", "Proposed", "Why / Proof"], drows)
-                     + '</div>')
+        parts = [head, upload_card, summary_card]
+
+        def _build_html(line, colors, codes=""):
+            return (f'<div><strong>{esc(line or "—")}</strong></div>'
+                    + (f'<div>{esc(colors)}</div>' if colors else "")
+                    + (f'<div class="muted" style="font-size:12px">{esc(codes)}</div>' if codes else ""))
+
+        def _proof(r):
+            rows_ = [(k, str(v)) for k, v in r.proof.items() if not isinstance(v, dict)]
+            for k, v in r.proof.items():
+                if isinstance(v, dict):
+                    rows_.append((k, ", ".join(f"{kk}={vv}" for kk, vv in v.items())))
+            return disclosure("Show proof", kv(rows_))
+
+        # SECTION C — actions first
+        if changes:
+            cc = ""
+            for r in changes:
+                cc += ('<div class="card" style="border-left:3px solid var(--accent)">'
+                       f'<h3>{safe(badge("need", "CHANGE"))} {esc(r.order_number or r.vin)}</h3>'
+                       '<dl class="kv"><dt>Current</dt><dd>' + _build_html(r.current_line, r.current_colors, r.current_codes)
+                       + '</dd><dt>Change to</dt><dd>' + _build_html(r.proposed_line, r.proposed_colors) + '</dd></dl>'
+                       f'<p><strong>Why</strong> {esc(r.reason_plain)}</p>'
+                       f'<p><strong>What to do</strong> {esc(r.operator_action_plain)}</p>'
+                       + _proof(r) + '</div>')
+            parts.append('<div class="card"><h2>What You Should Do</h2>' + cc + '</div>')
+
+        if keeps:
+            kc = ""
+            for r in keeps:
+                kc += ('<div class="card">'
+                       f'<h3>{safe(badge("completed", "KEEP"))} {esc(r.order_number or r.vin)}</h3>'
+                       + _build_html(r.current_line, r.current_colors, r.current_codes)
+                       + f'<p>Leave this order exactly as it is. <span class="muted">{esc(r.reason_plain)}</span></p>'
+                       + _proof(r) + '</div>')
+            parts.append('<div class="card"><h2>Keep — leave these as they are</h2>' + kc + '</div>')
+
+        if attention:
+            ac = ""
+            for r in attention:
+                det = kv([("CTP file", r.source_provenance.get("source_file", "")),
+                          ("Parsed order #", r.proof.get("ctp_order", r.order_number)),
+                          ("Parsed VIN", r.proof.get("ctp_vin", r.vin or "none")),
+                          ("Pipeline updated", pipe_age or "not loaded"),
+                          ("Order match count", r.proof.get("order_match_count", 0)),
+                          ("VIN match count", r.proof.get("vin_match_count", 0))])
+                ac += ('<div class="card" style="border-left:3px solid var(--timing)">'
+                       f'<h3>{safe(badge("stale", "NEEDS ATTENTION"))} {esc(r.order_number or r.vin)}</h3>'
+                       + _build_html(r.current_line, r.current_colors, r.current_codes)
+                       + f'<p>{esc(r.reason_plain)}</p>'
+                       + f'<p><strong>What to do</strong> {esc(r.operator_action_plain)}</p>'
+                       + disclosure("Show matching details", det) + '</div>')
+            parts.append('<div class="card"><h2>Orders Elite Can\'t Evaluate Yet</h2>' + ac + '</div>')
+
+        # SECTION D — compact scan table
+        trows = []
+        for r in recs:
+            says = {CTP.KEEP: badge("completed", "Keep"), CTP.CHANGE: badge("need", "Change"),
+                    CTP.CANT_EVALUATE: badge("stale", "Needs attention")}[r.decision_state]
+            change_to = (f'{esc(r.proposed_line)} {esc(r.proposed_colors)}'.strip()
+                         if r.decision_state == CTP.CHANGE else '<span class="muted">—</span>')
+            build = f'{esc(r.current_line)}' + (f' — {esc(r.current_colors)}' if r.current_colors else "")
+            trows.append([esc(r.order_number or r.vin), safe(build), safe(says), safe(change_to),
+                          esc(r.reason_plain)])
+        parts.append('<div class="card"><h2>All orders</h2>'
+                     + table(["Order", "Current Build", "Elite Says", "Change To", "Why"], trows) + '</div>')
+
+        # SECTION G — quiet session status
+        parts.append(f'<p class="muted" style="font-size:12px">CTP session: {len(files)} file(s) • '
+                     f'{summ["orders"]} OEM orders • Pipeline updated {esc(pipe_age or "— not loaded —")}</p>')
         return _resp(app, s, "CTP", "".join(parts), "/ctp")
 
     @app.post("/ctp/upload")
@@ -1307,6 +1370,7 @@ def register(app):
         s = req.session
         app.require(s, "workspace.view")
         from ...workflow import ctp_intake as CTP
+        from ...ids import new_id
         upload = req.files.get("file")
         if not upload or not upload[1]:
             s.flash = "Choose a CTP file to add first; nothing was loaded."
@@ -1315,17 +1379,35 @@ def register(app):
         rows = CTP.parse_ctp_file(filename, data)
         candidates = [c for c in (CTP.to_candidate(r, source_file=filename) for r in rows) if c is not None]
         if not candidates:
-            s.flash = f"No CTP candidates found in {filename} (need an Order # or VIN per row). Nothing was loaded."
+            s.flash = (f"Elite couldn't find any orders in {filename}. If this is the OEM CTP export, it may be in "
+                       f"a format Elite doesn't recognize yet — tell the team.")
             return Response.redirect("/ctp")
-        # infer the model of the file from its candidates (most common), for the session summary
         from collections import Counter
         model = (Counter((c.model or "").upper() for c in candidates if c.model).most_common(1) or [("", 0)])[0][0]
         sess = _ws_get(app, s.scope, "ctp_session", {}) or {}
         files = sess.get("files", [])
-        files.append({"name": filename, "model": model, "candidates": [vars(c) for c in candidates]})
+        files.append({"id": new_id("ctpf"), "name": filename, "model": model,
+                      "candidates": [vars(c) for c in candidates]})
         sess["files"] = files
         _ws_put(app, s.scope, "ctp_session", sess)
-        s.flash = f"Loaded {len(candidates)} CTP candidate(s) from {filename}."
+        s.flash = f"Loaded {len(candidates)} order(s) from {filename}."
+        return Response.redirect("/ctp")
+
+    @app.post("/ctp/remove")
+    def ctp_remove(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        sess = _ws_get(app, s.scope, "ctp_session", {}) or {}
+        files = sess.get("files", [])
+        try:
+            idx = int(req.form.get("idx"))
+            if 0 <= idx < len(files):
+                removed = files.pop(idx)
+                sess["files"] = files
+                _ws_put(app, s.scope, "ctp_session", sess)
+                s.flash = f"Removed {removed.get('name', 'file')}."
+        except (TypeError, ValueError):
+            pass
         return Response.redirect("/ctp")
 
     @app.post("/ctp/clear")
@@ -1848,10 +1930,12 @@ def _ctp_pipeline_rows(app, scope):
     return out
 
 
-def _ctp_board(app, scope):
-    """Certified board keyed by combination_id → {canonical, label, model, excess, short} for the CTP evaluator.
-    Reuses the same issued certified decision every other engine reads (no recompute): `excess` = arrived +
-    incoming over-supply, `short` = acquire-now need."""
+def _ctp_board(app, scope, descriptions=None):
+    """Certified board keyed by combination_id → {canonical, line, colors, model, excess, short} for the CTP
+    evaluator. Reuses the same issued certified decision every other engine reads (no recompute): `excess` =
+    arrived + incoming over-supply, `short` = acquire-now need. line/colors are the clean human build so the
+    CHANGE target reads in business language (exterior/interior names)."""
+    from .domains import _describe
     certs, _lk = _certified_positions(app, scope)
     conn = _conn(app)
     canon = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
@@ -1860,9 +1944,23 @@ def _ctp_board(app, scope):
     for c in certs:
         cid = c["key"]
         canonical = canon.get(cid, cid)
-        board[cid] = {"canonical": canonical, "label": c["label"], "model": _model_of(_readable(canonical)),
+        d = _describe(app, scope, canonical, descriptions=descriptions)
+        line = d.vehicle if d else _model_of(_readable(canonical))
+        colors = d.colours(with_code=False, drop_unmapped=True) if d else ""
+        board[cid] = {"canonical": canonical, "line": line, "colors": colors,
+                      "model": _model_of(_readable(canonical)),
                       "excess": int(c["arrived_excess"]) + int(c["incoming_excess"]), "short": int(c["acquire_units"])}
     return board
+
+
+def _ctp_pipeline_age(app, scope):
+    """Human 'Pipeline updated' timestamp (newest future-supply projection), or '' when none loaded."""
+    try:
+        r = _conn(app).execute("SELECT MAX(calculation_timestamp) AS t FROM future_supply_projection "
+                               "WHERE store_scope=?", (scope,)).fetchone()
+        return (r["t"] or "")[:16].replace("T", " ") if r and r["t"] else ""
+    except Exception:   # noqa: BLE001
+        return ""
 
 
 def _demo_pools(app, scope, cid):
