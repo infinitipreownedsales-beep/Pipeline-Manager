@@ -1218,37 +1218,123 @@ def register(app):
                 break
         return Response.redirect("/demos/user/" + req.params["uid"])
 
-    # ---- CTP — expose existing governed CTP actions in plain language ---------------------------------
+    # ---- CTP — live multi-file Change-The-Production session -------------------------------------------
     @app.get("/ctp")
     def ctp(app, req):
         s = req.session
         app.require(s, "workspace.view")
-        conn = _conn(app)
-        try:
-            acts = conn.execute(
-                "SELECT a.* FROM ctp_action a JOIN supply_workflow w ON a.workflow_id=w.id "
-                "WHERE w.store_scope=? ORDER BY a.created_at DESC", (s.scope,)).fetchall()
-        except Exception:   # noqa: BLE001
-            acts = []
-        ident = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
-            "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (s.scope,)).fetchall()}
-        rows = []
-        for a in acts:
-            frm = _readable(ident.get(a["original_combination_id"], a["original_combination_id"] or "—"))
-            to = _readable(ident.get(a["proposed_combination_id"], a["proposed_combination_id"] or "—"))
-            rows.append([esc(frm), esc(to), esc(a["resulting_order_state"] or "proposed"),
-                         esc((a["created_at"] or "")[:10])])
-        if rows:
-            body = ('<div class="card"><h2>Change-to-plan actions</h2>'
-                    '<p class="muted">Recommendation: change an incoming order to a stronger combination before '
-                    'it arrives. Why/Proof: driven by the certified need/excess that opened each action.</p>'
-                    + table(["From", "To", "State", "Recorded"], rows) + '</div>')
-        else:
-            body = ('<div class="card"><h2>Change-to-plan</h2>'
-                    '<p>No change-to-plan actions are currently open for this store. When the engine identifies '
-                    'an incoming order that should be re-specified before arrival, it appears here as '
-                    'Recommendation → Why → Proof.</p></div>')
-        return _resp(app, s, "CTP", body, "/ctp")
+        from ...workflow import ctp_intake as CTP
+        sess = _ws_get(app, s.scope, "ctp_session", {}) or {}
+        files = sess.get("files", [])                  # [{name, model, rows}]
+        cand_dicts = [c for f in files for c in f.get("candidates", [])]
+        candidates = [CTP.Candidate(**c) for c in cand_dicts]
+
+        # controls: start/update session + add a CTP file (temporary eligibility overlay — not the pipeline)
+        add = ('<form method="post" action="/ctp/upload" enctype="multipart/form-data" class="mut">'
+               f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+               '<label>Add a CTP model file (QX60 / QX65 / QX80 / other) — CSV or XLSX</label>'
+               '<input type=file name=file accept=".csv,.tsv,.txt,.xlsx" required> '
+               '<button type=submit>Add CTP file</button></form>'
+               '<form method="post" action="/ctp/clear" class="mut" style="display:inline">'
+               f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+               '<button type=submit class=secondary>Clear CTP session</button></form>')
+        parts = ['<div class="card"><h2>CTP — Change The Production</h2>'
+                 '<p class="muted">The OEM decides which existing production orders are still changeable. Upload '
+                 'the operator\'s CTP model files — a <strong>temporary eligibility overlay</strong> reconciled to '
+                 'the current Pipeline by Order # / VIN. It creates no inventory and changes no source.</p>'
+                 + add + '</div>']
+
+        if not files:
+            parts.append('<div class="card"><p>No current CTP candidate files loaded.</p></div>')
+            return _resp(app, s, "CTP", "".join(parts), "/ctp")
+
+        # reconcile to the current pipeline, then evaluate the whole set together (full-horizon, sequential)
+        pipeline = _ctp_pipeline_rows(app, s.scope)
+        reconciled = CTP.reconcile(candidates, pipeline)
+        board = _ctp_board(app, s.scope)
+        verdicts = CTP.evaluate(reconciled, board)
+        summ = CTP.summarize(reconciled, verdicts)
+
+        loaded = ", ".join(f'{esc(f["name"])} ({esc(f.get("model") or "?")}, {len(f.get("candidates", []))})'
+                           for f in files)
+        parts.append('<div class="card"><h3>Session</h3>'
+                     + stat_row([metric(len(files), "Files"), metric(summ["candidates"], "Candidates"),
+                                 metric(summ["matched"], "Matched"),
+                                 metric(summ["unmatched"] + summ["conflict"], "Reconcile issues",
+                                        attn=bool(summ["unmatched"] + summ["conflict"])),
+                                 metric(summ["keep"], "KEEP"), metric(summ["change"], "CHANGE", attn=bool(summ["change"]))])
+                     + f'<p class="muted">Loaded: {loaded}</p></div>')
+
+        # reconciliation issues (unmatched / identity conflict)
+        issues = [r for r in reconciled if r.status != CTP.MATCHED]
+        if issues:
+            irows = [[esc(r.candidate.order_number or "—"), esc(r.candidate.vin or "—"),
+                      safe(badge("blocked" if r.status == CTP.CONFLICT else "pending", r.status)),
+                      esc(r.conflict_detail)] for r in issues]
+            parts.append('<div class="card"><h3>Reconciliation issues</h3>'
+                         + table(["Order #", "VIN", "Status", "Detail"], irows) + '</div>')
+
+        # the decision table: Order -> Current -> Recommendation -> Proposed -> Why -> Proof
+        drows = []
+        for v in verdicts:
+            c = v.reconciled.candidate
+            cur = ""
+            if v.reconciled.pipeline:
+                cur = _readable_h(app, s.scope, v.reconciled.pipeline.get("canonical", ""))
+            cur = cur or esc(c.description or c.model_code or "—")
+            tone = "completed" if v.recommendation == CTP.KEEP else "attention"
+            proposed = esc(v.proposed_label) if v.recommendation == CTP.CHANGE else '<span class="muted">— keep —</span>'
+            proof = kv([("Source combination", v.proof.get("source_combination", "—")),
+                        ("Target combination", v.proof.get("target_combination", "—")),
+                        ("Before (excess / target short)",
+                         f'{v.proof.get("before", {}).get("source_excess", "—")} / {v.proof.get("before", {}).get("target_short", "—")}'),
+                        ("After (excess / target short)",
+                         f'{v.proof.get("after", {}).get("source_excess", "—")} / {v.proof.get("after", {}).get("target_short", "—")}'),
+                        ("Reconciliation", v.proof.get("reconciliation", "matched"))])
+            drows.append([esc(c.order_number or c.vin or "—"), safe(str(cur)),
+                          safe(badge(tone, v.recommendation)), safe(str(proposed)),
+                          safe(f'<span class="muted">{esc(v.why)}</span> ' + disclosure("Proof", proof))])
+        parts.append('<div class="card"><h3>Candidates — KEEP / CHANGE</h3>'
+                     '<p class="muted">Evaluated together against the certified board; a CHANGE requires a proven '
+                     'superior target (a certified-short combination of the same model) and the full horizon is '
+                     're-run after each change. No fabricated targets, no colour preference.</p>'
+                     + table(["Order", "Current configuration", "Recommendation", "Proposed", "Why / Proof"], drows)
+                     + '</div>')
+        return _resp(app, s, "CTP", "".join(parts), "/ctp")
+
+    @app.post("/ctp/upload")
+    def ctp_upload(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        from ...workflow import ctp_intake as CTP
+        upload = req.files.get("file")
+        if not upload or not upload[1]:
+            s.flash = "Choose a CTP file to add first; nothing was loaded."
+            return Response.redirect("/ctp")
+        filename, data = upload
+        rows = CTP.parse_ctp_file(filename, data)
+        candidates = [c for c in (CTP.to_candidate(r, source_file=filename) for r in rows) if c is not None]
+        if not candidates:
+            s.flash = f"No CTP candidates found in {filename} (need an Order # or VIN per row). Nothing was loaded."
+            return Response.redirect("/ctp")
+        # infer the model of the file from its candidates (most common), for the session summary
+        from collections import Counter
+        model = (Counter((c.model or "").upper() for c in candidates if c.model).most_common(1) or [("", 0)])[0][0]
+        sess = _ws_get(app, s.scope, "ctp_session", {}) or {}
+        files = sess.get("files", [])
+        files.append({"name": filename, "model": model, "candidates": [vars(c) for c in candidates]})
+        sess["files"] = files
+        _ws_put(app, s.scope, "ctp_session", sess)
+        s.flash = f"Loaded {len(candidates)} CTP candidate(s) from {filename}."
+        return Response.redirect("/ctp")
+
+    @app.post("/ctp/clear")
+    def ctp_clear(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        _ws_put(app, s.scope, "ctp_session", {})
+        s.flash = "CTP session cleared."
+        return Response.redirect("/ctp")
 
     # ---- Data control room — imports, bench, unavailable inventory, Service-Loaner program settings ---
     @app.get("/data")
@@ -1738,6 +1824,45 @@ def _certified_positions(app, scope):
         label_to_key[human] = cid
         label_to_key[_readable(canonical)] = cid       # older offers stored the compact code label
     return certs, label_to_key
+
+
+def _ctp_pipeline_rows(app, scope):
+    """Current Pipeline as CTP-reconcilable rows: one dict per incoming production order (future supply), with
+    order_number, vin, combination_id, canonical, model, arrival_month. Read-only; no fabrication."""
+    conn = _conn(app)
+    ident = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
+        "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (scope,)).fetchall()}
+    out = []
+    try:
+        rows = conn.execute(
+            "SELECT f.combination_id AS cid, f.arrival_month AS am, o.manufacturer_order_id AS onum, o.vin AS vin "
+            "FROM future_supply_projection f JOIN production_order o ON f.production_order_id=o.id "
+            "WHERE f.store_scope=? AND f.status='current'", (scope,)).fetchall()
+    except Exception:   # noqa: BLE001
+        rows = []
+    for r in rows:
+        canonical = ident.get(r["cid"], r["cid"])
+        out.append({"order_number": (r["onum"] or ""), "vin": (r["vin"] or ""), "combination_id": r["cid"],
+                    "canonical": canonical, "model": _model_of(_readable(canonical)),
+                    "arrival_month": (r["am"] or "")})
+    return out
+
+
+def _ctp_board(app, scope):
+    """Certified board keyed by combination_id → {canonical, label, model, excess, short} for the CTP evaluator.
+    Reuses the same issued certified decision every other engine reads (no recompute): `excess` = arrived +
+    incoming over-supply, `short` = acquire-now need."""
+    certs, _lk = _certified_positions(app, scope)
+    conn = _conn(app)
+    canon = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
+        "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (scope,)).fetchall()}
+    board = {}
+    for c in certs:
+        cid = c["key"]
+        canonical = canon.get(cid, cid)
+        board[cid] = {"canonical": canonical, "label": c["label"], "model": _model_of(_readable(canonical)),
+                      "excess": int(c["arrived_excess"]) + int(c["incoming_excess"]), "short": int(c["acquire_units"])}
+    return board
 
 
 def _demo_pools(app, scope, cid):
