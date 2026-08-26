@@ -207,6 +207,42 @@ def build_demand(rows, *, latest_midx, current_midx, part_frac=1.0):
             "counted_sales": len(counted), "cohort_count": len(cohorts)}
 
 
+def borrow_cohort(current_key, current_rep, predecessors):
+    """Build a CohortDemand for `current_key` (a current supply cohort with NO exact same-code history) that
+    BORROWS one or more predecessor cohorts' REAL Speed-to-Sell history as governed lineage supporting evidence.
+
+    The result carries the CURRENT cohort's identity/representative (so current supply stays under its current
+    code) while its demand months/DTS come from the predecessor's OWN real observations — never fabricated,
+    never relabeled here (the `lineage` evidence tier is applied by DemandService.issue's inherited path). Sales
+    are NOT duplicated: each predecessor month is summed once; the predecessor cohorts are read-only and continue
+    to issue independently from their own exact history."""
+    rbm, dts_values = {}, []
+    sales_total = bc_count = r90 = r180 = 0
+    bc_midxs, organic = set(), 0
+    first = None
+    exposure = 0.0
+    for c in predecessors:
+        for mo, n in c.retail_by_month.items():
+            rbm[mo] = rbm.get(mo, 0) + n
+        dts_values += list(c.dts_values)
+        sales_total += c.sales_total
+        bc_count += c.business_code_count
+        bc_midxs |= set(c.business_code_midxs)
+        organic += c.organic_sales_total
+        first = c.first_midx if first is None else min(first, c.first_midx)
+        exposure = max(exposure, c.exposure_months)
+        r90 += c.legacy_r90
+        r180 += c.legacy_r180
+    return CohortDemand(
+        key=current_key, identity=dms_planning_identity(current_rep), representative=current_rep,
+        retail_by_month=rbm, sales_total=sales_total, dts_values=dts_values,
+        dts_average=(round(sum(dts_values) / len(dts_values), 2) if dts_values else None),
+        business_code_count=bc_count, business_code_months=len(bc_midxs),
+        business_code_midxs=tuple(sorted(bc_midxs)), organic_sales_total=organic,
+        first_midx=(first if first is not None else 0), exposure_months=exposure,
+        legacy_prate=round(sum(c.legacy_prate for c in predecessors), 4), legacy_r90=r90, legacy_r180=r180)
+
+
 def read_accepted_speed_to_sell_rows(conn, source_id, scope):
     """Read raw_values of ACCEPTED speed_to_sell Source Observations (immutable evidence) for a source/scope,
     in deterministic order. No identity resolution, no mutation."""

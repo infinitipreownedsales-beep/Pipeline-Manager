@@ -65,6 +65,7 @@ class PlanningContext:
     demand_cv: str
     plan_cv: str
     metadata: object = None  # key/value store for Data-Quality acknowledgements (optional)
+    lineage: object = None   # LineageDemandResolver — read-only APPROVED demand-sharing governance (optional)
 
 
 @dataclass
@@ -190,20 +191,37 @@ def run_planning(ctx, supply_by_key, demand_by_key, exceptions, *, target_days_s
                                                        source_ref="dms_planning_runner")
         cur = sup.current if sup else 0
         fut = sup.future if sup else 0
-        # ---- low-evidence safety: refuse without any accepted demand history ----
+        # ---- low-evidence safety: no exact same-code history ----
+        # Before refusing, consult APPROVED demand-sharing governance: a real current/incoming supply cohort
+        # may be supported by a predecessor generation's REAL history through an approved SAME_FAMILY_CROSS_GEN
+        # relationship. If so, borrow it as LINEAGE evidence (never exact); otherwise refuse honestly and name
+        # the exact missing/blocking review. Never fabricates demand; the current cohort keeps its current code.
+        inherited = None
         if dem is None or not dem.retail_by_month:
-            outcomes.append(CohortPlanOutcome(
-                key=key, identity=(dem.identity if dem else sup.identity), issued=False,
-                current_supply=cur, future_supply=fut, refused_reason="no_accepted_demand_history",
-                legacy_prate=(dem.legacy_prate if dem else None)))
-            continue
+            predecessors, note = ([], None)
+            if ctx.lineage is not None and sup is not None:
+                predecessors, note = ctx.lineage.resolve(key, demand_by_key)
+            if not predecessors:
+                outcomes.append(CohortPlanOutcome(
+                    key=key, identity=(dem.identity if dem else sup.identity), issued=False,
+                    current_supply=cur, future_supply=fut, refused_reason="no_accepted_demand_history",
+                    legacy_prate=(dem.legacy_prate if dem else None),
+                    coverage_evidence=({"missing_lineage_review": note} if note else {})))
+                continue
+            dem = db_.borrow_cohort(key, rep_row, predecessors)   # supporting evidence; NOT exact
+            inherited = {"relationship": "generation_change", "retail_by_month": dem.retail_by_month,
+                         "exposure_months": dem.exposure_months, "sample_size": dem.sales_total,
+                         "source_combination": note.get("family", ""), "lineage_note": note}
         credibility = cohort_credibility(dem, prior_index, cred_model)
-        # demand is issued over the EXTENDED horizon so the forward-60-day target T(m) has its tail months
+        # demand is issued over the EXTENDED horizon so the forward-60-day target T(m) has its tail months.
+        # An exact cohort issues from its own retail_by_month; a borrowed cohort issues via the governed
+        # inherited path so its evidence tier is `lineage`, never `exact`.
         demand_result = ctx.demand.issue(
-            comb, ctx.scope, ext, retail_by_month=dem.retail_by_month,
+            comb, ctx.scope, ext, retail_by_month=(dem.retail_by_month if inherited is None else {}),
+            inherited=inherited, inherit_allowed=bool(inherited),
             exposure_months=dem.exposure_months, sample_size=dem.sales_total,
             calculation_version=ctx.demand_cv, source_refs=[comb.id], credibility=credibility)
-        if demand_result.evidence_tier != "exact":       # defence-in-depth; should be exact given rbm
+        if demand_result.evidence_tier not in ("exact", "lineage"):   # defence-in-depth
             outcomes.append(CohortPlanOutcome(
                 key=key, identity=dem.identity, issued=False, current_supply=cur, future_supply=fut,
                 evidence_tier=demand_result.evidence_tier, refused_reason="insufficient_evidence_tier",
@@ -236,7 +254,9 @@ def run_planning(ctx, supply_by_key, demand_by_key, exceptions, *, target_days_s
                          "monitor_months": ap.monitor_months, "action_availability": ap.action_availability,
                          "analytical_deficit": ap.analytical_deficit, "analytical_excess": ap.analytical_excess,
                          "acquire_trace": ap.marginal_trace, "trajectory": ap.trajectory,
-                         "excess_trace": ap.excess_trace})
+                         "excess_trace": ap.excess_trace, "evidence_tier": demand_result.evidence_tier})
+        if inherited is not None:                          # visibly label borrowed supporting evidence
+            decision["lineage_support"] = inherited.get("lineage_note")
         # persist the continuous plan (time-phased position) with the discrete action bundled as evidence
         plan = ctx.planning.issue_position(demand_result, horizon=horizon, qualifying=qslots,
                                            target_level=target, counts={"current": cur, "future": fut, "committed": 0},

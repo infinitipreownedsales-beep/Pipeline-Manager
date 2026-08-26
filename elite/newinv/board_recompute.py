@@ -90,12 +90,22 @@ def build_planning_context(app, scope):
     conn, clock, md = app.stack.db.conn, app.stack.clock, app.stack.metadata
     policy = PolicyStore(conn, clock)
     store = NewInvStore(conn, clock)
+    # read-only APPROVED demand-sharing governance for this scope, so a supply cohort with no exact same-code
+    # history can borrow a governed predecessor generation's real history as LINEAGE evidence (never exact).
+    lineage = None
+    try:
+        from ..identity.translation import TranslationStore
+        from ..identity.lineage import LineageStore
+        from .demand_lineage import LineageDemandResolver
+        lineage = LineageDemandResolver(TranslationStore(app.prefs, scope), LineageStore(app.prefs, scope))
+    except Exception:   # noqa: BLE001 — governance availability must never break a recompute
+        lineage = None
     return PlanningContext(
         scope=scope, store=store, clock=clock,
         demand=DemandService(store, clock, policy), forecast=ForecastService(store, clock, policy),
         planning=PlanningService(store, clock, policy),
         demand_cv=_calc_version(policy, md, "new_inventory_demand", "demand_cv_id"),
-        plan_cv=_calc_version(policy, md, "new_inventory_plan", "plan_cv_id"), metadata=md)
+        plan_cv=_calc_version(policy, md, "new_inventory_plan", "plan_cv_id"), metadata=md, lineage=lineage)
 
 
 def _issued_plan_ids(conn, scope):
