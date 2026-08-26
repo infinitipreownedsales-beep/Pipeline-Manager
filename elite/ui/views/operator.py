@@ -2044,8 +2044,10 @@ def _ctp_board(app, scope, descriptions=None):
     arrived + incoming over-supply, `short` = acquire-now need. line/colors are the clean human build so the
     CHANGE target reads in business language (exterior/interior names)."""
     from .domains import _describe
+    from ...identity.translation import TranslationStore
     certs, _lk = _certified_positions(app, scope)
     conn = _conn(app)
+    xlat = TranslationStore(app.prefs, scope)
     canon = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
         "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (scope,)).fetchall()}
     board = {}
@@ -2054,6 +2056,12 @@ def _ctp_board(app, scope, descriptions=None):
         canonical = canon.get(cid, cid)
         d = _describe(app, scope, canonical, descriptions=descriptions)
         line = d.vehicle if d else _model_of(_readable(canonical))
+        # surface the authoritative reviewed ORDER code (e.g. 84217), so a CHANGE target is orderable with its
+        # exact model code — the canonical identity carries only the 4-digit planning code (e.g. 8421).
+        if d and getattr(d, "model_code", ""):
+            order_code = xlat.order_code_for_code(d.model_code)
+            if order_code and order_code not in line:
+                line = f"{order_code} {line}"
         colors = d.colours(with_code=False, drop_unmapped=True) if d else ""
         board[cid] = {"canonical": canonical, "line": line, "colors": colors,
                       "model": _model_of(_readable(canonical)),

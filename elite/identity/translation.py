@@ -401,14 +401,66 @@ class TranslationStore:
         """The governed commercial family (model + trim + drivetrain) for a raw order/model code, taken from an
         APPROVED variant-row interpretation. This is how a bare inventory model_code (e.g. `86317`) becomes a
         human `QX80 LUXE 2WD` without any hardcoded per-code dictionary. Returns a FamilyKey, or None when the
-        code's family/trim/drivetrain has not been governed yet (caller then fails honestly, never guesses)."""
+        code's family/trim/drivetrain has not been governed yet (caller then fails honestly, never guesses).
+
+        Resolves BOTH forms of a code without touching any raw/source code:
+          * the exact stored order/inventory code (e.g. `84217`), and
+          * the year-agnostic 4-digit PLANNING code a sellable-combination's canonical identity carries
+            (e.g. `8421` for `84217`, `8481`/`8461` for `84617`).
+        The planning-form step is a DETERMINISTIC reverse of the governed reduction, not a fuzzy prefix match: it
+        applies only to a 4-digit all-digit query, matches it against each variant's model-scoped `normalize_code`
+        (which carries the reviewed QX60/QX80 special cases) and its plain `code4`, and resolves ONLY when a
+        single commercial family matches — otherwise it returns None (never guesses across families). Without it a
+        CHANGE target rendered from the planning identity shows `[8421 (unmapped)]` though its order code is fully
+        governed. Display only — no supply/demand or economic value changes."""
         raw_code = (raw_code or "").strip()
         if not raw_code:
             return None
         for r in self.variant_rows(approved_only=approved_only):
             if r.raw_code == raw_code:
-                return r.family
-        return None
+                return r.family                                    # exact order/inventory code — unchanged
+        rows = self._variant_rows_for_planning_code(raw_code, approved_only=approved_only)
+        families = {(r.family.model, r.family.trim, r.family.drivetrain) for r in rows}
+        return rows[0].family if len(families) == 1 else None      # resolve only when a single family matches
+
+    def _variant_rows_for_planning_code(self, raw_code, *, approved_only=True):
+        """Variant rows whose reviewed order code deterministically reduces to the 4-digit PLANNING code
+        `raw_code` (via the model-scoped `normalize_code`, which carries the reviewed QX60/QX80 special cases,
+        and the plain `code4`). Empty unless `raw_code` is a 4-digit all-digit planning code — this is a
+        deterministic reverse of the governed reduction, never a fuzzy prefix match. Raw/source codes untouched."""
+        if not (len(raw_code) == 4 and raw_code.isdigit()):
+            return []
+        try:
+            from ..newinv.dms_identity import normalize_code, code4
+        except Exception:   # noqa: BLE001
+            return []
+        out = []
+        for r in self.variant_rows(approved_only=approved_only):
+            forms = set()
+            try:
+                forms.add(normalize_code(getattr(r.family, "model", ""), r.raw_code))
+            except Exception:   # noqa: BLE001
+                pass
+            try:
+                forms.add(code4(r.raw_code))
+            except Exception:   # noqa: BLE001
+                pass
+            if raw_code in forms:
+                out.append(r)
+        return out
+
+    def order_code_for_code(self, raw_code, *, approved_only=True):
+        """The authoritative reviewed ORDER code the operator actually orders. An already-exact order/inventory
+        code is returned unchanged; a 4-digit governed PLANNING code returns the single reviewed order code it
+        deterministically reduces from (e.g. `8421` -> `84217`), or None when none/ambiguous. Never guesses."""
+        raw_code = (raw_code or "").strip()
+        if not raw_code:
+            return None
+        for r in self.variant_rows(approved_only=approved_only):
+            if r.raw_code == raw_code:
+                return r.raw_code
+        codes = {r.raw_code for r in self._variant_rows_for_planning_code(raw_code, approved_only=approved_only)}
+        return next(iter(codes)) if len(codes) == 1 else None
 
     def unresolved_translations(self):
         """Raw observations that still carry NO interpretation — the Data-Health resolution queue. Resolved =
