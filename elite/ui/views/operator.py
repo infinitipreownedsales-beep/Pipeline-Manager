@@ -1287,7 +1287,9 @@ def register(app):
                     proof={"board_state": _bstat.get("state"), "detail": _bstat.get("detail", "")},
                     evaluation_timestamp=now, candidate=rc.candidate))
         else:
-            recs = CTP.evaluate(reconciled, board, now=now)
+            infeasible = _ws_get(app, s.scope, "ctp_infeasible", {}) or {}
+            recs = CTP.evaluate(reconciled, board, now=now, infeasible=infeasible)
+        confirmed = _ws_get(app, s.scope, "ctp_confirmed", {}) or {}
         summ = CTP.summarize(recs)
         pipe_age = _ctp_pipeline_age(app, s.scope)
 
@@ -1330,16 +1332,72 @@ def register(app):
                     rows_.append((k, ", ".join(f"{kk}={vv}" for kk, vv in v.items())))
             return disclosure("Show proof", kv(rows_))
 
+        _REASON_OPTS = [("production_restriction", "Production restriction"),
+                        ("package_component_unavailable", "Package / component unavailable"),
+                        ("above_maximum", "Above maximum"),
+                        ("other_oem_rejection", "Other OEM rejection")]
+
+        def _rejected_history(r):
+            """The RECOMMENDED → OEM REJECTED / NOT AVAILABLE → NEXT BEST provenance trail for one order."""
+            if not r.rejected_targets:
+                return ""
+            lbl = dict(_REASON_OPTS)
+            items = ""
+            for rec in r.rejected_targets:
+                why = lbl.get(rec.get("reason", ""), rec.get("reason", "") or "OEM rejection")
+                note = f' — “{esc(rec.get("note"))}”' if rec.get("note") else ""
+                when = esc((rec.get("at") or "")[:16].replace("T", " "))
+                items += (f'<li>{safe(badge("skip", "NOT AVAILABLE"))} '
+                          f'{esc(rec.get("target_canonical") or rec.get("target") or "target")} '
+                          f'<span class="muted">— {esc(why)}{note}{(" · " + when) if when else ""}</span></li>')
+            okey = CTP.order_key(r.order_number, r.vin)
+            reset = ('<form method="post" action="/ctp/available-reset" class="mut" style="display:inline">'
+                     f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+                     f'<input type=hidden name=order value="{esc(okey)}">'
+                     '<button type=submit style="padding:0;background:none;border:none;color:var(--muted);'
+                     'cursor:pointer;font-size:12px;text-decoration:underline">reset unavailable marks</button></form>')
+            return ('<div class="muted" style="font-size:12px;margin-top:6px">'
+                    'RECOMMENDED → OEM REJECTED / NOT AVAILABLE → NEXT BEST</div>'
+                    f'<ul style="margin:4px 0 0;padding-left:18px">{items}</ul>'
+                    f'<div style="margin-top:4px">{reset}</div>')
+
+        def _not_available_form(r):
+            """Operator feedback: mark THIS order's proposed target infeasible for THIS OEM order/context."""
+            opts = "".join(f'<option value="{esc(v)}">{esc(t)}</option>' for v, t in _REASON_OPTS)
+            okey = CTP.order_key(r.order_number, r.vin)
+            return ('<form method="post" action="/ctp/not-available" class="mut" '
+                    'style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
+                    f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+                    f'<input type=hidden name=order value="{esc(okey)}">'
+                    f'<input type=hidden name=target value="{esc(r.proposed_combination_id)}">'
+                    f'<input type=hidden name=target_canonical value="{esc(r.proof.get("target_combination", ""))}">'
+                    f'<select name=reason>{opts}</select>'
+                    '<input type=text name=note placeholder="optional reason (as told by OEM)" '
+                    'style="min-width:220px">'
+                    '<button type=submit class=secondary>Not available configuration</button></form>')
+
         # SECTION C — actions first
         if changes:
             cc = ""
             for r in changes:
+                conf = confirmed.get(CTP.order_key(r.order_number, r.vin))
+                state_badge = (badge("completed", "CONFIRMED CHANGED") if conf
+                               else badge("need", "RECOMMENDED CHANGE"))
+                confirm_ctl = ("" if conf else
+                               ('<form method="post" action="/ctp/confirm-change" class="mut" '
+                                'style="display:inline;margin-left:8px">'
+                                f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+                                f'<input type=hidden name=order value="{esc(CTP.order_key(r.order_number, r.vin))}">'
+                                f'<input type=hidden name=target value="{esc(r.proposed_combination_id)}">'
+                                '<button type=submit>Mark confirmed changed</button></form>'))
                 cc += ('<div class="card" style="border-left:3px solid var(--accent)">'
-                       f'<h3>{safe(badge("need", "CHANGE"))} {esc(r.order_number or r.vin)}</h3>'
+                       f'<h3>{safe(state_badge)} {esc(r.order_number or r.vin)}</h3>'
                        '<dl class="kv"><dt>Current</dt><dd>' + _build_html(r.current_line, r.current_colors, r.current_codes)
                        + '</dd><dt>Change to</dt><dd>' + _build_html(r.proposed_line, r.proposed_colors) + '</dd></dl>'
                        f'<p><strong>Why</strong> {esc(r.reason_plain)}</p>'
-                       f'<p><strong>What to do</strong> {esc(r.operator_action_plain)}</p>'
+                       f'<p><strong>What to do</strong> {esc(r.operator_action_plain)}{safe(confirm_ctl)}</p>'
+                       + _rejected_history(r)
+                       + ("" if conf else _not_available_form(r))
                        + _proof(r) + '</div>')
             parts.append('<div class="card"><h2>What You Should Do</h2>' + cc + '</div>')
 
@@ -1350,6 +1408,7 @@ def register(app):
                        f'<h3>{safe(badge("completed", "KEEP"))} {esc(r.order_number or r.vin)}</h3>'
                        + _build_html(r.current_line, r.current_colors, r.current_codes)
                        + f'<p>Leave this order exactly as it is. <span class="muted">{esc(r.reason_plain)}</span></p>'
+                       + _rejected_history(r)
                        + _proof(r) + '</div>')
             parts.append('<div class="card"><h2>Keep — leave these as they are</h2>' + kc + '</div>')
 
@@ -1438,7 +1497,71 @@ def register(app):
         s = req.session
         app.require(s, "workspace.view")
         _ws_put(app, s.scope, "ctp_session", {})
+        _ws_put(app, s.scope, "ctp_infeasible", {})
+        _ws_put(app, s.scope, "ctp_confirmed", {})
         s.flash = "CTP session cleared."
+        return Response.redirect("/ctp")
+
+    @app.post("/ctp/not-available")
+    def ctp_not_available(app, req):
+        """Operator feedback loop: the OEM rejected the proposed target for THIS order/context (above-max /
+        production restriction / package unavailable / other). Record it as provenance, exclude that target
+        from THIS order's feasible set only (never a global blacklist), and re-run CTP so the next-best
+        certified-short target — or KEEP — surfaces. The board is untouched; no change was executed."""
+        s = req.session
+        app.require(s, "workspace.view")
+        from ...clock import to_utc_iso
+        okey = (req.form.get("order") or "").strip()
+        target = (req.form.get("target") or "").strip()
+        if not okey or not target:
+            s.flash = "Couldn't record that — the order or target was missing."
+            return Response.redirect("/ctp")
+        reason = (req.form.get("reason") or "other_oem_rejection").strip()
+        note = (req.form.get("note") or "").strip()
+        target_canonical = (req.form.get("target_canonical") or "").strip()
+        infeasible = _ws_get(app, s.scope, "ctp_infeasible", {}) or {}
+        marks = list(infeasible.get(okey, []) or [])
+        if any(m.get("target") == target for m in marks):
+            s.flash = "That configuration is already marked not available for this order."
+            return Response.redirect("/ctp")
+        marks.append({"target": target, "target_canonical": target_canonical, "reason": reason,
+                      "note": note, "at": to_utc_iso(app.stack.clock.now()),
+                      "actor": getattr(s, "principal_id", "") or ""})
+        infeasible[okey] = marks
+        _ws_put(app, s.scope, "ctp_infeasible", infeasible)
+        s.flash = f"Recorded — {target_canonical or target} marked not available for {okey}. Re-evaluating."
+        return Response.redirect("/ctp")
+
+    @app.post("/ctp/available-reset")
+    def ctp_available_reset(app, req):
+        """Clear the 'not available' marks for one order (operator correction), restoring its full target set."""
+        s = req.session
+        app.require(s, "workspace.view")
+        okey = (req.form.get("order") or "").strip()
+        infeasible = _ws_get(app, s.scope, "ctp_infeasible", {}) or {}
+        if okey in infeasible:
+            infeasible.pop(okey, None)
+            _ws_put(app, s.scope, "ctp_infeasible", infeasible)
+            s.flash = f"Cleared not-available marks for {okey}."
+        return Response.redirect("/ctp")
+
+    @app.post("/ctp/confirm-change")
+    def ctp_confirm_change(app, req):
+        """Record that the operator actually executed the recommended CHANGE in the OEM portal
+        (RECOMMENDED → CONFIRMED CHANGED). Audit/state only; the confirmation UI can be refined later."""
+        s = req.session
+        app.require(s, "workspace.view")
+        from ...clock import to_utc_iso
+        okey = (req.form.get("order") or "").strip()
+        target = (req.form.get("target") or "").strip()
+        if not okey:
+            s.flash = "Couldn't confirm — the order was missing."
+            return Response.redirect("/ctp")
+        confirmed = _ws_get(app, s.scope, "ctp_confirmed", {}) or {}
+        confirmed[okey] = {"target": target, "at": to_utc_iso(app.stack.clock.now()),
+                           "actor": getattr(s, "principal_id", "") or ""}
+        _ws_put(app, s.scope, "ctp_confirmed", confirmed)
+        s.flash = f"Marked {okey} as confirmed changed."
         return Response.redirect("/ctp")
 
     # ---- Data control room — imports, bench, unavailable inventory, Service-Loaner program settings ---

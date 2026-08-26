@@ -449,10 +449,18 @@ class Recommendation:
     source_provenance: dict = field(default_factory=dict)
     evaluation_timestamp: str = ""
     candidate: Optional[Candidate] = None
+    proposed_combination_id: str = ""    # the target combination for a CHANGE (so the operator can reject it)
+    rejected_targets: list = field(default_factory=list)   # OEM 'not available' marks for THIS order/context
 
 
 def _model_of(label):
     return (label or "").split(" ", 1)[0]
+
+
+def order_key(order_number, vin):
+    """Stable per-order/context key (normalized Order #, else VIN) shared by the evaluator and the operator's
+    'Not available configuration' store, so an infeasibility mark binds to exactly one order, never globally."""
+    return _norm_order(order_number) or (vin or "").strip().upper()
 
 
 def human_build(candidate):
@@ -467,7 +475,7 @@ def human_build(candidate):
     return line, colors, codes
 
 
-def evaluate(reconciled, board, *, now=""):
+def evaluate(reconciled, board, *, now="", infeasible=None):
     """Turn reconciled candidates into business Recommendations via the state machine:
         PARSED → RECONCILED → EVALUABLE → KEEP | CHANGE   (any earlier gap → CANT_EVALUATE)
 
@@ -476,7 +484,14 @@ def evaluate(reconciled, board, *, now=""):
     combination AND known arrival timing) is EVALUABLE. Evaluated together, sequentially, against a disposable
     copy of the board so the horizon re-runs after each CHANGE. CHANGE re-specifies the slot to a genuinely
     certified-short combination OF THE SAME MODEL — never fabricated, never nearest-code, never colour
-    preference. KEEP only after a completed evaluation found no superior target."""
+    preference. KEEP only after a completed evaluation found no superior target.
+
+    `infeasible` is the operator's 'Not available configuration' feedback, keyed by order_key(order#, VIN) →
+    list of records {target, target_canonical, reason, note, at}. A marked target is excluded from the feasible
+    candidate set FOR THAT ORDER ONLY (never a global blacklist); the evaluator then returns the next-best
+    certified-short target, or KEEP (best available outcome) once every superior alternative is exhausted. The
+    board itself is never mutated by a mark — the change was never executed — so the sequence simply re-runs."""
+    infeasible = infeasible or {}
     state = {cid: {"excess": int(b.get("excess", 0) or 0), "short": int(b.get("short", 0) or 0),
                    "canonical": b.get("canonical", cid), "line": b.get("line", ""), "colors": b.get("colors", ""),
                    "model": (b.get("model") or _model_of(b.get("line", ""))).upper()}
@@ -528,33 +543,44 @@ def evaluate(reconciled, board, *, now=""):
             continue
 
         # --- EVALUABLE: KEEP unless a proven superior target exists ---
+        # 'Not available' feedback for THIS order excludes those exact targets from its feasible set (per-order,
+        # never global). The board is unchanged; we simply skip banned targets when choosing the next-best.
+        okey = order_key(c.order_number, c.vin)
+        rejected = list(infeasible.get(okey, []) or [])
+        banned = {r.get("target") for r in rejected if r.get("target")}
         model = pos["model"] or (c.model or "").upper()
-        targets = short_targets(model) if pos["excess"] > 0 else []
-        if pos["excess"] <= 0 or not targets:
-            recs.append(Recommendation(decision_state=KEEP,
-                        reason_plain=("Keep it. By arrival this build is still at or below its needed supply, and "
-                                      "no eligible alternative improves the future position."
-                                      if pos["excess"] <= 0 else
-                                      "Keep it. Elite found no better proven use of this production slot."),
+        eligible = [(cid, st) for cid, st in short_targets(model) if cid not in banned] if pos["excess"] > 0 else []
+        if pos["excess"] <= 0 or not eligible:
+            exhausted = bool(pos["excess"] > 0 and banned)   # had superior targets, but all marked unavailable
+            reason = ("Keep it. By arrival this build is still at or below its needed supply, and no eligible "
+                      "alternative improves the future position." if pos["excess"] <= 0 else
+                      "Keep it — best available outcome. Every superior configuration for this slot was marked "
+                      "not available by the OEM." if exhausted else
+                      "Keep it. Elite found no better proven use of this production slot.")
+            recs.append(Recommendation(decision_state=KEEP, reason_plain=reason,
                         operator_action_plain=f"Leave {c.order_number or c.vin} exactly as it is.",
                         proof={"current_combination": pos["canonical"], "current_excess": pos["excess"],
-                               "eligible_targets": len(targets)}, **base))
+                               "eligible_targets": len(eligible), "targets_marked_unavailable": len(banned),
+                               "best_available_after_exhaustion": exhausted},
+                        rejected_targets=rejected, **base))
             continue
 
         # proven superior replacement: re-specify one unit excess→short; re-run the horizon (mutate state)
-        tcid, tgt = targets[0]
+        tcid, tgt = eligible[0]
         before = {"source_excess": pos["excess"], "target_short": tgt["short"]}
         pos["excess"] -= 1
         tgt["short"] -= 1
         recs.append(Recommendation(decision_state=CHANGE, proposed_line=tgt["line"], proposed_colors=tgt["colors"],
+                    proposed_combination_id=tcid,
                     reason_plain=(f"Change it to {tgt['colors'] or tgt['line']}. Elite projects enough "
                                   f"{colors or line} supply by arrival, while {tgt['colors'] or tgt['line']} "
                                   f"remains short."),
                     operator_action_plain=(f"In the Infiniti CTP portal, change {c.order_number or c.vin} to "
                                            f"{tgt['line']} {tgt['colors']}".strip()),
                     proof={"source_combination": pos["canonical"], "target_combination": tgt["canonical"],
-                           "before": before, "after": {"source_excess": pos["excess"], "target_short": tgt["short"]}},
-                    **base))
+                           "before": before, "after": {"source_excess": pos["excess"], "target_short": tgt["short"]},
+                           "targets_marked_unavailable": len(banned)},
+                    rejected_targets=rejected, **base))
     return recs
 
 
