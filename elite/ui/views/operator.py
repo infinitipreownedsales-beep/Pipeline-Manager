@@ -1288,10 +1288,55 @@ def register(app):
             return app._safe_page(s, "Not found", "That demo user is not on the roster.", 404)
         cur = u.get("current") or {}
         vel = _mileage_velocity(u)
+        from ...clock import to_utc_iso
+        today = to_utc_iso(app.stack.clock.now())[:10]
+        build = _demo_current_build(app, s.scope, cur.get("vin")) if cur else ""
         info = kv([("Role", u.get("role", "")), ("Prefers", f'{u.get("model_pref","")} {u.get("trim_pref","")}'.strip()),
+                   ("Current demo", (build or "—") if cur else "—"),
                    ("Current demo VIN", cur.get("vin", "—")), ("Start date", cur.get("start", "—")),
                    ("Mileage at assignment", cur.get("mi_in", "—")),
+                   ("Current mileage", cur.get("mi_now", "—") if cur else "—"),
                    ("Personal mileage velocity", f"{vel} mi/day" if vel is not None else "—")])
+
+        # ---- DECISION A — is replacement due now? (demo policy; honest about missing current mileage) ----
+        decA = _demo_replacement_due(cur, today) if cur else {"state": "no_demo"}
+        _a_badge = {"due": badge("need", "REPLACEMENT DUE"),
+                    "keep": badge("completed", "KEEP CURRENT DEMO FOR NOW"),
+                    "unknown_mileage": badge("unresolved", "NEED CURRENT MILEAGE"),
+                    "no_demo": badge("stale", "NO DEMO ASSIGNED")}.get(decA["state"], badge("stale", "—"))
+        mileage_form = (form("/demos/user/" + u["id"] + "/mileage",
+                             '<label>Current odometer reading</label>'
+                             '<input name=mi type=number required style="max-width:160px">',
+                             csrf=s.csrf_token, submit="Record current mileage") if cur else "")
+        decA_card = ('<div class="card"><h3>Decision A — Replacement due now?</h3>'
+                     f'<p>{safe(_a_badge)}</p>'
+                     f'<p class="muted">{esc(decA.get("detail",""))}</p>'
+                     + (mileage_form if decA["state"] in ("unknown_mileage", "keep", "due") else "") + '</div>')
+
+        # ---- DECISION B — what should the NEXT ideal demo be? (independent of A) ----
+        certs, _lk = _certified_positions(app, s.scope)
+        pref = (u.get("model_pref") or "").upper()
+        needy = [c for c in certs if c["acquire_units"] > 0]
+        matching = [c for c in needy if _model_of(c["label"]) == pref]
+        why_model = ""
+        if pref and matching:
+            pool = matching
+        else:
+            pool = needy
+            if not pref and needy:
+                why_model = ("No stated model preference — Elite ranks by certified need, so the model with the "
+                             "strongest current Speed-to-Sell-backed need is shown first.")
+        pool = sorted(pool, key=lambda c: -c["acquire_units"])
+        if pool:
+            top = pool[0]
+            nb = _demo_call_card(app, s.scope, top["key"], top["label"])
+            if why_model:
+                nb = f'<p class="muted">{esc(why_model)}</p>' + nb
+        else:
+            nb = empty("No certified need supports a next demo right now.")
+        decB_card = ('<div class="card"><h3>Decision B — Next ideal demo' + (f' · prefers {esc(pref)}' if pref else "")
+                     + '</h3>' + (nb if "card" in nb else nb) + '</div>')
+
         assign = form("/demos/user/" + u["id"] + "/assign",
                       '<label>Demo VIN</label>'
                       + _datalist_input("vin", "assign_vins", _known_vins(app, s.scope),
@@ -1303,25 +1348,27 @@ def register(app):
                     '<label>Return / swap mileage</label><input name=mi type=number required style="max-width:160px">'
                     '<label>Swap date</label><input name=date type=date style="max-width:180px">',
                     csrf=s.csrf_token, submit="Record return / swap") if cur else "")
-        # preference-first next demo — three-pool physical decision (USE NOW / WAIT / ORDER), not a combo pick
-        certs, _lk = _certified_positions(app, s.scope)
-        pref = (u.get("model_pref") or "").upper()
-        needy = [c for c in certs if c["acquire_units"] > 0]
-        matching = [c for c in needy if _model_of(c["label"]) == pref] or needy
-        matching.sort(key=lambda c: -c["acquire_units"])
-        if matching:
-            top = matching[0]
-            nb = _demo_call_card(app, s.scope, top["key"], top["label"])
-        else:
-            nb = empty("No certified need supports a next demo right now.")
         hrows = [[esc(h.get("vin", "")), esc(h.get("mi_in", "")), esc(h.get("mi_out", "")),
                   esc(h.get("miles", "")), esc(h.get("start", "")), esc(h.get("end", ""))] for h in u.get("history", [])]
         body = (f'<p><a href="/demos">← Roster</a></p><div class="card"><h2>{esc(u["name"])}</h2>{info}</div>'
-                + (nb if "card" in nb else f'<div class="card"><h3>Next demo — prefers {esc(pref or "any")}</h3>{nb}</div>')
+                + decA_card + decB_card
                 + '<div class="card"><h3>Assign / swap</h3>' + assign + ret + '</div>'
                 '<div class="card"><h3>Demo history</h3>'
                 + table(["VIN", "Miles in", "Miles out", "Driven", "Start", "End"], hrows) + '</div>')
         return _resp(app, s, u["name"], body, "/demos")
+
+    @app.post("/demos/user/{uid}/mileage")
+    def demos_mileage(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        roster = _ws_get(app, s.scope, "demo_roster", []) or []
+        for u in roster:
+            if u["id"] == req.params["uid"] and u.get("current"):
+                u["current"]["mi_now"] = _int_or0(req.form.get("mi"))
+                _ws_put(app, s.scope, "demo_roster", roster)
+                s.flash = "Current mileage recorded."
+                break
+        return Response.redirect("/demos/user/" + req.params["uid"])
 
     @app.post("/demos/user/{uid}/assign")
     def demos_assign(app, req):
@@ -2490,6 +2537,61 @@ def _demo_pools(app, scope, cid):
             unbuilt = True
     order_available = unbuilt or not (current or incoming)
     return current, incoming, order_available
+
+
+DEMO_SWAP_MILES = 2000        # preferred swap around ~2,000 mi (ideally 1,xxx) — policy guidance, not a hard rule
+DEMO_CADENCE_DAYS = 90        # rough replacement cadence — planning guidance only, never a hard trigger
+
+
+def _demo_replacement_due(cur, today):
+    """Decision A — is the CURRENT demo due for replacement NOW? Uses the demo policy (miles first, ~90-day
+    cadence as guidance). Honest about evidence: with no CURRENT mileage reading it never pretends 'due' — it
+    reports exactly the missing evidence. Returns {state, detail, accumulated, days} where state is
+    'unknown_mileage' | 'keep' | 'due' | 'no_demo'."""
+    import datetime as _dt
+    if not cur or not cur.get("vin"):
+        return {"state": "no_demo", "detail": "No demo is currently assigned.", "accumulated": None, "days": None}
+    days = None
+    try:
+        days = max(0, (_dt.date.fromisoformat(str(today)[:10])
+                       - _dt.date.fromisoformat(str(cur.get("start"))[:10])).days)
+    except Exception:   # noqa: BLE001
+        days = None
+    mi_now = cur.get("mi_now")
+    if mi_now in (None, "") or str(mi_now).strip() == "":
+        return {"state": "unknown_mileage", "days": days, "accumulated": None,
+                "detail": "Current odometer reading is needed to assess replacement — record the demo's current "
+                          "mileage. Elite will not assume it is due."}
+    acc = max(0, _int_or0(mi_now) - _int_or0(cur.get("mi_in")))
+    cadence = f" (~{days}d in service; ~{DEMO_CADENCE_DAYS}d is typical guidance)" if days is not None else ""
+    if acc >= DEMO_SWAP_MILES:
+        return {"state": "due", "accumulated": acc, "days": days,
+                "detail": f"~{acc:,} mi accumulated — at or past the ~{DEMO_SWAP_MILES:,} mi swap point{cadence}."}
+    return {"state": "keep", "accumulated": acc, "days": days,
+            "detail": f"~{acc:,} mi accumulated — below the ~{DEMO_SWAP_MILES:,} mi swap point{cadence}."}
+
+
+def _demo_current_build(app, scope, vin):
+    """Human build (trim / drivetrain / colours) for an assigned demo VIN, from the governed DMS description —
+    never the bare VIN or an '[code] (unmapped)' string. Falls back to the VIN only when the VIN is not found."""
+    vin = (vin or "").strip().upper()
+    if not vin:
+        return ""
+    try:
+        from ...loaner.placement import read_new_retail_units, _authoritative_vin
+        from ...newinv.dms_identity import dms_planning_identity
+        from .domains import _describe
+        for r in (read_new_retail_units(app, scope) or []):
+            rv, ok, _serial = _authoritative_vin(r)
+            if ok and rv.strip().upper() == vin:
+                d = _describe(app, scope, dms_planning_identity(r))
+                if d:
+                    line = d.vehicle or ""
+                    colours = d.colours(with_code=False, drop_unmapped=True) if hasattr(d, "colours") else ""
+                    return " — ".join(x for x in (line, colours) if x) or vin
+    except Exception:   # noqa: BLE001
+        pass
+    return vin
 
 
 def _demo_call_card(app, scope, cid, label):
