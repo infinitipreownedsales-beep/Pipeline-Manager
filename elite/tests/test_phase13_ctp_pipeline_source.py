@@ -137,7 +137,8 @@ class TestCtpSixOrdersEndToEnd(unittest.TestCase):
         self.full.post("/ctp/upload", {}, files={"file": ("CTP (1).xls", self._fixture())})
         from unittest.mock import patch
         with patch.object(OP, "_ctp_pipeline_rows", return_value=pipeline), \
-             patch.object(OP, "_ctp_board", return_value=board):
+             patch.object(OP, "_ctp_board", return_value=board), \
+             patch("elite.newinv.board_recompute.board_status", return_value={"state": "current"}):
             b = self.full.get("/ctp").body
         # all six reconciled and evaluated — not "not in the Pipeline"
         for o in ("TK76329", "TK76327", "TK76337", "TK76338", "TK76339", "TK76340"):

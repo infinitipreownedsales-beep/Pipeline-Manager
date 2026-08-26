@@ -1264,7 +1264,30 @@ def register(app):
         reconciled = CTP.reconcile(candidates, pipeline)
         board = _ctp_board(app, s.scope, descriptions=descs)
         now = to_utc_iso(app.stack.clock.now())[:16].replace("T", " ")
-        recs = CTP.evaluate(reconciled, board, now=now)
+        # STALE-BOARD PROTECTION: a KEEP/CHANGE must never be issued from a certified board older than the
+        # Inventory/Pipeline snapshot it evaluates. When the board is not derived from the current Pipeline,
+        # CTP gates every order to NEEDS ATTENTION instead of KEEP/CHANGE (it never recomputes planning itself).
+        from ...newinv.board_recompute import board_status as _board_status
+        try:
+            _bstat = _board_status(app, s.scope)
+        except Exception:   # noqa: BLE001
+            _bstat = {"state": "unknown", "detail": "Board status unavailable."}
+        if _bstat.get("state") != "current":
+            recs = []
+            for rc in reconciled:
+                _line, _colors, _codes = CTP.human_build(rc.candidate) if rc.candidate else ("", "", "")
+                recs.append(CTP.Recommendation(
+                    decision_state=CTP.CANT_EVALUATE,
+                    order_number=(rc.candidate.order_number if rc.candidate else ""),
+                    vin=(rc.candidate.vin if rc.candidate else ""), reconciliation=rc.status,
+                    current_line=_line, current_colors=_colors, current_codes=_codes,
+                    blocking_reason="certified board not current",
+                    reason_plain="Planning board must be recomputed from the current Pipeline.",
+                    operator_action_plain="Open Data and press “Recompute current board”, then re-check.",
+                    proof={"board_state": _bstat.get("state"), "detail": _bstat.get("detail", "")},
+                    evaluation_timestamp=now, candidate=rc.candidate))
+        else:
+            recs = CTP.evaluate(reconciled, board, now=now)
         summ = CTP.summarize(recs)
         pipe_age = _ctp_pipeline_age(app, s.scope)
 
@@ -1485,7 +1508,8 @@ def register(app):
                 + '<div class="card"><h2>Update data</h2><p class="muted">Place the export in the uploads folder and '
                 'enter its path; the import runs through the certified ingestion pipeline and updates freshness '
                 'above. Nothing is marked loaded unless the import actually succeeds.</p>' + imp + '</div>'
-                '<div class="card"><h2>Benched combinations</h2><p class="muted">A benched combination is no longer '
+                 + _board_recompute_card(app, s)
+                + '<div class="card"><h2>Benched combinations</h2><p class="muted">A benched combination is no longer '
                 'orderable and is excluded from ordering recommendations.</p>'
                 + table(["Combination", ""], brows) + bench_form + '</div>'
                 '<div class="card"><h2>Temporarily unavailable inventory</h2>'
@@ -1508,6 +1532,18 @@ def register(app):
             if filename.endswith(".xlsx"):
                 contract = "new_inventory_pipeline_summary"
         s.flash = _run_upload(app, s.scope, contract, upload)
+        return Response.redirect("/data")
+
+    @app.post("/data/recompute-board")
+    def data_recompute_board(app, req):
+        s = req.session
+        app.require(s, "workspace.view")
+        from ...newinv.board_recompute import recompute_board
+        try:
+            rb = recompute_board(app, s.scope, actor=s.principal_id)
+            s.flash = rb.get("reason") or ("Recomputed." if rb.get("ok") else "Not recomputed.")
+        except Exception as e:   # noqa: BLE001
+            s.flash = f"Recompute failed; the last certified board was left unchanged: {e}"
         return Response.redirect("/data")
 
     @app.post("/data/bench")
@@ -1912,6 +1948,33 @@ def _ctp_norm_key(v):
     """Order#/VIN dedup key — matches the CTP intake normalization (uppercase, strip, alnum+-_/ only)."""
     o = str(v or "").strip().lstrip("'").upper()
     return "".join(ch for ch in o if ch.isalnum() or ch in "-_/")
+
+
+def _board_recompute_card(app, s):
+    """Data-page card: certified planning-board vintage vs the loaded Pipeline, plus a recompute action. A
+    recovery/admin control — it recomputes inventory_plan_result from the currently loaded certified sources
+    (no re-upload) using the existing planning engine."""
+    from ...newinv.board_recompute import board_status
+    try:
+        st = board_status(app, s.scope)
+    except Exception:   # noqa: BLE001
+        st = {"state": "unknown", "detail": "Board status unavailable.", "board_computed_at": None}
+    tone = {"current": "healthy", "stale": "attention", "absent": "attention", "unknown": "attention"}.get(
+        st["state"], "attention")
+    word = {"current": "current", "stale": "stale — recompute", "absent": "not computed",
+            "unknown": "unknown vintage"}.get(st["state"], st["state"])
+    when = st.get("board_computed_at")
+    meta = (f'<div class="muted" style="font-size:12px">Board computed {esc((when or "")[:16].replace("T", " "))}'
+            f'; latest Pipeline snapshot {esc((st.get("snapshot_time") or "")[:16].replace("T", " ") or "—")}.</div>'
+            if when else "")
+    btn = (f'<form class="mut" method="post" action="/data/recompute-board">'
+           f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+           f'<button type=submit>Recompute current board</button></form>')
+    return ('<div class="card"><h2>Certified planning board</h2>'
+            f'<p>{badge(tone, word)} {esc(st.get("detail", ""))}</p>' + meta
+            + '<p class="muted" style="font-size:12px">Recomputes the certified board (Need / Excess per '
+            'combination) from the currently loaded Inventory / Pipeline — no re-upload needed. CTP reads this '
+            'board; it does not recompute it.</p>' + btn + '</div>')
 
 
 def _ctp_pipeline_rows(app, scope):
@@ -2709,7 +2772,18 @@ def _run_upload(app, scope, contract_key, upload):
                     id_note = " Identity: all source values recognized."
             except Exception:   # noqa: BLE001 — identity observation must never fail an accepted import
                 id_note = ""
-            return f"Imported {safe} into {contract_key} - {state}.{id_note}"
+            board_note = ""
+            if contract_key in ("new_inventory_current", "new_inventory_pipeline_summary"):
+                # a successful certified Inventory/Pipeline import recomputes the certified board from THIS
+                # snapshot (the existing planning engine); a blocker never overwrites the last valid board.
+                try:
+                    from ...newinv.board_recompute import recompute_board
+                    rb = recompute_board(app, scope, actor="import:" + contract_key)
+                    board_note = (f" Certified board recomputed ({rb.get('issued_count', 0)} position(s))."
+                                  if rb.get("ok") else f" Board NOT recomputed — {rb.get('reason', '')}")
+                except Exception:   # noqa: BLE001 — recompute must never fail the accepted import
+                    board_note = ""
+            return f"Imported {safe} into {contract_key} - {state}.{id_note}{board_note}"
         return (f"Import of {safe} did not complete ({state}); previous data is unchanged and freshness "
                 "was not updated.")
     except Exception as e:   # noqa: BLE001
