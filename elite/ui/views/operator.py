@@ -476,10 +476,13 @@ def _planning_code4(identity):
 def _executable_order_identity(st, code4):
     """Governed EXECUTABLE order identity for a planning code, so an ACQUIRE never terminates on an obsolete
     (older-generation) code merely because historical demand lived there. Returns (state, order_code, family):
-      * 'current'   — this code IS the current governed orderable version (or the code is ungoverned → leave
-                      as-is); order it as shown;
-      * 'supersede' — an OLDER generation whose family has a NEWER orderable version; order that current code;
-      * 'gated'     — an OLDER generation with NO current orderable version established → gate, never guess.
+      * 'current'   — this code IS the current governed orderable version (single-generation family, or the code
+                      is ungoverned → leave as-is); order it as shown;
+      * 'supersede' — an older-generation display code whose family's NEWEST generation is positively governed
+                      orderable; order that newer current code;
+      * 'gated'     — a MULTI-generation family whose NEWEST generation is not positively governed orderable →
+                      gate. The executable order is NEVER allowed to fall back to an older generation just because
+                      an old chart row was priced; orderability of the current generation is its own governed fact.
     Demand-evidence identity (where the history lived) is thereby kept distinct from executable order identity."""
     if not (code4 and len(code4) >= 2 and code4.isdigit()):
         return ("current", None, "")
@@ -490,22 +493,23 @@ def _executable_order_identity(st, code4):
     if fam is None:
         return ("current", None, "")                       # ungoverned code — leave the existing action as-is
     try:
-        segs = st.segments(fam, approved_only=True)
+        segs = {int(g) for g in st.segments(fam, approved_only=True) if str(g).isdigit()}
     except Exception:   # noqa: BLE001
-        segs = []
-    code_gen = code4[:2]
-    if not any(str(g).isdigit() and int(g) > int(code_gen) for g in segs):
-        return ("current", None, fam.as_str())             # this code is the newest generation → current
+        segs = set()
+    if len(segs) <= 1:
+        return ("current", None, fam.as_str())             # single-generation family — existing behaviour
+    # MULTI-generation family: the executable order must be the NEWEST generation, and ONLY when that newest
+    # generation is positively governed orderable. Never the older generation, even if its old BASE was priced.
+    newest = max(segs)
+    code_gen = int(code4[:2])
     try:
         order = st.resolve_order(fam)
     except Exception:   # noqa: BLE001
         order = None
-    if order and order.get("status") == "order":
-        og = str(order.get("generation") or "")
-        if og.isdigit() and int(og) > int(code_gen):
-            return ("supersede", order.get("raw_code"), fam.as_str())
-        return ("current", order.get("raw_code"), fam.as_str())   # current orderable IS this generation
-    return ("gated", None, fam.as_str())                   # newer generation exists but none is orderable yet
+    if (order and order.get("status") == "order" and str(order.get("generation") or "").isdigit()
+            and int(order["generation"]) == newest):
+        return (("supersede" if newest > code_gen else "current"), order.get("raw_code"), fam.as_str())
+    return ("gated", None, fam.as_str())                   # newest generation not positively orderable → gate
 
 
 def _plan_key_of(identity):
@@ -573,7 +577,8 @@ def register(app):
         xlat = TranslationStore(app.prefs, s.scope)
 
         models = {}          # model -> list of (call_kind, label, readable, current, incoming, target, pid, acq, note)
-        totals = {"acquire": 0, "arrived_excess": 0, "incoming_excess": 0, "combos": 0}
+        totals = {"acquire": 0, "gated": 0, "gated_combos": 0, "arrived_excess": 0, "incoming_excess": 0,
+                  "combos": 0}
         for r in rows:
             try:
                 dec = (json.loads(r["evidence"]) if r["evidence"] else {}).get("decision") or {}
@@ -596,16 +601,24 @@ def register(app):
             # code. Keep the demand-evidence identity, but point the action at the current governed orderable
             # version (or gate when none is established). The need count is unchanged (the 22 total reconciles).
             note = ""
+            gated = False
             if kind == "ACQUIRE" and acq > 0:
                 state, order_code, _fam = _executable_order_identity(xlat, _planning_code4(ident.get(r["combination_id"], "")))
                 if state == "supersede" and order_code:
                     note = f"Order the current version {order_code} (this {label.split(' ')[0]} identity is a prior generation)."
                 elif state == "gated":
                     kind = "GATED"
+                    gated = True
                     label = "ORDER GATED · no current orderable version"
                     note = ("Demand is supported, but no current-generation orderable version is established for "
                             "this family yet — order is gated (never an obsolete code).")
-            totals["acquire"] += acq
+            # ACCOUNTING: 'Vehicles to order now' counts only EXECUTABLE acquire units; gated demand is real
+            # but not order-executable, so it is counted and shown separately (never in the order-now headline).
+            if gated:
+                totals["gated"] += acq
+                totals["gated_combos"] += 1
+            else:
+                totals["acquire"] += acq
             totals["arrived_excess"] += int(dec.get("arrived_excess", 0) or 0)
             totals["incoming_excess"] += int(dec.get("incoming_excess", 0) or 0)
             totals["combos"] += 1
@@ -618,10 +631,13 @@ def register(app):
                     'Once the New-Inventory board is issued it appears here as the dealership pipeline.</p></div>')
             return _resp(app, s, "Pipeline", body, "/")
 
-        headline = kv([("Vehicles to order now", totals["acquire"]),
-                       ("Combinations in the plan", totals["combos"]),
-                       ("Arrived, over-stocked (review disposition)", totals["arrived_excess"]),
-                       ("Incoming to redirect", totals["incoming_excess"])])
+        headline_rows = [("Vehicles to order now", totals["acquire"])]
+        if totals["gated"]:
+            headline_rows.append(("Vehicles needed but order-gated", totals["gated"]))
+        headline_rows += [("Combinations in the plan", totals["combos"]),
+                          ("Arrived, over-stocked (review disposition)", totals["arrived_excess"]),
+                          ("Incoming to redirect", totals["incoming_excess"])]
+        headline = kv(headline_rows)
         parts = [f'<div class="card"><h2>Today across the whole dealership</h2>{headline}'
                  '<p class="muted">Expand a model to see its combinations. Numbers are read from the certified '
                  'plan — nothing is recomputed here.</p></div>']
@@ -630,8 +646,9 @@ def register(app):
         for model in sorted(models):
             combos = sorted(models[model], key=lambda c: (_rank.get(c[0], 3), c[2]))
             acq_combos = [c for c in combos if c[0] == "ACQUIRE"]
-            n_acq_combos = len(acq_combos)
-            n_vehicles = sum(c[7] for c in acq_combos)                     # vehicles to acquire (sum of units)
+            gated_combos = [c for c in combos if c[0] == "GATED"]
+            n_acq_combos, n_vehicles = len(acq_combos), sum(c[7] for c in acq_combos)   # executable acquire
+            n_gated_combos, n_gated_veh = len(gated_combos), sum(c[7] for c in gated_combos)   # gated demand
             rows_html = table(
                 ["Call", "Combination", "On ground now", "Incoming", "Target (60-day)"],
                 [[safe(badge(_tone.get(c[0], "healthy"), c[1])),
@@ -639,10 +656,12 @@ def register(app):
                        + (f'<div class="muted" style="font-size:12px">{esc(c[8])}</div>' if c[8] else "")),
                   esc(c[3]), esc(c[4]), esc(c[5])]
                  for c in combos])
-            # distinguish COMBINATIONS from VEHICLES so "3 combinations × 2 = 6 vehicles" reads truthfully
+            # distinguish EXECUTABLE acquire from GATED demand, and combinations from vehicles
             summary = (f'{esc(model)} · {len(combos)} combination(s)'
                        + (f' · <strong>{n_acq_combos} acquire combination(s) · {n_vehicles} vehicle(s) to acquire'
-                          f'</strong>' if n_acq_combos else ' · steady'))
+                          f'</strong>' if n_acq_combos else (' · steady' if not n_gated_combos else ''))
+                       + (f' · <span class="muted">{n_gated_combos} gated combination(s) · {n_gated_veh} '
+                          f'vehicle(s) order-gated</span>' if n_gated_combos else ''))
             parts.append(f'<details class="card"><summary style="cursor:pointer;font-weight:600">{summary}'
                          f'</summary><div style="margin-top:10px">{rows_html}</div></details>')
         return _resp(app, s, "Pipeline", "".join(parts), "/")
@@ -2559,16 +2578,19 @@ def _demo_replacement_due(cur, today):
         days = None
     mi_now = cur.get("mi_now")
     if mi_now in (None, "") or str(mi_now).strip() == "":
-        return {"state": "unknown_mileage", "days": days, "accumulated": None,
+        return {"state": "unknown_mileage", "days": days, "odometer": None,
                 "detail": "Current odometer reading is needed to assess replacement — record the demo's current "
                           "mileage. Elite will not assume it is due."}
-    acc = max(0, _int_or0(mi_now) - _int_or0(cur.get("mi_in")))
+    # The swap point is the vehicle's CURRENT TOTAL ODOMETER (~2,000 mi, ideally still in the 1,xxx range), NOT
+    # miles accumulated since assignment — assignment mileage informs velocity/history, it never raises the bar.
+    odo = _int_or0(mi_now)
     cadence = f" (~{days}d in service; ~{DEMO_CADENCE_DAYS}d is typical guidance)" if days is not None else ""
-    if acc >= DEMO_SWAP_MILES:
-        return {"state": "due", "accumulated": acc, "days": days,
-                "detail": f"~{acc:,} mi accumulated — at or past the ~{DEMO_SWAP_MILES:,} mi swap point{cadence}."}
-    return {"state": "keep", "accumulated": acc, "days": days,
-            "detail": f"~{acc:,} mi accumulated — below the ~{DEMO_SWAP_MILES:,} mi swap point{cadence}."}
+    if odo >= DEMO_SWAP_MILES:
+        return {"state": "due", "odometer": odo, "days": days,
+                "detail": f"Current odometer ~{odo:,} mi — at or past the ~{DEMO_SWAP_MILES:,} mi swap point{cadence}."}
+    return {"state": "keep", "odometer": odo, "days": days,
+            "detail": f"Current odometer ~{odo:,} mi — below the ~{DEMO_SWAP_MILES:,} mi swap point"
+                      f"{' (approaching the window)' if odo >= 1000 else ''}{cadence}."}
 
 
 def _demo_current_build(app, scope, vin):

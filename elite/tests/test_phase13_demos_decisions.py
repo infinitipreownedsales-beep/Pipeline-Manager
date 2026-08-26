@@ -20,15 +20,23 @@ class TestDecisionA(unittest.TestCase):
         self.assertEqual(d["state"], "unknown_mileage")            # never pretends due without a reading
         self.assertIn("Current odometer", d["detail"])
 
-    def test_below_threshold_keeps(self):
+    def test_below_odometer_threshold_keeps(self):
         d = _demo_replacement_due({"vin": "V1", "start": "2026-08-01", "mi_in": 50, "mi_now": 900}, "2026-08-26")
         self.assertEqual(d["state"], "keep")
-        self.assertEqual(d["accumulated"], 850)
+        self.assertEqual(d["odometer"], 900)                      # threshold is on the odometer, not accumulated
 
-    def test_at_threshold_is_due(self):
-        d = _demo_replacement_due({"vin": "V1", "start": "2026-05-01", "mi_in": 50,
-                                   "mi_now": 50 + DEMO_SWAP_MILES}, "2026-08-26")
+    def test_threshold_is_current_odometer_not_miles_since_assignment(self):
+        # assigned at 500, current odometer 2,100: accumulated is only 1,600 but the ODOMETER is past ~2,000 ->
+        # DUE. Assignment mileage must never raise the swap bar.
+        d = _demo_replacement_due({"vin": "V1", "start": "2026-05-01", "mi_in": 500, "mi_now": 2100}, "2026-08-26")
         self.assertEqual(d["state"], "due")
+        self.assertEqual(d["odometer"], 2100)
+
+    def test_approaching_window_still_keeps_but_flagged(self):
+        # assigned 500, current 1,950 -> below 2,000 (keep) but in the 1,xxx approaching window, not "1,450 in"
+        d = _demo_replacement_due({"vin": "V1", "start": "2026-06-01", "mi_in": 500, "mi_now": 1950}, "2026-08-26")
+        self.assertEqual(d["state"], "keep")
+        self.assertIn("approaching", d["detail"])
 
     def test_no_demo(self):
         self.assertEqual(_demo_replacement_due({}, "2026-08-26")["state"], "no_demo")

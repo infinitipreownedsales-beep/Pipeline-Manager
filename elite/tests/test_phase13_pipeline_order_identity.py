@@ -18,7 +18,7 @@ from elite.newinv.store import NewInvStore
 from elite.newinv.dms_identity import resolve_or_create_planning_combination
 from elite.newinv.models import InventoryPlanResult
 from elite.ids import new_id
-from elite.identity.translation import TranslationStore
+from elite.identity.translation import (TranslationStore, FamilyKey, VariantRow, derive_orderability)
 from elite.identity import seed_infiniti as SEED
 from elite.ui.views.operator import _executable_order_identity
 
@@ -39,15 +39,30 @@ class TestExecutableOrderBridge(unittest.TestCase):
         self.assertEqual(_executable_order_identity(self.st, "8331")[0], "gated")
         self.assertEqual(_executable_order_identity(self.st, "8361")[0], "gated")
 
-    def test_current_generation_is_current(self):
-        for code in ("8611", "8631", "8661"):
-            self.assertEqual(_executable_order_identity(self.st, code)[0], "current")
+    def test_current_generation_gates_when_orderability_unresolved(self):
+        # 86-gen codes exist but are pending ($0) -> current-generation orderability unresolved -> GATE
+        for code in ("8631", "8661"):
+            self.assertEqual(_executable_order_identity(self.st, code)[0], "gated")
 
-    def test_older_gen_that_is_the_orderable_version_stays_current(self):
-        # SPORT 4WD: the 83-gen 83417 is the governed orderable BASE -> ordering it is correct, not obsolete.
-        state, order_code, _fam = _executable_order_identity(self.st, "8381")
-        self.assertEqual(state, "current")
-        self.assertEqual(order_code, "83417")
+    def test_single_generation_family_stays_current(self):
+        # PURE 2WD is single-generation in the seed (only 86117) -> the multi-gen rule does not apply
+        self.assertEqual(_executable_order_identity(self.st, "8611")[0], "current")
+
+    def test_older_gen_never_current_when_newer_exists_even_if_old_base_priced(self):
+        # SPORT 4WD (83417 priced) and PURE 4WD (83017 priced): a NEWER 86-gen exists but is not orderable, so
+        # the older priced BASE must NEVER become the executable order -> GATE, never 'current' on 83417/83017.
+        self.assertEqual(_executable_order_identity(self.st, "8381")[0], "gated")
+        self.assertEqual(_executable_order_identity(self.st, "8301")[0], "gated")
+
+    def test_supersede_only_when_newest_generation_positively_orderable(self):
+        # positively govern LUXE 2WD 86317 as orderable -> the older 8331 supersedes to it; the 86 code is current
+        fam = FamilyKey("INFINITI", "QX80", "LUXE", "2WD")
+        r = VariantRow(fam, "86317", "86", "BASE", True, "seen_latest", True,
+                       derive_orderability("seen_latest", True), ("chart",))
+        self.st.add_variant_row(r, actor="k", at="t")
+        self.st.approve_variant(fam, "86317", "86", "BASE", actor="k", at="t")
+        self.assertEqual(_executable_order_identity(self.st, "8331"), ("supersede", "86317", fam.as_str()))
+        self.assertEqual(_executable_order_identity(self.st, "8631"), ("current", "86317", fam.as_str()))
 
     def test_ungoverned_code_left_as_is(self):
         self.assertEqual(_executable_order_identity(self.st, "8131")[0], "current")   # QX50 not seeded -> as-is
@@ -64,9 +79,10 @@ class TestPipelineHomeRender(unittest.TestCase):
         # QX65: 3 acquire combinations x 2 vehicles = 6
         for e, i in (("QBE", "G"), ("DAT", "K"), ("GAT", "G")):
             self._plan("8501", e, i, acq=2)
-        # QX80: one obsolete-gen LUXE 2WD demand-only ACQUIRE (8331) that must GATE, one current 86 acquire
+        # QX80: two multi-generation acquires that must GATE (86-gen not orderable) — a prior-gen LUXE 2WD
+        # demand cohort (8331) and a current 86-gen SPORT (8641). QX65 8501 is single-generation -> executable.
         self._plan("8331", "QBE", "G", acq=1)
-        self._plan("8641", "GAT", "G", acq=1)     # SPORT 86-gen current-generation acquire
+        self._plan("8641", "GAT", "G", acq=1)
         self.full = self.p.login(self.p.op_full)
 
     def tearDown(self):
@@ -85,19 +101,19 @@ class TestPipelineHomeRender(unittest.TestCase):
             policy_versions=[], calculation_version="cv", reproducibility_package="r", demand_result_id=None,
             status="issued", months=[]))
 
-    def test_summary_language_and_total_reconcile(self):
+    def test_order_now_excludes_gated_and_shows_them_separately(self):
+        # 6 executable (QX65: 3 combos x 2) + 2 gated (QX80 8331, 8641) -> order-now = 6, NOT 8; gated shown = 2
         b = self.full.get("/").body
-        self.assertIn("acquire combination(s)", b)
-        self.assertIn("vehicle(s) to acquire", b)
-        self.assertIn("3 acquire combination(s) · 6 vehicle(s) to acquire", b)   # QX65: 3 combos x 2 = 6
-        self.assertIn("Vehicles to order now", b)
-        # total need reconciles: QX65 6 + QX80 (8331:1 + 8641:1) = 8
-        self.assertIn(">8<", b.replace(" ", ""))          # headline count present
+        self.assertIn("3 acquire combination(s) · 6 vehicle(s) to acquire", b)     # QX65 executable
+        flat = b.replace(" ", "")
+        self.assertIn("Vehiclestoordernow</dt><dd>6</dd>".replace(" ", ""), flat)  # order-now = 6, not 8
+        self.assertIn("Vehiclesneededbutorder-gated</dt><dd>2</dd>".replace(" ", ""), flat)  # gated shown = 2
 
     def test_obsolete_qx80_acquire_is_gated_not_ordered(self):
         b = self.full.get("/").body
-        self.assertIn("ORDER GATED", b)                   # the obsolete 8331 LUXE 2WD is gated
+        self.assertIn("ORDER GATED", b)                   # the obsolete/unresolved QX80 acquires are gated
         self.assertIn("no current orderable version", b)
+        self.assertIn("gated combination(s)", b)          # model header distinguishes gated combos/vehicles
 
 
 if __name__ == "__main__":
