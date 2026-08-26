@@ -35,11 +35,15 @@ def _price_at_model_year_age(mi, age_years):
     if mi is None:
         return None, "no model evidence", "none"
     if age_years is None:
-        # The unit's model-year age is UNKNOWN (its model year is unresolved — e.g. the loaner fleet source
-        # carries no model-year column, so it fails closed; governance forbids inferring MY from the VIN). We
-        # must NOT price the unit off the oldest ("5+") maturity cohort as if it were 5+ years old — that is
-        # exactly what produced the nonsensical ~$18,993 expected used price for a near-new loaner. Gate
-        # honestly: no comparable resale cohort can be selected without the unit's model-year age.
+        # The unit's model-year age is UNKNOWN (its model year is unresolved). We must NOT price it off the
+        # oldest ("5+") maturity cohort as if it were 5+ years old — that is exactly what produced the nonsensical
+        # ~$18,993 expected used price for a near-new loaner. Instead DEGRADE (never gate to nothing when real
+        # evidence exists) to the model's ALL-model-years resale median — the same governed thin fallback used
+        # for a thin maturity bin, NOT an oldest-cohort assumption — at THIN confidence so the decision is
+        # honestly low-confidence rather than UNRESOLVED. When even that has no defensible sample, gate.
+        rm = getattr(mi, "resale_model", None)
+        if rm is not None and getattr(rm, "gated", False):
+            return float(rm.dist.median), "model resale median (model-year age unknown — degraded)", "thin"
         return None, "model-year age unknown (unit model year unresolved) — no comparable resale cohort", "none"
     label = "5+" if age_years >= 5 else str(max(0, int(age_years)))
     for b in getattr(mi, "maturity", ()) or ():

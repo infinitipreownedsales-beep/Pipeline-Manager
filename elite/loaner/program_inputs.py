@@ -179,15 +179,33 @@ class ProgramInputsStore:
     def applicable(self, kind, model, month, *, trim="", model_year=""):
         """The entry whose value applied to (model, model_year, trim) at `month`: the latest effective_month
         <= month with a non-None value, among ACTIVE (non-retired) entries, scope-matching. A more specific
-        entry (matching model_year and/or trim) wins over a broader all-MY / all-trim entry. None = unresolved."""
+        entry (matching model_year and/or trim) wins over a broader all-MY / all-trim entry. None = unresolved.
+
+        When the UNIT'S model year is unknown ("") the strict pass only matches all-MY entries; if that finds
+        nothing, resolve the effective-dated program by (model, month) ALONE — the in-service month is the
+        authoritative key for ICV/Velocity — but ONLY when unambiguous: the MY-specific entries in force at the
+        latest effective month must agree on value/day_cap/mile_cap. Disagreement stays Unknown (honest gate,
+        never a guess). This fixes the contradiction where coverage (MY-agnostic) reads 'complete' yet a unit
+        with unknown MY resolved to Unknown against MY-specific program entries."""
         model = (model or "").upper()
         my = (model_year or "").strip()
         trim = (trim or "").strip()
-        cands = [e for e in self.active_entries(kind)
-                 if e.model == model and e.value is not None and valid_month(e.effective_month)
-                 and _midx(e.effective_month) <= _midx(month)
-                 and (e.model_year == "" or e.model_year == my)
-                 and (e.trim == "" or e.trim == trim)]
+
+        def _pass(my_ok):
+            return [e for e in self.active_entries(kind)
+                    if e.model == model and e.value is not None and valid_month(e.effective_month)
+                    and _midx(e.effective_month) <= _midx(month) and my_ok(e)
+                    and (e.trim == "" or e.trim == trim)]
+
+        cands = _pass(lambda e: e.model_year == "" or e.model_year == my)
+        if not cands and my == "":
+            loose = _pass(lambda e: True)                # unit MY unknown: resolve by (model, month) alone…
+            if loose:
+                latest = max(_midx(e.effective_month) for e in loose)
+                top = [e for e in loose if _midx(e.effective_month) == latest]
+                sig = {(round(float(e.value), 6), e.day_cap, e.mile_cap) for e in top}
+                if len(sig) == 1:                        # …only when the MY variants agree (unambiguous)
+                    cands = top
         if not cands:
             return None
         # order: latest effective month, then most specific (model-year match, then trim match), then recency
