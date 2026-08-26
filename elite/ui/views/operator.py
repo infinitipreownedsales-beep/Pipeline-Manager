@@ -466,6 +466,48 @@ def _decomposition_html(model, ln):
     return "".join(src) + tail
 
 
+def _planning_code4(identity):
+    """The 4-digit planning model code carried in a dms_planning canonical identity, else ''."""
+    import re
+    m = re.search(r"model_code=(\d{3,5})", str(identity or ""))
+    return (m.group(1)[:4] if m else "")
+
+
+def _executable_order_identity(st, code4):
+    """Governed EXECUTABLE order identity for a planning code, so an ACQUIRE never terminates on an obsolete
+    (older-generation) code merely because historical demand lived there. Returns (state, order_code, family):
+      * 'current'   — this code IS the current governed orderable version (or the code is ungoverned → leave
+                      as-is); order it as shown;
+      * 'supersede' — an OLDER generation whose family has a NEWER orderable version; order that current code;
+      * 'gated'     — an OLDER generation with NO current orderable version established → gate, never guess.
+    Demand-evidence identity (where the history lived) is thereby kept distinct from executable order identity."""
+    if not (code4 and len(code4) >= 2 and code4.isdigit()):
+        return ("current", None, "")
+    try:
+        fam = st.family_for_code(code4)
+    except Exception:   # noqa: BLE001
+        fam = None
+    if fam is None:
+        return ("current", None, "")                       # ungoverned code — leave the existing action as-is
+    try:
+        segs = st.segments(fam, approved_only=True)
+    except Exception:   # noqa: BLE001
+        segs = []
+    code_gen = code4[:2]
+    if not any(str(g).isdigit() and int(g) > int(code_gen) for g in segs):
+        return ("current", None, fam.as_str())             # this code is the newest generation → current
+    try:
+        order = st.resolve_order(fam)
+    except Exception:   # noqa: BLE001
+        order = None
+    if order and order.get("status") == "order":
+        og = str(order.get("generation") or "")
+        if og.isdigit() and int(og) > int(code_gen):
+            return ("supersede", order.get("raw_code"), fam.as_str())
+        return ("current", order.get("raw_code"), fam.as_str())   # current orderable IS this generation
+    return ("gated", None, fam.as_str())                   # newer generation exists but none is orderable yet
+
+
 def register(app):
     @app.get("/")
     def pipeline_home(app, req):
@@ -481,9 +523,11 @@ def register(app):
         ident = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
             "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (s.scope,)).fetchall()}
         from ...newinv.publish import plan_call
+        from ...identity.translation import TranslationStore
         bench = _benched(app, s.scope)
+        xlat = TranslationStore(app.prefs, s.scope)
 
-        models = {}          # model -> list of (call_kind, label, readable, current, incoming, target, pid)
+        models = {}          # model -> list of (call_kind, label, readable, current, incoming, target, pid, acq, note)
         totals = {"acquire": 0, "arrived_excess": 0, "incoming_excess": 0, "combos": 0}
         for r in rows:
             try:
@@ -502,13 +546,27 @@ def register(app):
             kind, _q, label = plan_call(dec)
             if benched:
                 label += " · No longer orderable"
-            totals["acquire"] += int(dec.get("acquire_units", 0) or 0)
+            acq = int(dec.get("acquire_units", 0) or 0)
+            # EXECUTABLE-ORDER bridge: an ACQUIRE must never terminate on an obsolete older-generation order
+            # code. Keep the demand-evidence identity, but point the action at the current governed orderable
+            # version (or gate when none is established). The need count is unchanged (the 22 total reconciles).
+            note = ""
+            if kind == "ACQUIRE" and acq > 0:
+                state, order_code, _fam = _executable_order_identity(xlat, _planning_code4(ident.get(r["combination_id"], "")))
+                if state == "supersede" and order_code:
+                    note = f"Order the current version {order_code} (this {label.split(' ')[0]} identity is a prior generation)."
+                elif state == "gated":
+                    kind = "GATED"
+                    label = "ORDER GATED · no current orderable version"
+                    note = ("Demand is supported, but no current-generation orderable version is established for "
+                            "this family yet — order is gated (never an obsolete code).")
+            totals["acquire"] += acq
             totals["arrived_excess"] += int(dec.get("arrived_excess", 0) or 0)
             totals["incoming_excess"] += int(dec.get("incoming_excess", 0) or 0)
             totals["combos"] += 1
             models.setdefault(_model_of(readable), []).append(
                 (kind, label, readable, r["current_supply"], incoming,
-                 round(dec.get("target_level", 0) or 0, 1), r["id"]))
+                 round(dec.get("target_level", 0) or 0, 1), r["id"], acq, note))
 
         if not models:
             body = ('<div class="card"><p class="muted">No certified inventory plan is loaded for this store yet. '
@@ -522,19 +580,24 @@ def register(app):
         parts = [f'<div class="card"><h2>Today across the whole dealership</h2>{headline}'
                  '<p class="muted">Expand a model to see its combinations. Numbers are read from the certified '
                  'plan — nothing is recomputed here.</p></div>']
-        _tone = {"ACQUIRE": "attention", "EXCESS": "pending", "MONITOR": "healthy"}
-        _rank = {"ACQUIRE": 0, "EXCESS": 1, "MONITOR": 2}
+        _tone = {"ACQUIRE": "attention", "EXCESS": "pending", "MONITOR": "healthy", "GATED": "unresolved"}
+        _rank = {"ACQUIRE": 0, "GATED": 0, "EXCESS": 1, "MONITOR": 2}
         for model in sorted(models):
             combos = sorted(models[model], key=lambda c: (_rank.get(c[0], 3), c[2]))
-            n_order = sum(1 for c in combos if c[0] == "ACQUIRE")
+            acq_combos = [c for c in combos if c[0] == "ACQUIRE"]
+            n_acq_combos = len(acq_combos)
+            n_vehicles = sum(c[7] for c in acq_combos)                     # vehicles to acquire (sum of units)
             rows_html = table(
                 ["Call", "Combination", "On ground now", "Incoming", "Target (60-day)"],
                 [[safe(badge(_tone.get(c[0], "healthy"), c[1])),
-                  safe(f'<a href="/combination/{esc(c[6])}">{esc(c[2])}</a>'),
+                  safe(f'<a href="/combination/{esc(c[6])}">{esc(c[2])}</a>'
+                       + (f'<div class="muted" style="font-size:12px">{esc(c[8])}</div>' if c[8] else "")),
                   esc(c[3]), esc(c[4]), esc(c[5])]
                  for c in combos])
+            # distinguish COMBINATIONS from VEHICLES so "3 combinations × 2 = 6 vehicles" reads truthfully
             summary = (f'{esc(model)} · {len(combos)} combination(s)'
-                       + (f' · <strong>{n_order} to order</strong>' if n_order else ' · steady'))
+                       + (f' · <strong>{n_acq_combos} acquire combination(s) · {n_vehicles} vehicle(s) to acquire'
+                          f'</strong>' if n_acq_combos else ' · steady'))
             parts.append(f'<details class="card"><summary style="cursor:pointer;font-weight:600">{summary}'
                          f'</summary><div style="margin-top:10px">{rows_html}</div></details>')
         return _resp(app, s, "Pipeline", "".join(parts), "/")
