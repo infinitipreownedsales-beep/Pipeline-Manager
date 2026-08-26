@@ -508,6 +508,51 @@ def _executable_order_identity(st, code4):
     return ("gated", None, fam.as_str())                   # newer generation exists but none is orderable yet
 
 
+def _plan_key_of(identity):
+    """(model, code4, exterior, interior) parsed from a dms_planning canonical identity (∅ -> '')."""
+    import re
+    s = str(identity or "")
+
+    def g(f):
+        m = re.search(rf"{f}=([^|]*)", s)
+        v = (m.group(1).strip() if m else "")
+        return "" if v == "∅" else v
+    return (g("model"), g("model_code")[:4], g("exterior"), g("interior"))
+
+
+def _wholesale_on_ground(app, scope, plan_key):
+    """ARRIVED (DLR-INV) physical units matching a combination's planning key, OLDEST first (by days-in-stock).
+    Real DMS inventory only — never fabricates a VIN. Each: {vin, stock, dis}. Incoming stages are excluded
+    (they belong to future redirect, never arrived wholesale disposition)."""
+    try:
+        from ...loaner.placement import read_new_retail_units, _authoritative_vin
+        from ...newinv.dms_cohort import dms_source_stage
+        from ...newinv.dms_identity import dms_planning_key
+    except Exception:   # noqa: BLE001
+        return []
+    out = []
+    for r in (read_new_retail_units(app, scope) or []):
+        try:
+            if dms_source_stage(r) != "DLR-INV" or dms_planning_key(r) != plan_key:
+                continue
+        except Exception:   # noqa: BLE001
+            continue
+        vin, ok, serial = _authoritative_vin(r)
+        stock = str(r.get("stock_number") or r.get("stock") or r.get("Stock#") or "").strip()
+        dis = None
+        for k in ("dis", "days_in_stock", "DIS"):
+            v = r.get(k)
+            if str(v or "").strip():
+                try:
+                    dis = int(float(v))
+                    break
+                except (TypeError, ValueError):
+                    pass
+        out.append({"vin": (vin if ok else ""), "stock": stock, "serial": serial, "dis": dis})
+    out.sort(key=lambda u: -(u["dis"] if u["dis"] is not None else -1))   # oldest (highest DIS) first
+    return out
+
+
 def register(app):
     @app.get("/")
     def pipeline_home(app, req):
@@ -1076,11 +1121,37 @@ def register(app):
             dealer_name = _readable_h(app, s.scope, canonical, dealer=True, descriptions=descs)  # dealer: names lead
             if arr > 0:
                 now.append({"identity": readable, "dealer": dealer_name, "qty": arr, "pid": r["id"],
-                            "dts": dec.get("dts_burden", "—")})
+                            "dts": dec.get("dts_burden", "—"), "key": _plan_key_of(canonical)})
             if inc > 0:
                 future.append({"identity": readable, "qty": inc, "pid": r["id"]})
         now.sort(key=lambda d: (-d["qty"], d["identity"]))
         future.sort(key=lambda d: (-d["qty"], d["identity"]))
+
+        # PHYSICAL-UNIT COMPLETION: for each arrived-excess combination, name the exact N on-ground VINs to move
+        # (oldest first) and, separately, the unit(s) being retained. Real inventory only; never a fabricated VIN.
+        def _unit_cell(u):
+            who = u["vin"] or u["stock"] or u["serial"] or "—"
+            age = f' · {u["dis"]}d in stock' if u["dis"] is not None else ""
+            return esc(who) + (f'<span class="muted" style="font-size:12px"> (stock {esc(u["stock"])}{age})</span>'
+                               if u["stock"] and who != u["stock"] else esc(age))
+        phys_html = ""
+        for d in now:
+            units = _wholesale_on_ground(app, s.scope, d["key"])
+            if not units:
+                continue
+            n = min(d["qty"], len(units))
+            move, keep = units[:n], units[n:]
+            move_tbl = table(["Dispose (oldest first)", "Days in stock"],
+                             [[safe(_unit_cell(u)), esc("—" if u["dis"] is None else u["dis"])] for u in move])
+            keep_tbl = (table(["Retain on ground", "Days in stock"],
+                              [[safe(_unit_cell(u)), esc("—" if u["dis"] is None else u["dis"])] for u in keep])
+                        if keep else '<p class="muted">No units retained in this combination.</p>')
+            short = "" if n >= d["qty"] else (f'<p class="muted">Only {n} on-ground VIN(s) found for a stated '
+                                             f'excess of {d["qty"]} — showing the units that exist; none invented.</p>')
+            phys_html += (f'<details class="card"><summary style="cursor:pointer;font-weight:600">'
+                          f'{esc(d["identity"])} — move {n} of {len(units)} on ground</summary>'
+                          f'<div style="margin-top:8px">{move_tbl}{short}<div style="margin-top:8px">{keep_tbl}</div>'
+                          '</div></details>')
 
         nrows = [[esc(i + 1),
                   safe(f'<a href="/combination/{esc(d["pid"])}">{esc(d["identity"])}</a>'),
@@ -1095,11 +1166,16 @@ def register(app):
                 '<p class="muted">Copied text is combination + quantity only — no rank, age, or internal reasoning.</p>')
         frows = [[safe(f'<a href="/combination/{esc(d["pid"])}">{esc(d["identity"])}</a>'), esc(d["qty"])]
                  for d in future]
+        phys_section = ('<div class="card"><h2>Physical units to move (exact VINs, oldest first)</h2>'
+                        '<p class="muted">For each arrived over-stock combination, the exact on-ground unit(s) to '
+                        'dispose and the unit(s) to retain. Real inventory only — no VIN is invented, and incoming '
+                        'units are never mixed in here.</p>' + phys_html + '</div>') if phys_html else ""
         body = ('<div class="card"><h2>What to move first</h2>'
                 '<p class="muted">Ranked by disposition readiness (arrived over-stock). Click a combination for '
                 'Recommendation → Why → Proof. Within a combination, dispose the oldest appropriate unit first.</p>'
                 + table(["#", "Combination", "To move", "DTS burden"], nrows) + copy + '</div>'
-                '<div class="card"><h2>Future changes (incoming to redirect)</h2>'
+                + phys_section
+                + '<div class="card"><h2>Future changes (incoming to redirect)</h2>'
                 + table(["Combination", "Redirect"], frows) + '</div>')
         return _resp(app, s, "Wholesale", body, "/wholesale")
 
