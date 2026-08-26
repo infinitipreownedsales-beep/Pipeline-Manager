@@ -86,6 +86,65 @@ class TestNotAvailableEngine(unittest.TestCase):
         self.assertEqual(before, after)                          # evaluate copies the board; source unchanged
 
 
+# ---- C. CONFIRMED CHANGED is a fixed execution constraint (engine-level) ----------------------------------
+class TestConfirmedChangedEngine(unittest.TestCase):
+    def _board(self):
+        return {
+            "src": {"canonical": "src", "line": "QX65 SPORT AWD", "colors": "", "model": "QX65",
+                    "excess": 2, "short": 0},
+            "t_qbe": {"canonical": "t_qbe", "line": "QX65 LUXE AWD", "colors": "QBE/G", "model": "QX65",
+                      "excess": 0, "short": 1},
+            "t_dat": {"canonical": "t_dat", "line": "QX65 LUXE AWD", "colors": "DAT/K", "model": "QX65",
+                      "excess": 0, "short": 1},
+        }
+
+    def _order(self, num):
+        c = CTP.Candidate(order_number=num, model="QX65", arrival_month="2026-11")
+        return CTP.Reconciled(c, CTP.MATCHED, {"combination_id": "src", "model": "QX65", "arrival_month": "2026-11"},
+                              "matched by order #", "order#")
+
+    def test_confirmed_locks_consumes_and_downstream_recomputes(self):
+        board = self._board()
+        before = {k: (v["excess"], v["short"]) for k, v in board.items()}
+        A, B = self._order("TKA"), self._order("TKB")
+        # A is confirmed onto t_qbe; B subsequently rejects t_dat
+        confirmed = {CTP.order_key("TKA", ""): {"target": "t_qbe"}}
+        infeasible = {CTP.order_key("TKB", ""): [{"target": "t_dat", "reason": "above_maximum"}]}
+        recs = CTP.evaluate([A, B], board, confirmed=confirmed, infeasible=infeasible)
+        by = {r.order_number: r for r in recs}
+        # (1)+(3) A is a fixed, confirmed CHANGE to its committed target — never re-optimized
+        self.assertEqual(by["TKA"].decision_state, CTP.CHANGE)
+        self.assertTrue(by["TKA"].confirmed)
+        self.assertEqual(by["TKA"].proposed_combination_id, "t_qbe")
+        # (4) A's source excess (2→1) and target shortage (t_qbe 1→0) stay consumed, so...
+        # (5) B recomputes from the confirmed state: t_qbe is gone (A took it), B rejected t_dat -> KEEP
+        self.assertEqual(by["TKB"].decision_state, CTP.KEEP)
+        # (6) the certified board rows (the input dict) are never mutated
+        self.assertEqual({k: (v["excess"], v["short"]) for k, v in board.items()}, before)
+
+    def test_confirmed_consumption_cascades_to_next_order(self):
+        # A confirmed onto t_qbe consumes one of src's two excess and t_qbe's shortage; a following order C then
+        # sees only t_dat available and one remaining excess -> C changes to t_dat (not t_qbe).
+        board = self._board()
+        A, C = self._order("TKA"), self._order("TKC")
+        recs = CTP.evaluate([A, C], board, confirmed={CTP.order_key("TKA", ""): {"target": "t_qbe"}})
+        by = {r.order_number: r for r in recs}
+        self.assertEqual(by["TKA"].proposed_combination_id, "t_qbe")       # confirmed
+        self.assertEqual(by["TKC"].decision_state, CTP.CHANGE)
+        self.assertEqual(by["TKC"].proposed_combination_id, "t_dat")       # t_qbe already consumed by A
+
+    def test_later_rejection_cannot_undo_confirmed(self):
+        # even if a later order rejects the confirmed target, A stays confirmed on it
+        board = self._board()
+        A, B = self._order("TKA"), self._order("TKB")
+        confirmed = {CTP.order_key("TKA", ""): {"target": "t_qbe"}}
+        infeasible = {CTP.order_key("TKB", ""): [{"target": "t_qbe", "reason": "above_maximum"}]}
+        recs = CTP.evaluate([A, B], board, confirmed=confirmed, infeasible=infeasible)
+        by = {r.order_number: r for r in recs}
+        self.assertTrue(by["TKA"].confirmed)
+        self.assertEqual(by["TKA"].proposed_combination_id, "t_qbe")       # unchanged by B's rejection
+
+
 # ---- B. operator route loop (persistence + re-evaluation through the page) --------------------------------
 class TestNotAvailableRoutes(unittest.TestCase):
     def setUp(self):
@@ -185,6 +244,96 @@ class TestNotAvailableRoutes(unittest.TestCase):
             self.full.post("/ctp/confirm-change", {"order": self.okey, "target": self.qbe.id})
             b4 = self.full.get("/ctp").body
             self.assertIn("CONFIRMED CHANGED", b4)
+
+
+# ---- D. CONFIRMED CHANGED through the operator routes (persistence + board untouched + correction) --------
+class TestConfirmedChangedRoutes(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.p = Phase10(os.path.join(self.tmp, "elite.db"))
+        self.conn = self.p.stack.db.conn
+        st = NewInvStore(self.conn, self.p.clock)
+        self.src = self._combo(st, "8511", "GAT", "G")          # QX65 SPORT AWD — excess 2
+        self.qbe = self._combo(st, "8501", "QBE", "G")          # QX65 LUXE AWD — short 1
+        self.dat = self._combo(st, "8501", "DAT", "K")          # QX65 LUXE AWD — short 1
+        self._persist(st, self.src, acq=0, exc=2)
+        self._persist(st, self.qbe, acq=1, exc=0)
+        self._persist(st, self.dat, acq=1, exc=0)
+        for i, onum in enumerate(("TKA", "TKB")):
+            self.conn.execute("INSERT INTO production_order(id, manufacturer_order_id, vin, store_scope, "
+                              "identity_status, created_at, version) VALUES(?,?,'',?,'resolved',?,1)",
+                              (f"po{i}", onum, SCOPE, "2026-08-26T10:00:00Z"))
+            self.conn.execute("INSERT INTO future_supply_projection(id, store_scope, combination_id, arrival_month,"
+                              " production_order_id, status, calculation_timestamp) "
+                              "VALUES(?,?,?,'2026-11',?,'current','2026-08-26T10:00:00Z')",
+                              (f"fs{i}", SCOPE, self.src.id, f"po{i}"))
+        self.conn.commit()
+        cands = [vars(CTP.Candidate(order_number=o, model="QX65", arrival_month="2026-11")) for o in ("TKA", "TKB")]
+        self.p.app.prefs.set_pref(f"scope::{SCOPE}", "ctp_session",
+                                  {"files": [{"id": "f1", "name": "qx65.csv", "model": "QX65", "candidates": cands}]})
+        self.full = self.p.login(self.p.op_full)
+
+    def tearDown(self):
+        self.p.close()
+
+    def _combo(self, st, c, e, i):
+        return resolve_or_create_planning_combination(
+            st, self.p.clock, {"model_code": c, "exterior": e, "interior": i}, SCOPE, source_ref="t")
+
+    def _persist(self, st, cb, *, acq, exc):
+        st.add_plan(InventoryPlanResult(
+            id=new_id("plan"), store_scope=SCOPE, planning_state="balanced", combination_id=cb.id,
+            expected_demand=0.0, current_supply=1, future_supply=0, committed_supply=0, qualifying_supply=1,
+            desired_ending_coverage={"target_units": 1.6}, need=float(acq), excess=float(exc), confidence="medium",
+            evidence={"model": "m", "decision": {"acquire_units": acq, "arrived_excess": exc, "incoming_excess": 0,
+                                                 "target_level": 1.6, "incoming_in_horizon": 0, "dts_burden": 1.0}},
+            policy_versions=[], calculation_version="cv", reproducibility_package="r", demand_result_id=None,
+            status="issued", months=[]))
+
+    def _target_of(self, body, okey):
+        import re
+        m = re.search(r'action="/ctp/confirm-change".*?name=order value="%s".*?name=target value="([^"]+)"'
+                      % re.escape(okey), body, re.S)
+        return m.group(1) if m else None
+
+    def _src_excess_db(self):
+        return int(self.conn.execute("SELECT excess FROM inventory_plan_result WHERE combination_id=?",
+                                     (self.src.id,)).fetchone()["excess"])
+
+    def test_confirmed_change_constrains_session_and_board_untouched(self):
+        with patch("elite.newinv.board_recompute.board_status", return_value={"state": "current"}):
+            b0 = self.full.get("/ctp").body
+            a_target = self._target_of(b0, "TKA")
+            self.assertIsNotNone(a_target)                       # A has a recommended CHANGE target
+
+            # (1) Order A confirms its change
+            self.full.post("/ctp/confirm-change", {"order": "TKA", "target": a_target})
+            b1 = self.full.get("/ctp").body
+            self.assertIn("CONFIRMED CHANGED", b1)
+            # (2) Order B subsequently rejects a target
+            b_target = self._target_of(b1, "TKB")
+            if b_target:                                         # B still has a change target to reject
+                self.full.post("/ctp/not-available", {"order": "TKB", "target": b_target,
+                                                       "target_canonical": "t", "reason": "above_maximum"})
+            b2 = self.full.get("/ctp").body
+            # (3) A remains fixed/confirmed after B's rejection
+            self.assertIn("CONFIRMED CHANGED", b2)
+            self.assertEqual(self.p.app.prefs.get_pref(f"scope::{SCOPE}", "ctp_confirmed", default={})["TKA"]
+                             ["target"], a_target)
+            # (6) certified board rows are unchanged (source excess still 2 in inventory_plan_result)
+            self.assertEqual(self._src_excess_db(), 2)
+
+            # resetting B's unavailable marks does NOT erase A's confirmed execution
+            self.full.post("/ctp/available-reset", {"order": "TKB"})
+            b3 = self.full.get("/ctp").body
+            self.assertIn("CONFIRMED CHANGED", b3)
+
+            # explicit correction path: undo A's confirmation -> A re-optimizes (RECOMMENDED CHANGE returns)
+            self.full.post("/ctp/confirm-undo", {"order": "TKA"})
+            self.assertNotIn("TKA", self.p.app.prefs.get_pref(f"scope::{SCOPE}", "ctp_confirmed", default={}))
+            b4 = self.full.get("/ctp").body
+            self.assertIsNotNone(self._target_of(b4, "TKA"))     # A recommended again (no longer locked)
+            self.assertEqual(self._src_excess_db(), 2)           # board still untouched throughout
 
 
 if __name__ == "__main__":

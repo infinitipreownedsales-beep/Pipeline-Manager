@@ -1272,6 +1272,7 @@ def register(app):
             _bstat = _board_status(app, s.scope)
         except Exception:   # noqa: BLE001
             _bstat = {"state": "unknown", "detail": "Board status unavailable."}
+        confirmed = _ws_get(app, s.scope, "ctp_confirmed", {}) or {}
         if _bstat.get("state") != "current":
             recs = []
             for rc in reconciled:
@@ -1288,8 +1289,7 @@ def register(app):
                     evaluation_timestamp=now, candidate=rc.candidate))
         else:
             infeasible = _ws_get(app, s.scope, "ctp_infeasible", {}) or {}
-            recs = CTP.evaluate(reconciled, board, now=now, infeasible=infeasible)
-        confirmed = _ws_get(app, s.scope, "ctp_confirmed", {}) or {}
+            recs = CTP.evaluate(reconciled, board, now=now, infeasible=infeasible, confirmed=confirmed)
         summ = CTP.summarize(recs)
         pipe_age = _ctp_pipeline_age(app, s.scope)
 
@@ -1380,16 +1380,25 @@ def register(app):
         if changes:
             cc = ""
             for r in changes:
-                conf = confirmed.get(CTP.order_key(r.order_number, r.vin))
+                okey = CTP.order_key(r.order_number, r.vin)
+                conf = confirmed.get(okey) or r.confirmed
                 state_badge = (badge("completed", "CONFIRMED CHANGED") if conf
                                else badge("need", "RECOMMENDED CHANGE"))
-                confirm_ctl = ("" if conf else
-                               ('<form method="post" action="/ctp/confirm-change" class="mut" '
-                                'style="display:inline;margin-left:8px">'
-                                f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
-                                f'<input type=hidden name=order value="{esc(CTP.order_key(r.order_number, r.vin))}">'
-                                f'<input type=hidden name=target value="{esc(r.proposed_combination_id)}">'
-                                '<button type=submit>Mark confirmed changed</button></form>'))
+                if conf:
+                    # correction path for a mistakenly confirmed execution (unlocks re-optimization)
+                    confirm_ctl = ('<form method="post" action="/ctp/confirm-undo" class="mut" '
+                                   'style="display:inline;margin-left:8px">'
+                                   f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+                                   f'<input type=hidden name=order value="{esc(okey)}">'
+                                   '<button type=submit class=secondary '
+                                   'style="padding:2px 8px;font-size:12px">Undo confirmation</button></form>')
+                else:
+                    confirm_ctl = ('<form method="post" action="/ctp/confirm-change" class="mut" '
+                                   'style="display:inline;margin-left:8px">'
+                                   f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+                                   f'<input type=hidden name=order value="{esc(okey)}">'
+                                   f'<input type=hidden name=target value="{esc(r.proposed_combination_id)}">'
+                                   '<button type=submit>Mark confirmed changed</button></form>')
                 cc += ('<div class="card" style="border-left:3px solid var(--accent)">'
                        f'<h3>{safe(state_badge)} {esc(r.order_number or r.vin)}</h3>'
                        '<dl class="kv"><dt>Current</dt><dd>' + _build_html(r.current_line, r.current_colors, r.current_codes)
@@ -1562,6 +1571,20 @@ def register(app):
                            "actor": getattr(s, "principal_id", "") or ""}
         _ws_put(app, s.scope, "ctp_confirmed", confirmed)
         s.flash = f"Marked {okey} as confirmed changed."
+        return Response.redirect("/ctp")
+
+    @app.post("/ctp/confirm-undo")
+    def ctp_confirm_undo(app, req):
+        """Correction path for a mistakenly confirmed execution: unlock the order so it re-optimizes normally.
+        Its working-state consumption is released on the next evaluation; the certified board was never touched."""
+        s = req.session
+        app.require(s, "workspace.view")
+        okey = (req.form.get("order") or "").strip()
+        confirmed = _ws_get(app, s.scope, "ctp_confirmed", {}) or {}
+        if okey in confirmed:
+            confirmed.pop(okey, None)
+            _ws_put(app, s.scope, "ctp_confirmed", confirmed)
+            s.flash = f"Undid the confirmed change for {okey}; it will re-evaluate normally."
         return Response.redirect("/ctp")
 
     # ---- Data control room — imports, bench, unavailable inventory, Service-Loaner program settings ---

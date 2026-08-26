@@ -451,6 +451,7 @@ class Recommendation:
     candidate: Optional[Candidate] = None
     proposed_combination_id: str = ""    # the target combination for a CHANGE (so the operator can reject it)
     rejected_targets: list = field(default_factory=list)   # OEM 'not available' marks for THIS order/context
+    confirmed: bool = False              # this CHANGE is an operator-confirmed OEM execution (locked)
 
 
 def _model_of(label):
@@ -475,7 +476,7 @@ def human_build(candidate):
     return line, colors, codes
 
 
-def evaluate(reconciled, board, *, now="", infeasible=None):
+def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None):
     """Turn reconciled candidates into business Recommendations via the state machine:
         PARSED → RECONCILED → EVALUABLE → KEEP | CHANGE   (any earlier gap → CANT_EVALUATE)
 
@@ -490,8 +491,15 @@ def evaluate(reconciled, board, *, now="", infeasible=None):
     list of records {target, target_canonical, reason, note, at}. A marked target is excluded from the feasible
     candidate set FOR THAT ORDER ONLY (never a global blacklist); the evaluator then returns the next-best
     certified-short target, or KEEP (best available outcome) once every superior alternative is exhausted. The
-    board itself is never mutated by a mark — the change was never executed — so the sequence simply re-runs."""
+    board itself is never mutated by a mark — the change was never executed — so the sequence simply re-runs.
+
+    `confirmed` is the operator's executed-change lock, keyed by order_key → {target, at, actor}. A confirmed
+    order is a FIXED execution constraint for the rest of the session: it is applied to the working board FIRST
+    (source excess −1, target short −1), it is never re-optimized or reassigned, a later OEM rejection cannot
+    undo it, and every other order evaluates against that post-confirmation state. The certified board rows are
+    never mutated — only this in-memory working copy is."""
     infeasible = infeasible or {}
+    confirmed = confirmed or {}
     state = {cid: {"excess": int(b.get("excess", 0) or 0), "short": int(b.get("short", 0) or 0),
                    "canonical": b.get("canonical", cid), "line": b.get("line", ""), "colors": b.get("colors", ""),
                    "model": (b.get("model") or _model_of(b.get("line", ""))).upper()}
@@ -500,6 +508,28 @@ def evaluate(reconciled, board, *, now="", infeasible=None):
     def short_targets(model):
         return sorted([(cid, st) for cid, st in state.items() if st["short"] > 0 and st["model"] == model],
                       key=lambda t: (-t[1]["short"], t[1]["canonical"]))
+
+    # PRE-PASS: apply every confirmed (locked) execution to the working board before any decision, so both the
+    # confirmed order and all other orders evaluate against the post-confirmation state. Certified board rows are
+    # untouched — this only decrements the in-memory working copy.
+    locked = {}                                     # order_key -> {"target": tcid, "source_cid": scid}
+    for rc in reconciled:
+        if rc.status != MATCHED or rc.pipeline is None:
+            continue
+        okey = order_key(rc.candidate.order_number, rc.candidate.vin)
+        conf = confirmed.get(okey)
+        if not conf or okey in locked:
+            continue
+        scid = rc.pipeline.get("combination_id")
+        spos = state.get(scid)
+        if spos is None:
+            continue                                # can't place the confirmed consumption without a board source
+        tcid = conf.get("target")
+        spos["excess"] -= 1                          # source combination stays reduced by the committed unit
+        tgt = state.get(tcid)
+        if tgt:
+            tgt["short"] -= 1                        # confirmed target stays increased (its shortage consumed)
+        locked[okey] = {"target": tcid, "source_cid": scid}
 
     recs = []
     for rc in reconciled:
@@ -542,10 +572,25 @@ def evaluate(reconciled, board, *, now="", infeasible=None):
                         proof={"combination_id": cid}, **base))
             continue
 
-        # --- EVALUABLE: KEEP unless a proven superior target exists ---
+        # --- EVALUABLE ---
+        okey = order_key(c.order_number, c.vin)
+        # a CONFIRMED (locked) execution is fixed: emit its committed CHANGE as-is, never re-optimized and never
+        # reassigned by a later OEM rejection. Its board consumption was already applied in the pre-pass.
+        lk = locked.get(okey)
+        if lk is not None:
+            tgt = state.get(lk["target"], {})
+            recs.append(Recommendation(decision_state=CHANGE, confirmed=True,
+                        proposed_line=tgt.get("line", ""), proposed_colors=tgt.get("colors", ""),
+                        proposed_combination_id=lk["target"],
+                        reason_plain="Confirmed changed. This order's OEM change is executed and locked for this "
+                                     "session; Elite holds the source and target position accordingly.",
+                        operator_action_plain=f"{c.order_number or c.vin} is confirmed changed — no further action.",
+                        proof={"confirmed": True, "source_combination": pos["canonical"],
+                               "target_combination": tgt.get("canonical", lk["target"])}, **base))
+            continue
+
         # 'Not available' feedback for THIS order excludes those exact targets from its feasible set (per-order,
         # never global). The board is unchanged; we simply skip banned targets when choosing the next-best.
-        okey = order_key(c.order_number, c.vin)
         rejected = list(infeasible.get(okey, []) or [])
         banned = {r.get("target") for r in rejected if r.get("target")}
         model = pos["model"] or (c.model or "").upper()

@@ -24,7 +24,12 @@ from ..ids import new_id
 from .models import SellableCombination
 
 # Model line from the first two digits of the (4- or 5-digit) model code (legacy _PREFIX_TO_MODEL).
-_PREFIX_TO_MODEL = {"81": "QX50", "82": "QX55", "83": "QX80", "84": "QX60", "85": "QX65"}
+# QX80 spans two code generations: the prior 83xxx and the CURRENT 86xxx generation. Both are truthfully
+# QX80 the model LINE; they remain DISTINCT planning codes (8611/8621/8631/8661 vs 8331/8381) — recognizing
+# 86 as QX80 does NOT merge current 86-gen demand into historical 83-gen demand (see normalize_code, which
+# only consolidates 834x within the 83 generation and never crosses 83↔86). Cross-generation demand sharing,
+# if ever wanted, stays a governed lineage decision, never this silent prefix map.
+_PREFIX_TO_MODEL = {"81": "QX50", "82": "QX55", "83": "QX80", "84": "QX60", "85": "QX65", "86": "QX80"}
 
 
 def digits_only(value) -> str:
