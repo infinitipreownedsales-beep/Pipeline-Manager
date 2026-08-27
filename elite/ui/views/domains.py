@@ -511,6 +511,137 @@ def _money(v):
     return "—" if v is None else f"${v:,.0f}"
 
 
+def _add_id_cell(c):
+    """Physical identity for the command line / table: Stock# and authoritative VIN (or last-8), else the
+    source Serial clearly marked as not-a-VIN. A physical unit is always named by stock# + VIN/serial."""
+    stock = c.stock or "—"
+    if c.vin_authoritative and c.vin:
+        return f"{stock} / VIN {c.vin[-8:]}"
+    if c.serial:
+        return f"{stock} / serial {c.serial} (no VIN in feed)"
+    return stock
+
+
+def _best_add_card(app, scope, add_n):
+    """BEST UNITS TO ADD TO SERVICE LOANER NOW — the boss's answer. Ranks the physical New-Retail SURPLUS VINs
+    by total-dealership net on the SETTLED transaction-price economics (front-end gross at release + ICV +
+    Velocity − Retail opportunity cost), fail-closed. Default 4, operator-adjustable via the same ?add= field.
+    Never fabricates a unit to reach the target: if only K are fully evaluable it says K READY / (N−K) BLOCKED
+    and names the exact missing field for each blocked physical unit."""
+    from ...loaner.sl_add import rank_add_candidates, DEFAULT_ADD_TARGET
+    from ...ordering.cross_domain import committed_vins
+    target = add_n or DEFAULT_ADD_TARGET
+    try:
+        committed = frozenset(committed_vins(_conn(app), scope, app.prefs).keys())
+        res = rank_add_candidates(app, scope, n=target, committed_vins=committed)
+    except Exception:   # noqa: BLE001 — the command board must never break
+        return ""
+    head = ('<div class="card" style="border-left:3px solid var(--accent,#2563eb)">'
+            '<h2>Best units to add to Service Loaner now '
+            '<span class="badge">total-dealership decision</span></h2>'
+            '<p class="muted" style="font-size:12px">Physical dealer-owned surplus VINs ranked by the settled '
+            'economics of placing each into Service Loaner instead of leaving it New Retail: expected front-end '
+            'gross at release (used selling price − adjusted basis, write-down counted once) + ICV + Velocity '
+            '(contingent on the 240-day rule) − New-Retail opportunity cost ($0 for a genuine surplus unit). '
+            'Only over-stocked (EXCESS) units are offered; short combinations are protected. No unit is invented '
+            'to reach the requested count.</p>')
+    if not res.get("loaded"):
+        return head + empty("No New-Retail inventory snapshot is loaded yet — load Inventory in Data. No "
+                            "candidates are invented.") + '</div>'
+
+    ready, backups, blocked = res["ready"], res["backups"], res["blocked"]
+    k, want = len(ready), res["requested"]
+
+    # ---- TOP COMMAND ANSWER ----
+    if ready:
+        line = " ".join(f'<strong>{i}.</strong> {esc(_add_id_cell(c))}' for i, c in enumerate(ready, 1))
+        verb = f"PUT THESE {k} IN SERVICE LOANER:" if k >= want else f"READY NOW ({k} of {want} requested):"
+        body = [head, f'<div class="callout" style="font-size:14px;margin:6px 0">'
+                      f'<strong>{esc(verb)}</strong><br>{safe(line)}</div>']
+    else:
+        body = [head]
+
+    # ---- fail-closed readiness banner (never fabricate a unit to reach the requested count) ----
+    if k < want:
+        n_blocked = len(blocked)
+        short_supply = max(0, (want - k) - n_blocked)      # requested beyond what any eligible surplus can fill
+        pieces = [safe(badge("healthy" if k else "attention", f"{k} READY"))]
+        if n_blocked:
+            pieces.append(safe(badge("attention", f"{n_blocked} BLOCKED"))
+                          + ' <span class="muted">— surplus VIN(s) missing an authoritative field (shown below); '
+                          'no guess is substituted.</span>')
+        if short_supply:
+            pieces.append('<span class="muted">' + esc(str(short_supply)) + ' of the '
+                          + esc(str(want)) + ' requested cannot be met — no further eligible over-stocked surplus '
+                          'unit exists to place (Retail coverage is not harmed to reach the number).</span>')
+        body.append('<p style="margin:4px 0">' + " / ".join(pieces) + '</p>')
+
+    # ---- per-unit detail ----
+    rows = []
+    for i, c in enumerate(ready, 1):
+        econ = kv([("Original invoice (authoritative)", _money(c.invoice)),
+                   ("Service-Loaner write-down (once, in basis)", "− " + _money(c.write_down)),
+                   ("Adjusted basis", _money(c.adjusted_basis)),
+                   ("Expected used selling price at release", _money(c.expected_used_price)),
+                   ("  · price basis", safe(f'<span class="muted" style="font-size:12px">{esc(c.price_basis)}</span>')),
+                   ("Expected front-end gross at release", _money(c.front_end_gross)),
+                   ("ICV (earned by placing)", _money(c.icv)),
+                   ("Velocity", _money(c.velocity) + ("" if c.velocity_preserved else " (forfeited → $0)")),
+                   ("New-Retail opportunity cost", _money(c.retail_opportunity_cost)),
+                   ("TOTAL DEALERSHIP NET of placing", safe(f'<strong>{esc(_money(c.add_net))}</strong>'))])
+        timing = kv([("Expected hold in service", f"{c.hold_days} days"),
+                     ("Expected release by", esc(c.release_by)),
+                     ("Expected days-to-sell after release",
+                      "—" if c.expected_sell_days is None else f"{c.expected_sell_days:g} days"),
+                     ("Velocity 240-day rule", "preserved" if c.velocity_preserved else "at risk / forfeited")])
+        proof = (disclosure("Service-Loaner economic advantage (Proof — terms)", econ)
+                 + disclosure("Expected release economics / timing", timing))
+        detail = safe(f'<div style="font-size:12.5px"><strong>Why:</strong> {esc(c.why)}<br>'
+                      f'<strong>Retail impact:</strong> {esc(c.retail_impact)}'
+                      + (f'<br><strong>Caveat:</strong> {esc(c.caveat)}' if c.caveat else "")
+                      + "</div>" + proof)
+        rows.append([esc(str(i)), esc(c.stock or "—"),
+                     esc(c.vin[-8:]) if c.vin_authoritative and c.vin else safe(badge("pending", "no VIN")),
+                     esc(c.describe() + (f" · {c.exterior}/{c.interior}" if c.exterior or c.interior else "")),
+                     safe(f'<strong>{esc(_money(c.add_net))}</strong>'), detail])
+    if rows:
+        body.append(table(["#", "Stock", "VIN", "Vehicle", "Net", "Why / Retail impact / Proof"], rows))
+
+    # ---- backups ----
+    if backups:
+        brows = [[esc(str(i)), esc(c.stock or "—"),
+                  esc(c.vin[-8:]) if c.vin_authoritative and c.vin else safe(badge("pending", "no VIN")),
+                  esc(c.describe()), safe(f'<strong>{esc(_money(c.add_net))}</strong>'),
+                  safe(f'<span class="muted" style="font-size:12px">{esc(c.retail_impact)}</span>')]
+                 for i, c in enumerate(backups, len(ready) + 1)]
+        body.append(disclosure(f"Backups ({len(backups)}) — next-best fully-evaluable surplus VINs",
+                               table(["#", "Stock", "VIN", "Vehicle", "Net", "Retail impact"], brows)))
+
+    # ---- BLOCKED physical surplus units (fail-closed; exact missing field) ----
+    if blocked:
+        blk = [[esc(b.stock or "—"),
+                esc(b.vin[-8:]) if b.vin_authoritative and b.vin else (esc(b.serial) if b.serial else "—"),
+                esc(b.identity), safe(f'<span class="muted">{esc(b.missing)}</span>')] for b in blocked]
+        body.append(disclosure(f"Blocked surplus units ({len(blocked)}) — exact missing authoritative field",
+                               table(["Stock", "VIN/Serial", "Vehicle", "Missing to decide"], blk)))
+
+    # ---- coverage notes ----
+    notes = []
+    if res["protected"]:
+        notes.append(f'{res["protected"]} eligible unit(s) protected (short New-Retail combination — placing them '
+                     'would harm certified retail coverage).')
+    if res["covered_deferred"]:
+        notes.append(f'{res["covered_deferred"]} covered-coverage unit(s) deferred — their New-Retail opportunity '
+                     'cost is not yet authoritatively valued, so they are not guessed into the ranking.')
+    if res["unresolved_state"]:
+        notes.append(f'{res["unresolved_state"]} unit(s) have unresolved New-Retail coverage (no issued plan).')
+    if not ready and not blocked:
+        notes.append("No over-stocked (EXCESS) surplus unit is currently eligible to place.")
+    if notes:
+        body.append('<p class="muted" style="font-size:12px">' + " ".join(esc(x) for x in notes) + '</p>')
+    return "".join(body) + '</div>'
+
+
 def _sequential_placement_card(app, scope, add_n):
     """The sequential portfolio answer to 'add N loaners': pick the best placement, recompute Retail coverage,
     pick the next — with per-step outcome, human Why, a VIN/stock identity, provisional economics (Proof), the
@@ -655,6 +786,9 @@ def _loaner_command_body(app, s, intel, placement, add_n):
     # ONE decision engine, computed once and shared by every surface below (Command Board / operating plan /
     # per-unit table / Current Fleet) so they can never disagree.
     decisions = _fleet_decisions(app, s.scope, intel)
+
+    # ---- BEST UNITS TO ADD NOW (the headline operator decision; default 4, operator-adjustable) ----
+    parts.append(_best_add_card(app, s.scope, add_n))
 
     # ---- FLEET POSITION (reconciled to the per-unit operating plan) ----
     parts.append(_fleet_position_card(app, s.scope, decisions))
