@@ -71,10 +71,44 @@ class TestClosure(unittest.TestCase):
         self.assertEqual(d.operator, "QX80 LUXE 2WD — Radiant White (QBE) / Graphite (G)")
 
     def test_dms_description_disagreement_flags_conflict(self):
+        # 8331 is a GOVERNED family (QX80 LUXE 2WD via the reviewed chart / planning-code reverse), so its trim /
+        # drivetrain resolve from that authoritative family; a DMS Description whose MODEL disagrees is flagged for
+        # review but never overrides the governed trim (model number stays king).
         d = D.describe(self.st, model="QX80", model_code="8331", exterior_code="QBE", interior_code="G",
                        source_description="QX60 AUTOGRAPH AWD")
         self.assertTrue(d.description_conflict)                 # sources disagree → one review, never silently chosen
+        self.assertEqual((d.trim, d.drivetrain), ("LUXE", "2WD"))   # governed family stands, not the disagreeing desc
+
+    def test_ungoverned_code_with_disagreeing_description_stays_unresolved(self):
+        # for a code with NO governed family, a model-disagreeing DMS Description is refused and trim stays
+        # unresolved (fail-closed) — never guessed from the disagreeing description.
+        d = D.describe(self.st, model="QX80", model_code="99999", exterior_code="QBE", interior_code="G",
+                       source_description="QX60 AUTOGRAPH AWD")
+        self.assertTrue(d.description_conflict)
         self.assertIn("trim", d.unresolved)
+
+    def test_governed_family_authoritative_over_messy_dms_description(self):
+        # THE LIVE TK76338/76339 BUG: the DMS Description carries body/transmission tokens ("SUV AUTO"). The
+        # governed model-code family (84617 -> QX60 AUTOGRAPH AWD) is authoritative, so trim resolves to AUTOGRAPH
+        # and drivetrain to AWD — never "AUTO" and never the whole "AUTOGRAPH AWD SUV AUTO" description slice.
+        d = D.describe(self.st, model="QX60", model_code="84617", exterior_code="GAT", interior_code="K",
+                       source_description="QX60 AUTOGRAPH AWD SUV AUTO")
+        self.assertEqual(d.trim, "AUTOGRAPH")
+        self.assertNotEqual(d.trim, "AUTO")
+        self.assertEqual(d.drivetrain, "AWD")
+        self.assertNotIn("AUTO", d.trim.split())               # no transmission token leaks into trim
+
+    def test_current_qx60_codes_resolve_governed_trims_separately(self):
+        # every GOVERNED current QX60 order code resolves to the correct trim, with drivetrain as a SEPARATE
+        # field. Ungoverned codes fail closed (unresolved) — they never mis-resolve to a body/transmission token.
+        expected = {"84317": ("LUXE", "FWD"), "84217": ("LUXE", "AWD"),
+                    "84417": ("SPORT", "AWD"), "84617": ("AUTOGRAPH", "AWD")}
+        for code, (trim, drive) in expected.items():
+            fam = self.st.family_for_code(code)
+            self.assertIsNotNone(fam, code)
+            self.assertEqual((fam.trim, fam.drivetrain), (trim, drive), code)
+        for ungoverned in ("84117", "84017"):
+            self.assertIsNone(self.st.family_for_code(ungoverned))   # honest None, never guessed as a trim
 
     def test_description_never_overwrites_model_code(self):
         d = D.describe(self.st, model="QX80", model_code="86317", source_description="QX80 SPORT 4WD")

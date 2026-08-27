@@ -155,19 +155,11 @@ def describe(store, *, model="", trim="", drivetrain="", model_year="", model_co
     proof = {}
     description_conflict = False
 
-    # ---- physical VIN: the DMS Description is the authoritative human trim/drivetrain, used ONLY when it agrees
-    #      with the canonical model (model number stays king). Disagreement is surfaced, never silently chosen. ----
-    if source_description and (not trim or not drivetrain):
-        s_trim, s_drive, agrees = parse_dms_description(source_description, model=model or model_code[:2])
-        if agrees:
-            trim = trim or s_trim
-            drivetrain = drivetrain or s_drive
-            if s_trim or s_drive:
-                proof["dms_description"] = source_description
-        else:
-            description_conflict = True         # DMS Description model disagrees with canonical — one review
-
-    # ---- model / trim / drivetrain from the governed family (only where not already supplied) ----
+    # ---- model / trim / drivetrain from the GOVERNED family FIRST. The reviewed Order-Preference chart is the
+    #      authoritative source of a governed model code's trim/drivetrain, so a free-text DMS Description can
+    #      NEVER override it — that let body/transmission tokens ("QX60 AUTOGRAPH AWD SUV AUTO") pollute the trim
+    #      to "AUTOGRAPH AWD SUV AUTO"/"AUTO". Only fills what the caller did not already supply; never touches the
+    #      raw model code. ----
     if (not model or not trim or not drivetrain) and model_code and store is not None:
         fam = store.family_for_code(model_code)
         if fam is not None:
@@ -175,6 +167,24 @@ def describe(store, *, model="", trim="", drivetrain="", model_year="", model_co
             trim = trim or fam.trim
             drivetrain = drivetrain or fam.drivetrain
             proof["family"] = fam.as_str()
+
+    # ---- physical VIN: the DMS Description supplies human trim/drivetrain ONLY where the governed family did not
+    #      resolve them (an ungoverned code). Model number stays king: a Description whose model disagrees with the
+    #      canonical model raises ONE conflict review (never silently chosen), and its tokens are never used to
+    #      override a governed family trim/drivetrain. ----
+    if source_description:
+        s_trim, s_drive, agrees = parse_dms_description(source_description, model=model or model_code[:2])
+        if not agrees:
+            description_conflict = True         # DMS Description model disagrees with canonical — one review
+        else:
+            filled = False
+            if not trim and s_trim:
+                trim, filled = s_trim, True
+            if not drivetrain and s_drive:
+                drivetrain, filled = s_drive, True
+            if filled:
+                proof["dms_description"] = source_description
+
     # model may also be recoverable from the model_code's first-two-digit model-line mapping
     if not model and model_code and store is not None:
         ml = store.resolve_display("model_code", model_code[:2], source_system=source_system)
