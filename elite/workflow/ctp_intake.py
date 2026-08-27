@@ -459,8 +459,10 @@ def _model_of(label):
 
 
 def order_key(order_number, vin):
-    """Stable per-order/context key (normalized Order #, else VIN) shared by the evaluator and the operator's
-    'Not available configuration' store, so an infeasibility mark binds to exactly one order, never globally."""
+    """Stable per-order/context key (normalized Order #, else VIN). It keys the 'Not available configuration'
+    store so each mark keeps its provenance — which order first hit the OEM rejection — but that provenance no
+    longer scopes applicability: a Production Restriction excludes the configuration for the whole active CTP
+    session for that model (see `evaluate`), not just the order that happened to be edited."""
     return _norm_order(order_number) or (vin or "").strip().upper()
 
 
@@ -476,7 +478,7 @@ def human_build(candidate):
     return line, colors, codes
 
 
-def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None):
+def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, session_rules=None):
     """Turn reconciled candidates into business Recommendations via the state machine:
         PARSED → RECONCILED → EVALUABLE → KEEP | CHANGE   (any earlier gap → CANT_EVALUATE)
 
@@ -488,21 +490,34 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None):
     preference. KEEP only after a completed evaluation found no superior target.
 
     `infeasible` is the operator's 'Not available configuration' feedback, keyed by order_key(order#, VIN) →
-    list of records {target, target_canonical, reason, note, at}. A marked target is excluded from the feasible
-    candidate set FOR THAT ORDER ONLY (never a global blacklist); the evaluator then returns the next-best
-    certified-short target, or KEEP (best available outcome) once every superior alternative is exhausted. The
-    board itself is never mutated by a mark — the change was never executed — so the sequence simply re-runs.
+    list of records {target, target_canonical, reason, note, at}. Applicability is SESSION-scoped, not
+    order-scoped: the union of every marked configuration (by governed canonical build identity — the board
+    combination_id and its canonical) is excluded from the feasible candidate set of EVERY remaining unconfirmed
+    order of that model, so a configuration the OEM rejected on one order is never re-recommended on the next.
+    The evaluator then returns the next-best certified-short target, or KEEP (best available outcome) once every
+    superior alternative is session-excluded. Each mark keeps its order provenance for the history trail, but
+    that provenance does not narrow where the exclusion applies. The board itself is never mutated by a mark —
+    the change was never executed — so the sequence simply re-runs.
 
     `confirmed` is the operator's executed-change lock, keyed by order_key → {target, at, actor}. A confirmed
     order is a FIXED execution constraint for the rest of the session: it is applied to the working board FIRST
     (source excess −1, target short −1), it is never re-optimized or reassigned, a later OEM rejection cannot
     undo it, and every other order evaluates against that post-confirmation state. The certified board rows are
-    never mutated — only this in-memory working copy is."""
+    never mutated — only this in-memory working copy is.
+
+    `session_rules` is a SEPARATE, broader OEM production rule Elite LEARNED this session (distinct from the exact
+    configuration exclusions in `infeasible`). The one modelled here is {"same_trim_only": {"active": True, ...}}:
+    when active, a CHANGE target must carry the SAME governed trim as the order's current build — the evaluator
+    still optimizes freely within that trim (model code / exterior / interior), only cross-trim targets are
+    removed. It is session/model-scoped, cleared by reset / clear-session, and never permanent product logic."""
     infeasible = infeasible or {}
     confirmed = confirmed or {}
+    session_rules = session_rules or {}
+    same_trim_only = bool((session_rules.get("same_trim_only") or {}).get("active"))
     state = {cid: {"excess": int(b.get("excess", 0) or 0), "short": int(b.get("short", 0) or 0),
                    "canonical": b.get("canonical", cid), "line": b.get("line", ""), "colors": b.get("colors", ""),
-                   "model": (b.get("model") or _model_of(b.get("line", ""))).upper()}
+                   "model": (b.get("model") or _model_of(b.get("line", ""))).upper(),
+                   "trim": _split_model(b.get("line", ""))[2].upper()}   # governed trim for the same-trim rule
              for cid, b in (board or {}).items()}
 
     def short_targets(model):
@@ -530,6 +545,27 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None):
         if tgt:
             tgt["short"] -= 1                        # confirmed target stays increased (its shortage consumed)
         locked[okey] = {"target": tcid, "source_cid": scid}
+
+    # SESSION-level Production-Restriction exclusions. An OEM 'Not available configuration' mark is a
+    # session/model/configuration exclusion, NOT an order-specific one: once a configuration is marked
+    # unavailable on ANY order, it is unavailable for the whole active CTP session for that model. Build the
+    # union of every mark across all orders, keyed by the governed canonical build identity (the board
+    # combination_id AND its canonical form — the same normalization CTP planning uses). This set is applied to
+    # every remaining unconfirmed order's candidate pool below. Per-order provenance (which order first caused
+    # the OEM rejection) is preserved separately for the history trail; it does not scope applicability.
+    session_banned = set()                          # match keys: combination_id and canonical build identity
+    _banned_cfg = set()                             # distinct configurations, for honest counts
+    for _marks in infeasible.values():
+        for _m in (_marks or []):
+            t, tc = _m.get("target"), _m.get("target_canonical")
+            if t:
+                session_banned.add(t)
+            if tc:
+                session_banned.add(tc)
+            key = t or tc
+            if key:
+                _banned_cfg.add(key)
+    session_ban_count = len(_banned_cfg)
 
     recs = []
     for rc in reconciled:
@@ -589,23 +625,49 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None):
                                "target_combination": tgt.get("canonical", lk["target"])}, **base))
             continue
 
-        # 'Not available' feedback for THIS order excludes those exact targets from its feasible set (per-order,
-        # never global). The board is unchanged; we simply skip banned targets when choosing the next-best.
+        # 'Not available' feedback is a SESSION-level exclusion: a configuration marked unavailable on ANY order
+        # is removed from the candidate pool of EVERY remaining unconfirmed order of this model (matched by the
+        # governed canonical build identity — combination_id and its canonical). The board is unchanged; we
+        # simply skip session-banned targets when choosing the next-best. `rejected` retains only THIS order's
+        # own marks, so the per-order history trail still shows which order first caused each OEM rejection.
         rejected = list(infeasible.get(okey, []) or [])
-        banned = {r.get("target") for r in rejected if r.get("target")}
         model = pos["model"] or (c.model or "").upper()
-        eligible = [(cid, st) for cid, st in short_targets(model) if cid not in banned] if pos["excess"] > 0 else []
+        source_trim = pos.get("trim", "")
+        all_targets = short_targets(model) if pos["excess"] > 0 else []
+
+        # Two INDEPENDENT session restrictions, applied together:
+        #   (1) exact-configuration exclusion — the governed build was OEM-rejected (session_banned);
+        #   (2) same-trim-only — a broader LEARNED production rule: a CHANGE target must carry the same governed
+        #       trim as the order's current build (cross-trim swaps are not permitted this CTP). Within-trim
+        #       optimization (model code / exterior / interior) is untouched.
+        def _eligible_target(tcid, st):
+            if tcid in session_banned or st.get("canonical") in session_banned:
+                return False                                  # (1) exact configuration rejected
+            if same_trim_only and source_trim and st.get("trim", "") != source_trim:
+                return False                                  # (2) cross-trim target removed by the learned rule
+            return True
+        eligible = [(tcid, st) for tcid, st in all_targets if _eligible_target(tcid, st)]
+        cross_trim_blocked = bool(same_trim_only and source_trim and all_targets and not eligible
+                                  and any(st.get("trim", "") != source_trim for _t, st in all_targets))
         if pos["excess"] <= 0 or not eligible:
-            exhausted = bool(pos["excess"] > 0 and banned)   # had superior targets, but all marked unavailable
-            reason = ("Keep it. By arrival this build is still at or below its needed supply, and no eligible "
-                      "alternative improves the future position." if pos["excess"] <= 0 else
-                      "Keep it — best available outcome. Every superior configuration for this slot was marked "
-                      "not available by the OEM." if exhausted else
-                      "Keep it. Elite found no better proven use of this production slot.")
+            exhausted = bool(all_targets and not eligible)   # had superior targets, but all restricted away
+            if pos["excess"] <= 0:
+                reason = ("Keep it. By arrival this build is still at or below its needed supply, and no eligible "
+                          "alternative improves the future position.")
+            elif cross_trim_blocked:
+                reason = (f"Keep it — best available outcome. This CTP session is same-trim only (a learned OEM "
+                          f"rule), so only another {source_trim} configuration could be substituted, and none is "
+                          f"available or superior.")
+            elif exhausted:
+                reason = ("Keep it — best available outcome. Every superior configuration for this slot was marked "
+                          "not available by the OEM.")
+            else:
+                reason = "Keep it. Elite found no better proven use of this production slot."
             recs.append(Recommendation(decision_state=KEEP, reason_plain=reason,
                         operator_action_plain=f"Leave {c.order_number or c.vin} exactly as it is.",
                         proof={"current_combination": pos["canonical"], "current_excess": pos["excess"],
-                               "eligible_targets": len(eligible), "targets_marked_unavailable": len(banned),
+                               "eligible_targets": len(eligible), "targets_marked_unavailable": session_ban_count,
+                               "same_trim_only": same_trim_only, "source_trim": source_trim,
                                "best_available_after_exhaustion": exhausted},
                         rejected_targets=rejected, **base))
             continue
@@ -624,7 +686,8 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None):
                                            f"{tgt['line']} {tgt['colors']}".strip()),
                     proof={"source_combination": pos["canonical"], "target_combination": tgt["canonical"],
                            "before": before, "after": {"source_excess": pos["excess"], "target_short": tgt["short"]},
-                           "targets_marked_unavailable": len(banned)},
+                           "targets_marked_unavailable": session_ban_count,
+                           "same_trim_only": same_trim_only, "source_trim": source_trim},
                     rejected_targets=rejected, **base))
     return recs
 

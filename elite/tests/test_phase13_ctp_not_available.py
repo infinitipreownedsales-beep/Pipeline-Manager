@@ -1,13 +1,18 @@
-"""CTP 'Not available configuration' operator feedback loop (live unblock 2026-08-26).
+"""CTP 'Not available configuration' operator feedback loop (session-scope correction 2026-08-27).
 
-When Infiniti accepts a CTP evaluation but rejects the desired specification (restricted item above max /
-production restriction / package unavailable / other), the operator marks that exact target NOT AVAILABLE for
-THAT order. Elite then: records the OEM rejection as provenance, excludes the target from that order's feasible
-set ONLY (never a global blacklist), re-runs the sequential CTP decision on the unchanged supply/demand board,
-and returns the next-best certified-short target — repeatable — stopping at a feasible superior configuration or
-KEEP (best available outcome) when every superior alternative is exhausted. The board is never mutated (nothing
-was executed). State: RECOMMENDED CHANGE -> OEM REJECTED/NOT AVAILABLE -> NEXT BEST, and RECOMMENDED -> CONFIRMED
-CHANGED. Mirrors the live TK65797 (QX65 SPORT AWD -> LUXE AWD) case.
+When Infiniti accepts a CTP evaluation but rejects the desired specification (production restriction / restricted
+item above max / package unavailable / other), the operator marks that configuration NOT AVAILABLE. That mark is
+a SESSION/MODEL/CONFIGURATION exclusion, not an order-specific one: the rejected configuration (by governed
+canonical build identity — the board combination_id and its canonical) is removed from the candidate pool of
+EVERY remaining unconfirmed order of that model in the active CTP session, so the operator never has to repeat
+the same OEM rejection cycle on the next order. Elite records the OEM rejection as provenance (which order first
+hit it — kept for the history trail, but it does not narrow applicability), re-runs the sequential CTP decision
+on the unchanged supply/demand board, and returns the next genuinely eligible certified-short target — repeatable
+— stopping at a feasible superior configuration or KEEP (best available outcome) once every superior alternative
+is session-excluded. Confirmed-change locks and their working-board supply effects are preserved. The board is
+never mutated (nothing was executed). 'Reset unavailable marks' clears the session exclusions and recomputes;
+Clear session clears them; they never persist across future CTP production cycles. State: RECOMMENDED CHANGE ->
+OEM REJECTED/NOT AVAILABLE -> NEXT BEST, and RECOMMENDED -> CONFIRMED CHANGED.
 """
 import os
 import tempfile
@@ -66,15 +71,21 @@ class TestNotAvailableEngine(unittest.TestCase):
         self.assertIn("best available outcome", r2.reason_plain)
         self.assertEqual(len(r2.rejected_targets), 2)
 
-    def test_mark_is_per_order_not_global(self):
-        # two orders on the same over-supplied source; only order A rejects QBE/G. Order B must still get QBE/G.
+    def test_mark_is_session_wide_not_per_order(self):
+        # CORRECTED SCOPE: two orders on the same over-supplied source; order A rejects QBE/G. That production
+        # restriction now excludes QBE/G for the WHOLE session, so order B must NOT be re-offered QBE/G — it
+        # continues straight to the next eligible target (DAT/K). This is the fix for the live QX60 TK76339/40
+        # loop. (DAT/K short=2 here so both orders can take it, isolating the scope change from supply exhaustion.)
         board = self._board()
+        board["t_dat"]["short"] = 2
         a, b = self._order("TKAAA"), self._order("TKBBB")
-        infeasible = {CTP.order_key("TKAAA", ""): [{"target": "t_qbe", "reason": "above_maximum"}]}
+        infeasible = {CTP.order_key("TKAAA", ""): [{"target": "t_qbe", "target_canonical": "85017 LUXE AWD QBE/G",
+                                                    "reason": "production_restriction"}]}
         recs = CTP.evaluate([a, b], board, infeasible=infeasible)
         by_order = {r.order_number: r for r in recs}
-        self.assertEqual(by_order["TKAAA"].proposed_combination_id, "t_dat")   # A skipped QBE/G
-        self.assertEqual(by_order["TKBBB"].proposed_combination_id, "t_qbe")   # B not blacklisted
+        self.assertEqual(by_order["TKAAA"].proposed_combination_id, "t_dat")     # A skipped QBE/G
+        self.assertNotEqual(by_order["TKBBB"].proposed_combination_id, "t_qbe")  # B is NOT re-offered QBE/G
+        self.assertEqual(by_order["TKBBB"].proposed_combination_id, "t_dat")     # B continues to next eligible
 
     def test_board_not_mutated_by_marks(self):
         # a mark alone (order that does NOT reconcile to an excess source) must not consume board excess/short
@@ -84,6 +95,146 @@ class TestNotAvailableEngine(unittest.TestCase):
         CTP.evaluate([self._order()], board, infeasible=infeasible)
         after = {k: (v["excess"], v["short"]) for k, v in board.items()}
         self.assertEqual(before, after)                          # evaluate copies the board; source unchanged
+
+
+# ---- A2. SESSION-scope regression: a Production Restriction excludes the config for the whole session --------
+class TestSessionWideExclusionRegression(unittest.TestCase):
+    """The live QX60 loop: TK76339 cycled through OEM-rejected configs and was KEEP'd; TK76340 must not be
+    re-offered those same rejected configs. Proves the exclusion is session/model/configuration scoped."""
+
+    def _board(self):
+        # one over-supplied QX60 source and two certified-short QX60 targets: A (top short, the one rejected) and
+        # C (the next genuinely eligible configuration). Ample excess/short so scope is isolated from exhaustion.
+        return {
+            "src": {"canonical": "84117 SPORT FWD SRC/G", "line": "QX60 SPORT FWD", "colors": "",
+                    "model": "QX60", "excess": 4, "short": 0},
+            "A":   {"canonical": "84617 LUXE FWD AAA/K", "line": "QX60 LUXE FWD", "colors": "",
+                    "model": "QX60", "excess": 0, "short": 20},  # stays the top short target through all orders
+            "C":   {"canonical": "84517 PURE FWD CCC/G", "line": "QX60 PURE FWD", "colors": "",
+                    "model": "QX60", "excess": 0, "short": 10},  # enough supply to absorb every order once A is banned
+        }
+
+    def _orders(self, *nums):
+        out = []
+        for n in nums:
+            c = CTP.Candidate(order_number=n, model="QX60", arrival_month="2026-11")
+            out.append(CTP.Reconciled(c, CTP.MATCHED,
+                       {"combination_id": "src", "model": "QX60", "arrival_month": "2026-11"}, "matched", "order#"))
+        return out
+
+    def test_reject_on_order1_excludes_config_for_orders_2_to_N(self):
+        orders = self._orders("TK76339", "TK76340", "TK76341", "TK76342")
+        # baseline: with no marks every order is recommended the top short target A
+        base = CTP.evaluate(orders, self._board())
+        self.assertTrue(all(r.proposed_combination_id == "A" for r in base))
+        # reject configuration A on order 1 (production restriction) — session-wide exclusion
+        infeasible = {CTP.order_key("TK76339", ""): [{"target": "A", "target_canonical": "84617 LUXE FWD AAA/K",
+                                                      "reason": "production_restriction", "at": "2026-08-27T00:00"}]}
+        recs = CTP.evaluate(orders, self._board(), infeasible=infeasible)
+        self.assertTrue(all(r.proposed_combination_id != "A" for r in recs))     # A never recommended again
+        # every order continues to the next genuinely eligible configuration (C), not KEEP and not A
+        self.assertTrue(all(r.decision_state == CTP.CHANGE and r.proposed_combination_id == "C" for r in recs))
+        # provenance: only order 1 carries the rejection record; it does not scope applicability
+        by = {r.order_number: r for r in recs}
+        self.assertEqual(len(by["TK76339"].rejected_targets), 1)
+        self.assertEqual(by["TK76340"].rejected_targets, [])
+
+    def test_all_superior_configs_session_excluded_then_keep(self):
+        orders = self._orders("TK76339", "TK76340")
+        okey = CTP.order_key("TK76339", "")
+        infeasible = {okey: [{"target": "A", "reason": "production_restriction"},
+                             {"target": "C", "reason": "production_restriction"}]}
+        recs = CTP.evaluate(orders, self._board(), infeasible=infeasible)
+        self.assertTrue(all(r.decision_state == CTP.KEEP for r in recs))
+        self.assertTrue(all(r.proof.get("best_available_after_exhaustion") for r in recs))
+
+    def test_confirmed_change_stays_locked_through_session_exclusion(self):
+        # order 1 confirmed onto A; order 2 then rejects A (session ban). The lock and its board effect survive.
+        orders = self._orders("TK76339", "TK76340")
+        confirmed = {CTP.order_key("TK76339", ""): {"target": "A"}}
+        infeasible = {CTP.order_key("TK76340", ""): [{"target": "A", "reason": "production_restriction"}]}
+        recs = CTP.evaluate(orders, self._board(), confirmed=confirmed, infeasible=infeasible)
+        by = {r.order_number: r for r in recs}
+        self.assertTrue(by["TK76339"].confirmed)
+        self.assertEqual(by["TK76339"].proposed_combination_id, "A")            # lock survives A's session ban
+        self.assertNotEqual(by["TK76340"].proposed_combination_id, "A")         # order 2 still excluded from A
+        self.assertEqual(by["TK76340"].proposed_combination_id, "C")            # evaluated against post-lock state
+
+    def test_reset_restores_eligibility_and_new_session_is_clean(self):
+        orders = self._orders("TK76339", "TK76340")
+        okey = CTP.order_key("TK76339", "")
+        infeasible = {okey: [{"target": "A", "reason": "production_restriction"}]}
+        banned = CTP.evaluate(orders, self._board(), infeasible=infeasible)
+        self.assertTrue(all(r.proposed_combination_id != "A" for r in banned))
+        # 'Reset unavailable marks' clears the session exclusions -> A eligible again for every order
+        infeasible.pop(okey)
+        after_reset = CTP.evaluate(orders, self._board(), infeasible=infeasible)
+        self.assertTrue(all(r.proposed_combination_id == "A" for r in after_reset))
+        # a brand-new CTP session carries no marks -> clean from the start
+        fresh = CTP.evaluate(orders, self._board(), infeasible={})
+        self.assertTrue(all(r.proposed_combination_id == "A" for r in fresh))
+
+
+# ---- A3. SESSION-LEARNED production rule: same-trim-only (a SEPARATE, broader restriction) ------------------
+class TestSameTrimSessionRule(unittest.TestCase):
+    """A trim-swap OEM rejection teaches a broader session rule (same_trim_only): CHANGE targets must share the
+    order's governed trim. Within-trim optimization is untouched; only cross-trim targets are removed. This is
+    distinct from — and composes with — the exact-configuration exclusion."""
+
+    def _board(self):
+        # source order is a QX60 LUXE FWD. Targets: two LUXE (same-trim) and one SPORT (cross-trim, top short).
+        return {
+            "src":    {"canonical": "84617 LUXE FWD SRC/K", "line": "QX60 LUXE FWD", "colors": "",
+                       "model": "QX60", "excess": 3, "short": 0},
+            "luxe_a": {"canonical": "84017 LUXE FWD AAA/K", "line": "QX60 LUXE FWD", "colors": "",
+                       "model": "QX60", "excess": 0, "short": 2},
+            "luxe_b": {"canonical": "84117 LUXE AWD BBB/G", "line": "QX60 LUXE AWD", "colors": "",
+                       "model": "QX60", "excess": 0, "short": 1},
+            "sport":  {"canonical": "84517 SPORT FWD SSS/G", "line": "QX60 SPORT FWD", "colors": "",
+                       "model": "QX60", "excess": 0, "short": 5},
+        }
+
+    def _order(self, num="TK80001"):
+        c = CTP.Candidate(order_number=num, model="QX60", arrival_month="2026-11")
+        return CTP.Reconciled(c, CTP.MATCHED, {"combination_id": "src", "model": "QX60", "arrival_month": "2026-11"},
+                              "matched by order #", "order#")
+
+    _RULE = {"same_trim_only": {"active": True, "taught_by": "TK80001", "reason": "trim_swap_unavailable"}}
+
+    def test_default_allows_cross_trim_top_short(self):
+        r = CTP.evaluate([self._order()], self._board())[0]
+        self.assertEqual(r.proposed_combination_id, "sport")     # top short, cross-trim allowed when no rule
+
+    def test_same_trim_only_removes_cross_trim_and_optimizes_within_trim(self):
+        r = CTP.evaluate([self._order()], self._board(), session_rules=self._RULE)[0]
+        self.assertEqual(r.decision_state, CTP.CHANGE)
+        self.assertEqual(r.proposed_combination_id, "luxe_a")    # SPORT removed; best same-trim LUXE chosen
+        self.assertTrue(r.proof.get("same_trim_only"))
+        self.assertEqual(r.proof.get("source_trim"), "LUXE")
+
+    def test_same_trim_only_keeps_when_only_cross_trim_short(self):
+        board = {"src": self._board()["src"], "sport": self._board()["sport"]}   # only a cross-trim target short
+        r = CTP.evaluate([self._order()], board, session_rules=self._RULE)[0]
+        self.assertEqual(r.decision_state, CTP.KEEP)
+        self.assertIn("same-trim only", r.reason_plain)
+        self.assertTrue(r.proof.get("same_trim_only"))
+
+    def test_two_levels_compose(self):
+        # exact-config exclusion of luxe_a AND same-trim-only together: SPORT removed by the rule, luxe_a removed
+        # by the exact exclusion -> the remaining same-trim luxe_b is chosen.
+        okey = CTP.order_key("TK80001", "")
+        infeasible = {okey: [{"target": "luxe_a", "target_canonical": "84017 LUXE FWD AAA/K",
+                              "reason": "production_restriction"}]}
+        r = CTP.evaluate([self._order()], self._board(), infeasible=infeasible, session_rules=self._RULE)[0]
+        self.assertEqual(r.proposed_combination_id, "luxe_b")
+        self.assertTrue(r.proof.get("same_trim_only"))
+
+    def test_confirmed_cross_trim_change_survives_same_trim_rule(self):
+        # an already-confirmed cross-trim change stays locked even after the same-trim rule is learned
+        confirmed = {CTP.order_key("TK80001", ""): {"target": "sport"}}
+        r = CTP.evaluate([self._order()], self._board(), confirmed=confirmed, session_rules=self._RULE)[0]
+        self.assertTrue(r.confirmed)
+        self.assertEqual(r.proposed_combination_id, "sport")     # lock unaffected by the learned rule
 
 
 # ---- C. CONFIRMED CHANGED is a fixed execution constraint (engine-level) ----------------------------------
@@ -244,6 +395,43 @@ class TestNotAvailableRoutes(unittest.TestCase):
             self.full.post("/ctp/confirm-change", {"order": self.okey, "target": self.qbe.id})
             b4 = self.full.get("/ctp").body
             self.assertIn("CONFIRMED CHANGED", b4)
+
+    def _rules(self):
+        return self.p.app.prefs.get_pref(f"scope::{SCOPE}", "ctp_session_rules", default={})
+
+    def test_trim_swap_reason_sets_session_rule_banner_and_clears(self):
+        # A 'Trim swap not available' rejection is the SEPARATE broader rule (same_trim_only), not an exact-config
+        # exclusion: it must set a visible learned-rule banner, leave the exact-config store untouched, and be
+        # independently clearable — restoring the prior recommendation.
+        with patch("elite.newinv.board_recompute.board_status", return_value={"state": "current"}):
+            b0 = self.full.get("/ctp").body
+            self.assertIn("RECOMMENDED CHANGE", b0)
+            self.assertIn("Trim swap not available", b0)         # the new reason option is offered
+            self.full.post("/ctp/not-available", {"order": self.okey, "target": self.qbe.id,
+                                                  "target_canonical": "QX65 LUXE AWD QBE/G",
+                                                  "reason": "trim_swap_unavailable", "note": "OEM: no cross-trim"})
+            self.assertTrue(self._rules().get("same_trim_only", {}).get("active"))   # rule learned + provenance
+            self.assertEqual(self._rules()["same_trim_only"]["taught_by"], self.okey)
+            self.assertEqual(self._infeasible(), {})             # separation: exact-config store untouched
+            b1 = self.full.get("/ctp").body
+            self.assertIn("LEARNED OEM RULE", b1)                # visible active constraint
+            self.assertIn("Same-trim changes only", b1)
+            # clear the learned rule -> gone, and CTP recomputes
+            self.full.post("/ctp/session-rule-clear", {"rule": "same_trim_only"})
+            self.assertEqual(self._rules().get("same_trim_only"), None)
+            b2 = self.full.get("/ctp").body
+            self.assertNotIn("LEARNED OEM RULE", b2)
+
+    def test_clear_session_wipes_learned_rules_and_exclusions(self):
+        with patch("elite.newinv.board_recompute.board_status", return_value={"state": "current"}):
+            self.full.get("/ctp")
+            self.full.post("/ctp/not-available", {"order": self.okey, "target": self.qbe.id,
+                                                  "target_canonical": "QX65 LUXE AWD QBE/G",
+                                                  "reason": "trim_swap_unavailable", "note": ""})
+            self.assertTrue(self._rules().get("same_trim_only", {}).get("active"))
+            self.full.post("/ctp/clear")
+            self.assertEqual(self._rules(), {})                  # new CTP session starts clean
+            self.assertEqual(self._infeasible(), {})
 
 
 # ---- D. CONFIRMED CHANGED through the operator routes (persistence + board untouched + correction) --------

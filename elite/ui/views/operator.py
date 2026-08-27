@@ -1494,7 +1494,9 @@ def register(app):
                     evaluation_timestamp=now, candidate=rc.candidate))
         else:
             infeasible = _ws_get(app, s.scope, "ctp_infeasible", {}) or {}
-            recs = CTP.evaluate(reconciled, board, now=now, infeasible=infeasible, confirmed=confirmed)
+            session_rules = _ws_get(app, s.scope, "ctp_session_rules", {}) or {}
+            recs = CTP.evaluate(reconciled, board, now=now, infeasible=infeasible, confirmed=confirmed,
+                                session_rules=session_rules)
         summ = CTP.summarize(recs)
         pipe_age = _ctp_pipeline_age(app, s.scope)
 
@@ -1523,7 +1525,31 @@ def register(app):
             msg = f'<p class="muted">All {summ["keep"]} orders should stay as they are.</p>'
         summary_card = f'<div class="card"><h2>{summ["orders"]} {esc(model_label)} orders available</h2>{b_cards}{msg}</div>'
 
+        # SECTION B2 — active LEARNED OEM production rules for this session (distinct from exact-config exclusions)
+        session_rules = _ws_get(app, s.scope, "ctp_session_rules", {}) or {}
+        rule_cards = ""
+        _st = session_rules.get("same_trim_only") or {}
+        if _st.get("active"):
+            taught = _st.get("taught_by", "")
+            note = f' — “{esc(_st.get("note"))}”' if _st.get("note") else ""
+            when = esc((_st.get("at") or "")[:16].replace("T", " "))
+            clear = ('<form method="post" action="/ctp/session-rule-clear" style="display:inline;margin-left:8px">'
+                     f'<input type=hidden name=_csrf value="{esc(s.csrf_token)}">'
+                     '<input type=hidden name=rule value="same_trim_only">'
+                     '<button type=submit class=secondary style="padding:2px 8px;font-size:12px">'
+                     'Clear this OEM rule</button></form>')
+            rule_cards = (
+                '<div class="card" style="border-left:4px solid var(--attn,#c60)">'
+                f'<h2>{safe(badge("need", "LEARNED OEM RULE"))} Same-trim changes only</h2>'
+                '<p class="muted">Elite learned this session that the OEM is not allowing cross-trim CTP changes. '
+                'Every remaining order may still be optimized within its own trim (model code / colour / interior); '
+                'only cross-trim targets are removed.</p>'
+                f'<p class="muted" style="font-size:12px">Taught by {esc(taught) or "an OEM rejection"}'
+                f'{note}{(" · " + when) if when else ""}.{safe(clear)}</p></div>')
+
         parts = [head, upload_card, summary_card]
+        if rule_cards:
+            parts.append(rule_cards)
 
         def _build_html(line, colors, codes=""):
             return (f'<div><strong>{esc(line or "—")}</strong></div>'
@@ -1538,6 +1564,7 @@ def register(app):
             return disclosure("Show proof", kv(rows_))
 
         _REASON_OPTS = [("production_restriction", "Production restriction"),
+                        ("trim_swap_unavailable", "Trim swap not available"),
                         ("package_component_unavailable", "Package / component unavailable"),
                         ("above_maximum", "Above maximum"),
                         ("other_oem_rejection", "Other OEM rejection")]
@@ -1567,7 +1594,8 @@ def register(app):
                     f'<div style="margin-top:4px">{reset}</div>')
 
         def _not_available_form(r):
-            """Operator feedback: mark THIS order's proposed target infeasible for THIS OEM order/context."""
+            """Operator feedback: mark this proposed configuration OEM-infeasible for the whole model's active
+            CTP session (recorded under this order for provenance)."""
             opts = "".join(f'<option value="{esc(v)}">{esc(t)}</option>' for v, t in _REASON_OPTS)
             okey = CTP.order_key(r.order_number, r.vin)
             return ('<form method="post" action="/ctp/not-available" class="mut" '
@@ -1713,15 +1741,19 @@ def register(app):
         _ws_put(app, s.scope, "ctp_session", {})
         _ws_put(app, s.scope, "ctp_infeasible", {})
         _ws_put(app, s.scope, "ctp_confirmed", {})
+        _ws_put(app, s.scope, "ctp_session_rules", {})
         s.flash = "CTP session cleared."
         return Response.redirect("/ctp")
 
     @app.post("/ctp/not-available")
     def ctp_not_available(app, req):
-        """Operator feedback loop: the OEM rejected the proposed target for THIS order/context (above-max /
-        production restriction / package unavailable / other). Record it as provenance, exclude that target
-        from THIS order's feasible set only (never a global blacklist), and re-run CTP so the next-best
-        certified-short target — or KEEP — surfaces. The board is untouched; no change was executed."""
+        """Operator feedback loop for an OEM rejection. TWO independent kinds are learned this session:
+          * 'Trim swap not available' teaches a broader LEARNED production rule (same_trim_only = true) — a
+            session/model constraint that removes only cross-trim targets from every remaining order (within-trim
+            optimization is untouched). Provenance records which rejection taught it.
+          * any other reason records an EXACT-configuration exclusion (governed model + model code + exterior +
+            interior) that is removed from every remaining order of that model this session.
+        Kept separate; either way the board is untouched (nothing executed) and CTP re-runs for all orders."""
         s = req.session
         app.require(s, "workspace.view")
         from ...clock import to_utc_iso
@@ -1733,6 +1765,20 @@ def register(app):
         reason = (req.form.get("reason") or "other_oem_rejection").strip()
         note = (req.form.get("note") or "").strip()
         target_canonical = (req.form.get("target_canonical") or "").strip()
+
+        # (2) SESSION-LEARNED RULE: a trim-swap rejection teaches same-trim-only for this session/model.
+        if reason == "trim_swap_unavailable":
+            rules = _ws_get(app, s.scope, "ctp_session_rules", {}) or {}
+            rules["same_trim_only"] = {"active": True, "taught_by": okey, "reason": reason, "note": note,
+                                       "target_canonical": target_canonical,
+                                       "at": to_utc_iso(app.stack.clock.now()),
+                                       "actor": getattr(s, "principal_id", "") or ""}
+            _ws_put(app, s.scope, "ctp_session_rules", rules)
+            s.flash = ("Learned OEM rule for this session: same-trim changes only (cross-trim swaps removed). "
+                       f"Taught by {okey}. Re-evaluating all remaining orders.")
+            return Response.redirect("/ctp")
+
+        # (1) EXACT-CONFIGURATION EXCLUSION: this governed build is unavailable for the whole session/model.
         infeasible = _ws_get(app, s.scope, "ctp_infeasible", {}) or {}
         marks = list(infeasible.get(okey, []) or [])
         if any(m.get("target") == target for m in marks):
@@ -1743,20 +1789,44 @@ def register(app):
                       "actor": getattr(s, "principal_id", "") or ""})
         infeasible[okey] = marks
         _ws_put(app, s.scope, "ctp_infeasible", infeasible)
-        s.flash = f"Recorded — {target_canonical or target} marked not available for {okey}. Re-evaluating."
+        s.flash = (f"Recorded — {target_canonical or target} marked not available for this model's CTP session "
+                   f"(first rejected on {okey}). Re-evaluating all remaining orders.")
         return Response.redirect("/ctp")
 
     @app.post("/ctp/available-reset")
     def ctp_available_reset(app, req):
-        """Clear the 'not available' marks for one order (operator correction), restoring its full target set."""
+        """Operator correction: clear the session-level 'not available' exclusions recorded under this order (and
+        any session rule this order taught), then recompute. Those configurations become eligible again for every
+        order (unless another order independently marked the same configuration)."""
         s = req.session
         app.require(s, "workspace.view")
         okey = (req.form.get("order") or "").strip()
         infeasible = _ws_get(app, s.scope, "ctp_infeasible", {}) or {}
+        changed = False
         if okey in infeasible:
             infeasible.pop(okey, None)
             _ws_put(app, s.scope, "ctp_infeasible", infeasible)
-            s.flash = f"Cleared not-available marks for {okey}."
+            changed = True
+        rules = _ws_get(app, s.scope, "ctp_session_rules", {}) or {}
+        if any((v or {}).get("taught_by") == okey for v in rules.values()):
+            rules = {k: v for k, v in rules.items() if (v or {}).get("taught_by") != okey}
+            _ws_put(app, s.scope, "ctp_session_rules", rules)
+            changed = True
+        if changed:
+            s.flash = "Cleared those session exclusions/rules. Re-evaluating all remaining orders."
+        return Response.redirect("/ctp")
+
+    @app.post("/ctp/session-rule-clear")
+    def ctp_session_rule_clear(app, req):
+        """Clear one active learned OEM production rule (e.g. same_trim_only) for this session and recompute."""
+        s = req.session
+        app.require(s, "workspace.view")
+        rule = (req.form.get("rule") or "").strip()
+        rules = _ws_get(app, s.scope, "ctp_session_rules", {}) or {}
+        if rule in rules:
+            rules.pop(rule, None)
+            _ws_put(app, s.scope, "ctp_session_rules", rules)
+            s.flash = "Cleared the learned OEM rule for this session. Re-evaluating all remaining orders."
         return Response.redirect("/ctp")
 
     @app.post("/ctp/confirm-change")
