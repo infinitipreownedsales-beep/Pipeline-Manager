@@ -39,16 +39,35 @@ def _unit(my=""):
                      quality_flags=(), model_year=my)
 
 
+_MSRP_BY_MY = {2024: 58000, 2025: 60000, 2026: 62000}
+MODEL_CODE = "84616"
+
+
+def _inv(vin=VIN):
+    """Inventory/pipeline rows: authoritative per-unit MSRP + model code (joined to the loaner by Serial last-8),
+    plus per-(code, MY) MSRP anchors for the historical retention normalization."""
+    rows = [{"vin": None, "serial": vin[-8:], "stock_number": "S1", "model": "QX60",
+             "model_code": MODEL_CODE, "model_year": "2026", "msrp": "62000"}]
+    for my, ms in _MSRP_BY_MY.items():
+        rows.append({"vin": None, "serial": "ANCHOR", "stock_number": "ANCHOR", "model": "QX60",
+                     "model_code": MODEL_CODE, "model_year": str(my), "msrp": str(ms)})
+    return rows
+
+
 def _priced_rows(model="QX60", ages=range(3, 16), per=5):
-    """Real-shaped resale history spanning lifecycle age (months from model year), price declining with age."""
+    """Real-shaped resale history spanning lifecycle age (months from model year), retention (price / original
+    MSRP) declining with age. Each sale carries its governed model_number + year so its original MSRP is
+    recoverable for the retention normalization."""
     out = []
     for my in (2024, 2025, 2026):
+        msrp = _MSRP_BY_MY[my]
         for a in ages:
             t = my * 12 + a
             y, m = t // 12, t % 12 + 1
             for k in range(per):
-                out.append({"model": model, "year": str(my), "sold_date": f"{y:04d}-{m:02d}-15",
-                            "price": str(52000 - 400 * a + (k - 2) * 200), "days_to_sell": "40"})
+                out.append({"model": model, "model_number": MODEL_CODE, "year": str(my),
+                            "sold_date": f"{y:04d}-{m:02d}-15",
+                            "price": str(msrp - 400 * a + (k - 2) * 200), "days_to_sell": "40"})
     return out
 
 
@@ -152,7 +171,8 @@ class TestUnitDecisionResolvesWithUnknownMy(unittest.TestCase):
         # a RESOLVED MY (2026) + real resale history -> real decision, and price_future < price_now purely because
         # holding pushes the sale to a later date (older lifecycle age on the empirical curve), NOT integer age.
         rows = _priced_rows()
-        with patch("elite.loaner.sl_decision._retail_rows", return_value=rows):
+        with patch("elite.loaner.sl_decision._retail_rows", return_value=rows), \
+             patch("elite.loaner.sl_decision._inventory_rows", return_value=_inv()):
             d = build_unit_decision(self.app, SCOPE, _unit(my="2026"), None, today="2026-08-09",
                                     keep_horizon_days=200)
         self.assertIn(d["action"], ("KEEP", "PULL", "SWAP"))             # real decision

@@ -51,38 +51,138 @@ def _age_months_at(model_year, sale_date):
     return (d.year - my) * 12 + (d.month - 1)
 
 
-def _time_resale_price(rows, model, model_year, sale_date):
-    """Expected used SELLING PRICE at a SPECIFIC sale date from the store's OWN observed resales, on a continuous
-    AGE-IN-MONTHS-from-model-year axis POOLED across model years (a real depreciation-by-age curve). This makes a
-    30/60/90-day-later sale price differ from now even when both fall in the same integer model-year-age bucket.
+def _code_norm(v):
+    """Governed physical-unit model code, normalized (upper-cased, trimmed) or None. A DMS model code (e.g.
+    '84616') identifies the trim/model family of a physical unit — it is NOT decoded from VIN structure."""
+    s = str(v or "").strip().upper()
+    return s or None
 
-    Governance: real observations only (no invented monthly rate, no static all-MY median, no oldest-cohort
-    fallback); dealer Vehicle Cost is never mixed into this market curve; MSRP is not required. If the observed
-    history cannot support a defensible price within ±6 months of the target age, it GATES. Returns
-    (price, provenance, confidence)."""
-    target = _age_months_at(model_year, sale_date)
-    if target is None:
-        return None, "model-year / sale-date unresolved — cannot place on the age curve", "none"
+
+def _msrp_maps(inv):
+    """Authoritative-MSRP lookups over the physical-unit inventory/pipeline source: (model_code, model_year) ->
+    median MSRP, and model_code -> median MSRP (a broader same-code fallback). MSRP is authoritative per physical
+    unit and lives ONLY in the inventory/pipeline export (never in retail_history), so this is the single
+    authoritative-MSRP source both for normalizing each historical sale into a retention ratio and for the
+    current unit. Dealer Vehicle Cost / invoice is never read here — it belongs to the separate basis rail."""
+    from collections import defaultdict
+    by_code_my, by_code = defaultdict(list), defaultdict(list)
+    for r in inv or ():
+        code = _code_norm(r.get("model_code"))
+        msrp = _price_num(r.get("msrp"))
+        my = _my_int(r.get("model_year") or r.get("year") or r.get("my"))
+        if code is None or msrp is None or msrp <= 0:
+            continue
+        by_code[code].append(msrp)
+        if my is not None:
+            by_code_my[(code, my)].append(msrp)
+    return ({k: median(v) for k, v in by_code_my.items()},
+            {k: median(v) for k, v in by_code.items()})
+
+
+def _msrp_for(by_code_my, by_code, code, my):
+    """Authoritative original MSRP for a governed (model_code, model_year): the (code, MY)-specific median when
+    present, else the broader same-code median. Returns (msrp, basis) or (None, reason). Never manufactured and
+    never pooled across materially different model codes."""
+    if code is None:
+        return None, "model code unresolved"
+    if my is not None and (code, my) in by_code_my:
+        return by_code_my[(code, my)], f"inventory MSRP for model code {code} MY{my}"
+    if code in by_code:
+        return by_code[code], f"inventory MSRP for model code {code} (all model years)"
+    return None, f"no inventory MSRP for model code {code}"
+
+
+def _retention_observations(rows, by_code_my, by_code, model):
+    """Observed RETENTION points (age_in_months, retention, model_code) from the store's OWN historical retail
+    sales, where retention = observed used selling price / authoritative original MSRP. Each sale's original MSRP
+    is resolved from the physical-unit inventory source by that sale's own governed (model_code, model_year) —
+    NO raw dollar price is pooled, and retail_history is never mutated. Sales without a resolvable authoritative
+    MSRP are dropped honestly (never normalized by an invented number)."""
     model_u = (model or "").upper()
-    obs = []
+    out = []
     for r in rows or ():
         if (r.get("model") or "").upper() != model_u:
             continue
         price = _price_num(r.get("price"))
         am = _age_months_at(r.get("year"), r.get("sold_date"))
-        if price is None or price <= 0 or am is None:
+        code = _code_norm(r.get("model_number") or r.get("model_code"))
+        my = _my_int(r.get("year"))
+        if price is None or price <= 0 or am is None or code is None:
             continue
-        obs.append((am, price))
+        msrp, _b = _msrp_for(by_code_my, by_code, code, my)
+        if msrp is None or msrp <= 0:
+            continue
+        out.append((am, price / msrp, code))
+    return out
+
+
+def _retention_at(obs, target, want_code):
+    """Median observed RETENTION at ~target age (months), with the governed evidence hierarchy:
+      (1) same model_code as the current unit, in the tightest defensible age window;
+      (2) else broader same-model retention (all codes — already MSRP-normalized, so trims are comparable);
+      (3) else gate.
+    Returns (retention, window, n, tier, confidence)."""
+    tiers = []
+    if want_code is not None:
+        tiers.append(("same model code", [o for o in obs if o[2] == want_code]))
+    tiers.append(("same model (MSRP-normalized)", obs))
+    for tier, pool in tiers:
+        for w in (2, 3, 4, 6):
+            win = [ret for am, ret, _c in pool if target - w <= am <= target + w]
+            if len(win) >= RESALE_WINDOW_GATE:
+                conf = "moderate" if w <= 3 else "thin"
+                return median(win), w, len(win), tier, conf
+    return None, None, 0, None, "none"
+
+
+def _unit_inventory_facts(inv, vin):
+    """This physical unit's authoritative (MSRP, model_code) from the inventory/pipeline source, joined by the
+    SAME governed VIN/Serial/Stock linkage used to resolve model year (full VIN <-> Serial/Stock# via value and
+    last-8). The operator is never asked to type MSRP. Returns (msrp, model_code); either is None when the unit
+    cannot be matched or the matches disagree (honest — a disagreeing code degrades to the broader model tier)."""
+    from .preowned_evidence import _id_match_keys
+    keys = _id_match_keys(vin)
+    if not keys:
+        return None, None
+    msrps, codes = [], []
+    for r in inv or ():
+        if keys & _id_match_keys(r.get("vin"), r.get("serial"), r.get("stock_number")):
+            m = _price_num(r.get("msrp"))
+            if m is not None and m > 0:
+                msrps.append(m)
+            c = _code_norm(r.get("model_code"))
+            if c is not None:
+                codes.append(c)
+    msrp = median(msrps) if msrps else None
+    code = codes[0] if len(set(codes)) == 1 else None
+    return msrp, code
+
+
+def _retention_price(retail_rows, inv, model, model_year, sale_date, unit_msrp, unit_code):
+    """Expected used SELLING PRICE for a SPECIFIC physical unit at a specific sale date. Built from OBSERVED
+    RETENTION (used price / authoritative original MSRP) on the store's own resale history and applied to THIS
+    unit's own authoritative MSRP — so two same-model units on the same date with different authoritative MSRPs
+    get different expected prices. The shared, pooled quantity is the retention PERCENT, never a raw dollar
+    median. This is the market/value rail only; dealer Vehicle Cost / invoice (the basis rail) is never mixed
+    in. Gates when the unit MSRP is unresolved or the observed retention cannot support the age. Returns
+    (price, provenance, confidence)."""
+    target = _age_months_at(model_year, sale_date)
+    if target is None:
+        return None, "model-year / sale-date unresolved — cannot place on the retention curve", "none"
+    if unit_msrp is None or unit_msrp <= 0:
+        return None, "authoritative MSRP for this unit unresolved from inventory — cannot value", "none"
+    model_u = (model or "").upper()
+    by_code_my, by_code = _msrp_maps(inv)
+    obs = _retention_observations(retail_rows, by_code_my, by_code, model)
     if len(obs) < RESALE_WINDOW_GATE:
-        return None, f"no defensible {model_u} resale sample for a time-sensitive curve", "none"
-    for w in (2, 3, 4, 6):
-        win = [p for am, p in obs if target - w <= am <= target + w]
-        if len(win) >= RESALE_WINDOW_GATE:
-            conf = "moderate" if w <= 3 else "thin"
-            return (round(median(win), 2),
-                    f"{model_u} observed resale median at ~{target}mo model-year age (±{w}mo window, "
-                    f"n={len(win)} real sales)", conf)
-    return None, f"insufficient {model_u} resale history within ±6mo of ~{target}mo age — gated (not manufactured)", "none"
+        return None, f"no defensible {model_u} retention sample (needs authoritative MSRP per sale)", "none"
+    ret, w, n, tier, conf = _retention_at(obs, target, unit_code)
+    if ret is None:
+        return None, (f"insufficient {model_u} retention within ±6mo of ~{target}mo age — "
+                      "gated (not manufactured)"), "none"
+    return (round(unit_msrp * ret, 2),
+            f"{model_u} observed retention {ret:.1%} at ~{target}mo age (±{w}mo, n={n}, {tier}) × this unit's "
+            f"authoritative MSRP ${unit_msrp:,.0f}", conf)
 
 
 def _iso_today(clock):
@@ -190,8 +290,14 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
             return None
     sale_now = _exit_date(tenure_days_now or 0)
     sale_future = _exit_date((tenure_days_now or 0) + keep_horizon_days + (sell_days or 0))
-    price_now, pn_basis, pn_conf = _time_resale_price(retail_rows, model, my, sale_now)
-    price_future, pf_basis, pf_conf = _time_resale_price(retail_rows, model, my, sale_future)
+    # Market/value rail: resolve THIS unit's authoritative MSRP + model code from the already-loaded inventory /
+    # pipeline physical-unit source (same governed VIN/Serial/Stock linkage used for MY — never a manual entry),
+    # then price from OBSERVED RETENTION (used price / authoritative MSRP) applied to this unit's own MSRP.
+    inv = _inventory_rows(app, scope)
+    unit_msrp, unit_code = _unit_inventory_facts(inv, vin)
+    price_now, pn_basis, pn_conf = _retention_price(retail_rows, inv, model, my, sale_now, unit_msrp, unit_code)
+    price_future, pf_basis, pf_conf = _retention_price(retail_rows, inv, model, my, sale_future, unit_msrp,
+                                                       unit_code)
     if price_now is None:
         gated.append("expected used price now")
     if price_future is None:
@@ -220,6 +326,7 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
              "tenure_days": tenure_days_now, "mileage": (unit.mileage if unit.mileage_available else None),
              "invoice": invoice, "rate": rate, "rate_src": rate_src, "icv": icv, "velocity": velocity,
              "total_to_retail_days": total_to_retail, "sell_time": sell, "release": release,
+             "unit_msrp": unit_msrp, "unit_model_code": unit_code,
              "price_now": price_now, "price_now_basis": pn_basis, "price_future": price_future,
              "price_future_basis": pf_basis, "recon": recon}
     return {"action": action, "nets": res["nets"], "components": res["components"],
@@ -265,5 +372,15 @@ def _retail_rows(app, scope):
         from .preowned_evidence import latest_retail_rows
         rows, _as_of = latest_retail_rows(app.stack.db.conn, scope)
         return rows
+    except Exception:   # noqa: BLE001
+        return []
+
+
+def _inventory_rows(app, scope):
+    """Raw per-unit inventory/pipeline rows (the authoritative physical-unit MSRP + model-code source). Never
+    breaks the decision if inventory is unavailable — the market rail then gates honestly."""
+    try:
+        from .placement import read_new_retail_units
+        return read_new_retail_units(app, scope) or []
     except Exception:   # noqa: BLE001
         return []

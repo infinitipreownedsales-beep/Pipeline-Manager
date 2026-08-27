@@ -27,17 +27,35 @@ def _mi(price_age0=52000, price_age1=45000):
                       maturity=(MaturityBin("0", 12, price_age0, False), MaturityBin("1", 10, price_age1, False)))
 
 
+_MSRP_BY_MY = {2024: 58000, 2025: 60000, 2026: 62000}
+MODEL_CODE = "84616"
+
+
+def _inv(vin=VIN):
+    """Inventory/pipeline rows: authoritative per-unit MSRP + model code (joined to the loaner by Serial last-8),
+    plus per-(code, MY) MSRP anchors for the historical retention normalization."""
+    rows = [{"vin": None, "serial": vin[-8:], "stock_number": "S1", "model": "QX60",
+             "model_code": MODEL_CODE, "model_year": "2026", "msrp": "62000"}]
+    for my, ms in _MSRP_BY_MY.items():
+        rows.append({"vin": None, "serial": "ANCHOR", "stock_number": "ANCHOR", "model": "QX60",
+                     "model_code": MODEL_CODE, "model_year": str(my), "msrp": str(ms)})
+    return rows
+
+
 def _priced_rows(model="QX60", ages=range(3, 16), per=5):
-    """Real-shaped resale history spanning lifecycle age (months from model year), price declining ~$400/month —
-    the empirical curve the time-sensitive resale price is built from (build_unit_decision prices from this)."""
+    """Real-shaped resale history spanning lifecycle age (months from model year), retention (price / original
+    MSRP) declining with age — the empirical curve build_unit_decision's retention pricing is built from. Each
+    sale carries its governed model_number + year so its original MSRP is recoverable."""
     out = []
     for my in (2024, 2025, 2026):
+        msrp = _MSRP_BY_MY[my]
         for a in ages:
             t = my * 12 + a
             y, m = t // 12, t % 12 + 1
             for k in range(per):
-                out.append({"model": model, "year": str(my), "sold_date": f"{y:04d}-{m:02d}-15",
-                            "price": str(52000 - 400 * a + (k - 2) * 200), "days_to_sell": "40"})
+                out.append({"model": model, "model_number": MODEL_CODE, "year": str(my),
+                            "sold_date": f"{y:04d}-{m:02d}-15",
+                            "price": str(msrp - 400 * a + (k - 2) * 200), "days_to_sell": "40"})
     return out
 
 
@@ -59,7 +77,8 @@ class TestUnitDecision(unittest.TestCase):
         self.p.close()
 
     def test_full_inputs_produce_action_with_facts(self):
-        with patch("elite.loaner.sl_decision._retail_rows", return_value=_priced_rows()):
+        with patch("elite.loaner.sl_decision._retail_rows", return_value=_priced_rows()), \
+             patch("elite.loaner.sl_decision._inventory_rows", return_value=_inv()):
             d = build_unit_decision(self.app, SCOPE, _unit(), _mi(), today="2026-08-09", keep_horizon_days=60)
         self.assertIn(d["action"], ("KEEP", "PULL", "SWAP"))
         self.assertEqual(d["facts"]["invoice"], 60000)
@@ -85,7 +104,8 @@ class TestUnitDecision(unittest.TestCase):
 
     def test_future_price_reflects_maturity_depreciation(self):
         # a MY2026 unit whose future exit crosses into model-year age 1 -> lower expected price
-        with patch("elite.loaner.sl_decision._retail_rows", return_value=_priced_rows()):
+        with patch("elite.loaner.sl_decision._retail_rows", return_value=_priced_rows()), \
+             patch("elite.loaner.sl_decision._inventory_rows", return_value=_inv()):
             d = build_unit_decision(self.app, SCOPE, _unit(in_service="2026-06-01", age=60), _mi(52000, 40000),
                                     today="2026-08-01", keep_horizon_days=200)
         # held longer -> a LATER sale date -> older lifecycle age on the empirical curve -> lower expected price,
