@@ -2549,6 +2549,10 @@ def _ctp_board(app, scope, descriptions=None):
         colors = d.colours(with_code=False, drop_unmapped=True) if d else ""
         board[cid] = {"canonical": canonical, "line": line, "colors": colors,
                       "model": _model_of(_readable(canonical)),
+                      # AUTHORITATIVE governed trim from the model-code family / translation (clean 'AUTOGRAPH',
+                      # drivetrain kept separate). '' when unresolved — the same-trim rule then gates, never
+                      # guessing a trim from the free-text line ('QX60 AUTOGRAPH AWD SUV AUTO' -> not 'AUTO').
+                      "trim": (getattr(d, "trim", "") or "").strip() if d else "",
                       "excess": int(c["arrived_excess"]) + int(c["incoming_excess"]), "short": int(c["acquire_units"])}
     return board
 

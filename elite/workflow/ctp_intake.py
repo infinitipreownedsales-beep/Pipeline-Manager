@@ -458,6 +458,15 @@ def _model_of(label):
     return (label or "").split(" ", 1)[0]
 
 
+def _norm_trim(v):
+    """Normalized GOVERNED trim identity for the same-trim rule: upper-cased, whitespace-collapsed, or '' when
+    absent. Trim MUST be resolved by the caller from the governed model-code family / translation identity (the
+    Candidate's authoritative trim or the board target's governed trim) — it is NEVER positionally sliced out of
+    a free-text description, which would read 'AUTO' out of 'QX60 AUTOGRAPH AWD SUV AUTO' and drop every real
+    AUTOGRAPH alternative. '' means unresolved and the same-trim rule GATES rather than guessing."""
+    return " ".join(str(v or "").split()).upper()
+
+
 def order_key(order_number, vin):
     """Stable per-order/context key (normalized Order #, else VIN). It keys the 'Not available configuration'
     store so each mark keeps its provenance — which order first hit the OEM rejection — but that provenance no
@@ -517,8 +526,8 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
     state = {cid: {"excess": int(b.get("excess", 0) or 0), "short": int(b.get("short", 0) or 0),
                    "canonical": b.get("canonical", cid), "line": b.get("line", ""), "colors": b.get("colors", ""),
                    "model": (b.get("model") or _model_of(b.get("line", ""))).upper(),
-                   "trim": _split_model(b.get("line", ""))[2].upper()}   # governed trim for the same-trim rule
-             for cid, b in (board or {}).items()}
+                   "trim": _norm_trim(b.get("trim", ""))}    # AUTHORITATIVE governed trim supplied by the caller
+             for cid, b in (board or {}).items()}            # (model-code family / translation) — never line-sliced
 
     def short_targets(model):
         return sorted([(cid, st) for cid, st in state.items() if st["short"] > 0 and st["model"] == model],
@@ -632,7 +641,22 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
         # own marks, so the per-order history trail still shows which order first caused each OEM rejection.
         rejected = list(infeasible.get(okey, []) or [])
         model = pos["model"] or (c.model or "").upper()
-        source_trim = pos.get("trim", "")
+        # source trim comes from the AUTHORITATIVE governed identity: the source combination's governed board trim
+        # (resolved from the model-code family, the same way target trims are — so they compare apples-to-apples),
+        # falling back to the order's Candidate trim only if the board lacks it. Never a positional slice of the
+        # display line (which would read 'AUTO' out of 'QX60 AUTOGRAPH AWD SUV AUTO').
+        source_trim = pos.get("trim", "") or _norm_trim(getattr(c, "trim", ""))
+        # same-trim rule is active but the governed trim can't be established -> GATE, never guess a trim.
+        if same_trim_only and not source_trim:
+            recs.append(Recommendation(decision_state=CANT_EVALUATE,
+                        blocking_reason="governed trim unresolved for the same-trim rule",
+                        reason_plain="Can't evaluate — the same-trim-only OEM rule is active, but Elite can't "
+                                     "establish this order's governed trim from its model code. It won't guess a "
+                                     "trim from the description.",
+                        operator_action_plain="Confirm this order's model code / trim mapping, then re-check.",
+                        proof={"same_trim_only": True, "current_combination": pos["canonical"],
+                               "source_trim": ""}, **base))
+            continue
         all_targets = short_targets(model) if pos["excess"] > 0 else []
 
         # Two INDEPENDENT session restrictions, applied together:

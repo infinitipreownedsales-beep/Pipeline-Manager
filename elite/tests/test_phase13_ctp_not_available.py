@@ -178,63 +178,103 @@ class TestSessionWideExclusionRegression(unittest.TestCase):
 # ---- A3. SESSION-LEARNED production rule: same-trim-only (a SEPARATE, broader restriction) ------------------
 class TestSameTrimSessionRule(unittest.TestCase):
     """A trim-swap OEM rejection teaches a broader session rule (same_trim_only): CHANGE targets must share the
-    order's governed trim. Within-trim optimization is untouched; only cross-trim targets are removed. This is
-    distinct from — and composes with — the exact-configuration exclusion."""
+    order's AUTHORITATIVE governed trim. Within-trim optimization and the exact-config rejection loop are
+    untouched; only cross-trim targets are removed. Trim comes from the governed model-code identity carried on
+    the board — NEVER positionally sliced from the free-text line (the live TK76338 bug read 'AUTO' out of
+    'QX60 AUTOGRAPH AWD SUV AUTO' and dropped every real AUTOGRAPH alternative)."""
 
     def _board(self):
-        # source order is a QX60 LUXE FWD. Targets: two LUXE (same-trim) and one SPORT (cross-trim, top short).
+        # The live shape: the source DISPLAY line is 'QX60 AUTOGRAPH AWD SUV AUTO' (which a positional parser
+        # mis-reads), but each board row carries the AUTHORITATIVE governed trim from its model-code family.
+        # Targets: three AUTOGRAPH configs (the within-trim rejection loop) and one LUXE (cross-trim, top short).
         return {
-            "src":    {"canonical": "84617 LUXE FWD SRC/K", "line": "QX60 LUXE FWD", "colors": "",
-                       "model": "QX60", "excess": 3, "short": 0},
-            "luxe_a": {"canonical": "84017 LUXE FWD AAA/K", "line": "QX60 LUXE FWD", "colors": "",
-                       "model": "QX60", "excess": 0, "short": 2},
-            "luxe_b": {"canonical": "84117 LUXE AWD BBB/G", "line": "QX60 LUXE AWD", "colors": "",
-                       "model": "QX60", "excess": 0, "short": 1},
-            "sport":  {"canonical": "84517 SPORT FWD SSS/G", "line": "QX60 SPORT FWD", "colors": "",
-                       "model": "QX60", "excess": 0, "short": 5},
+            "src":    {"canonical": "84617 AUTOGRAPH AWD SRC/K", "line": "QX60 AUTOGRAPH AWD SUV AUTO",
+                       "colors": "", "model": "QX60", "trim": "AUTOGRAPH", "excess": 3, "short": 0},
+            "auto_a": {"canonical": "84617 AUTOGRAPH AWD AAA/K", "line": "QX60 AUTOGRAPH AWD SUV AUTO",
+                       "colors": "", "model": "QX60", "trim": "AUTOGRAPH", "excess": 0, "short": 3},
+            "auto_b": {"canonical": "84617 AUTOGRAPH AWD BBB/G", "line": "QX60 AUTOGRAPH AWD SUV AUTO",
+                       "colors": "", "model": "QX60", "trim": "AUTOGRAPH", "excess": 0, "short": 2},
+            "auto_c": {"canonical": "84617 AUTOGRAPH AWD CCC/P", "line": "QX60 AUTOGRAPH AWD SUV AUTO",
+                       "colors": "", "model": "QX60", "trim": "AUTOGRAPH", "excess": 0, "short": 1},
+            "luxe":   {"canonical": "84017 LUXE AWD LLL/K", "line": "QX60 LUXE AWD SUV AUTO",
+                       "colors": "", "model": "QX60", "trim": "LUXE", "excess": 0, "short": 9},
         }
 
-    def _order(self, num="TK80001"):
+    def _order(self, num="TK76338"):
         c = CTP.Candidate(order_number=num, model="QX60", arrival_month="2026-11")
         return CTP.Reconciled(c, CTP.MATCHED, {"combination_id": "src", "model": "QX60", "arrival_month": "2026-11"},
                               "matched by order #", "order#")
 
-    _RULE = {"same_trim_only": {"active": True, "taught_by": "TK80001", "reason": "trim_swap_unavailable"}}
+    _RULE = {"same_trim_only": {"active": True, "taught_by": "TK76338", "reason": "trim_swap_unavailable"}}
+
+    def test_source_trim_resolves_governed_autograph_never_auto(self):
+        r = CTP.evaluate([self._order()], self._board(), session_rules=self._RULE)[0]
+        # the governed trim is AUTOGRAPH — never 'AUTO' and never the whole 'AUTOGRAPH AWD SUV AUTO' line slice
+        self.assertEqual(r.proof.get("source_trim"), "AUTOGRAPH")
+        self.assertNotEqual(r.proof.get("source_trim"), "AUTO")
 
     def test_default_allows_cross_trim_top_short(self):
         r = CTP.evaluate([self._order()], self._board())[0]
-        self.assertEqual(r.proposed_combination_id, "sport")     # top short, cross-trim allowed when no rule
+        self.assertEqual(r.proposed_combination_id, "luxe")      # top short, cross-trim allowed when no rule
 
-    def test_same_trim_only_removes_cross_trim_and_optimizes_within_trim(self):
+    def test_same_trim_removes_cross_trim_keeps_autograph_alternates(self):
         r = CTP.evaluate([self._order()], self._board(), session_rules=self._RULE)[0]
         self.assertEqual(r.decision_state, CTP.CHANGE)
-        self.assertEqual(r.proposed_combination_id, "luxe_a")    # SPORT removed; best same-trim LUXE chosen
-        self.assertTrue(r.proof.get("same_trim_only"))
-        self.assertEqual(r.proof.get("source_trim"), "LUXE")
+        self.assertEqual(r.proposed_combination_id, "auto_a")    # LUXE removed; best AUTOGRAPH alternative chosen
+        self.assertEqual(r.proof.get("source_trim"), "AUTOGRAPH")
 
-    def test_same_trim_only_keeps_when_only_cross_trim_short(self):
-        board = {"src": self._board()["src"], "sport": self._board()["sport"]}   # only a cross-trim target short
+    def test_rejection_loop_advances_within_trim_then_keeps(self):
+        # THE LIVE FIX: reject AUTOGRAPH config A -> next AUTOGRAPH B -> reject B -> AUTOGRAPH C -> reject C ->
+        # only THEN KEEP. Cross-trim LUXE is never offered at any step; exact-config exclusions drive the loop.
+        board = self._board()
+        okey = CTP.order_key("TK76338", "")
+        inf = {okey: [{"target": "auto_a", "target_canonical": "84617 AUTOGRAPH AWD AAA/K",
+                       "reason": "production_restriction"}]}
+        r1 = CTP.evaluate([self._order()], board, infeasible=inf, session_rules=self._RULE)[0]
+        self.assertEqual(r1.proposed_combination_id, "auto_b")   # A rejected -> next AUTOGRAPH
+        inf[okey].append({"target": "auto_b", "reason": "production_restriction"})
+        r2 = CTP.evaluate([self._order()], board, infeasible=inf, session_rules=self._RULE)[0]
+        self.assertEqual(r2.proposed_combination_id, "auto_c")   # B rejected -> next AUTOGRAPH
+        inf[okey].append({"target": "auto_c", "reason": "production_restriction"})
+        r3 = CTP.evaluate([self._order()], board, infeasible=inf, session_rules=self._RULE)[0]
+        self.assertEqual(r3.decision_state, CTP.KEEP)            # all same-trim alternatives exhausted -> KEEP
+        self.assertIn("same-trim only", r3.reason_plain)
+        for r in (r1, r2, r3):
+            self.assertNotEqual(r.proposed_combination_id, "luxe")   # cross-trim never offered
+
+    def test_keep_when_only_cross_trim_short(self):
+        board = {"src": self._board()["src"], "luxe": self._board()["luxe"]}   # only a cross-trim target short
         r = CTP.evaluate([self._order()], board, session_rules=self._RULE)[0]
         self.assertEqual(r.decision_state, CTP.KEEP)
         self.assertIn("same-trim only", r.reason_plain)
         self.assertTrue(r.proof.get("same_trim_only"))
 
+    def test_gate_when_governed_trim_unresolved_never_guesses_auto(self):
+        # if the authoritative trim can't be established (no governed model-code family), the rule GATES rather
+        # than positionally guessing 'AUTO' from the line — and it does NOT collapse the order to KEEP.
+        board = self._board()
+        board["src"]["trim"] = ""                                # governed trim unresolved for the source
+        r = CTP.evaluate([self._order()], board, session_rules=self._RULE)[0]
+        self.assertEqual(r.decision_state, CTP.CANT_EVALUATE)
+        self.assertIn("governed trim", r.reason_plain)
+        self.assertEqual(r.proof.get("source_trim"), "")
+
     def test_two_levels_compose(self):
-        # exact-config exclusion of luxe_a AND same-trim-only together: SPORT removed by the rule, luxe_a removed
-        # by the exact exclusion -> the remaining same-trim luxe_b is chosen.
-        okey = CTP.order_key("TK80001", "")
-        infeasible = {okey: [{"target": "luxe_a", "target_canonical": "84017 LUXE FWD AAA/K",
+        # exact-config exclusion of auto_a AND same-trim-only together: LUXE removed by the rule, auto_a removed
+        # by the exact exclusion -> the remaining same-trim auto_b is chosen.
+        okey = CTP.order_key("TK76338", "")
+        infeasible = {okey: [{"target": "auto_a", "target_canonical": "84617 AUTOGRAPH AWD AAA/K",
                               "reason": "production_restriction"}]}
         r = CTP.evaluate([self._order()], self._board(), infeasible=infeasible, session_rules=self._RULE)[0]
-        self.assertEqual(r.proposed_combination_id, "luxe_b")
+        self.assertEqual(r.proposed_combination_id, "auto_b")
         self.assertTrue(r.proof.get("same_trim_only"))
 
     def test_confirmed_cross_trim_change_survives_same_trim_rule(self):
         # an already-confirmed cross-trim change stays locked even after the same-trim rule is learned
-        confirmed = {CTP.order_key("TK80001", ""): {"target": "sport"}}
+        confirmed = {CTP.order_key("TK76338", ""): {"target": "luxe"}}
         r = CTP.evaluate([self._order()], self._board(), confirmed=confirmed, session_rules=self._RULE)[0]
         self.assertTrue(r.confirmed)
-        self.assertEqual(r.proposed_combination_id, "sport")     # lock unaffected by the learned rule
+        self.assertEqual(r.proposed_combination_id, "luxe")      # lock unaffected by the learned rule
 
 
 # ---- C. CONFIRMED CHANGED is a fixed execution constraint (engine-level) ----------------------------------
