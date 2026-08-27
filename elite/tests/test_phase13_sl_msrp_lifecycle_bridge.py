@@ -1,21 +1,23 @@
 """Service-Loaner MSRP source/provenance bridge (live acceptance 2026-08-27).
 
-The retention x physical-unit-MSRP market rail is accepted; the live blocker was that neither MSRP source
-reached the decision, so all 27 units gated on expected used price. Two governed provenance bridges — no new
-pricing math, no manual values — restore the evidence from data ALREADY loaded:
+The live blocker was that neither the current unit's identity/MSRP nor the historical MSRP reached the decision,
+so all 27 units gated on expected used price. Two governed provenance bridges — no new pricing math, no manual
+values — restore the evidence from data ALREADY loaded. (The market rail itself prices from OBSERVED TRANSACTION
+DOLLARS for the unit's trim as the primary path; MSRP-normalized retention is the secondary fallback. Bridge B
+also recovers the unit's model_code, which the primary observed-dollar path needs to pick its trim cohort.)
 
   A. Historical original MSRP: the Reynolds retail-history export carries MSRP, but earlier schema profiles
      omitted it from normalization, so it survives only in the retained RAW observation. latest_retail_rows now
-     surfaces it (never mutating raw), so each historical sale normalizes into an observed retention ratio from
-     its OWN authoritative original MSRP.
+     surfaces it (never mutating raw), so the retention FALLBACK can normalize each historical sale by its OWN
+     authoritative original MSRP when same-trim transaction evidence is insufficient.
 
-  B. Current-unit MSRP lifecycle: a Service Loaner has moved out of today's New-Retail snapshot, so it is absent
-     from the latest inventory export — but its MSRP + model code were retained when it was new inventory (the
-     pipeline summary is a per-business-date longitudinal-memory source). inventory_lifecycle_facts recovers them
-     from any retained snapshot by the same governed VIN/Serial/Stock last-8 linkage used for model year.
+  B. Current-unit MSRP + model code lifecycle: a Service Loaner has moved out of today's New-Retail snapshot, so
+     it is absent from the latest inventory export — but its MSRP + model code were retained when it was new
+     inventory (the pipeline summary is a per-business-date longitudinal-memory source). inventory_lifecycle_facts
+     recovers them from any retained snapshot by the same governed VIN/Serial/Stock last-8 linkage used for MY.
 
-Acceptance proof (TC348756): authoritative current-unit MSRP -> observed retention cohort/n/window -> price now
--> price future -> adjusted basis now/future (independent basis rail) -> KEEP/PULL/SWAP.
+Acceptance proof (TC348756): authoritative model code + MSRP -> observed transaction-price cohort/n/window ->
+price now -> price future -> adjusted basis now/future (independent basis rail) -> KEEP/PULL/SWAP.
 """
 import json
 import os
@@ -26,7 +28,7 @@ from elite.ids import new_id
 from elite.ui.fixtures import Phase10
 from elite.workflow.fixtures import SCOPE
 from elite.loaner.preowned_evidence import (inventory_lifecycle_facts, latest_retail_rows, _retail_msrp)
-from elite.loaner.sl_decision import build_unit_decision, _retention_observations, _retention_price
+from elite.loaner.sl_decision import build_unit_decision, _retention_observations
 from elite.loaner.intelligence import UnitIntel
 from elite.loaner.sl_policy import SLPolicyStore
 from elite.loaner.program_inputs import ProgramInputsStore
@@ -157,13 +159,13 @@ class TestMsrpProvenanceBridges(unittest.TestCase):
         # authoritative current-unit MSRP (from the inventory lifecycle, not a manual entry)
         self.assertEqual(f["unit_msrp"], 62000.0)
         self.assertEqual(f["unit_model_code"], "84616")
-        # observed retention cohort -> price now / future, both resolved (no longer gated)
+        # observed transaction-price cohort (same model code) -> price now / future, both resolved (not gated)
         self.assertNotIn("expected used price now", d["gated"])
         self.assertNotIn("expected future used price (KEEP)", d["gated"])
         self.assertIsNotNone(f["price_now"])
         self.assertIsNotNone(f["price_future"])
-        self.assertIn("observed retention", f["price_now_basis"])
-        self.assertIn("authoritative MSRP $62,000", f["price_now_basis"])
+        self.assertIn("observed used transaction price", f["price_now_basis"])   # primary rail, observed dollars
+        self.assertIn("same model code 84616", f["price_now_basis"])
         self.assertLess(f["price_future"], f["price_now"])                    # later sale date -> older age
         # basis rail is independent (invoice + write-down), never the MSRP market number
         self.assertEqual(f["invoice"], 60000)

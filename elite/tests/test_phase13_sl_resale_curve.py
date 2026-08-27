@@ -1,18 +1,20 @@
-"""Retention-normalized, time-sensitive expected used-price curve (live acceptance 2026-08-27).
+"""Market/value rail: observed transaction price primary, MSRP retention secondary (live acceptance 2026-08-27).
 
-The expected used SELLING PRICE is now built from OBSERVED RETENTION — each historical sale's used price divided
-by its authoritative original MSRP (resolved from the physical-unit inventory/pipeline source by the sale's own
-governed model_code + model year) — measured against actual lifecycle age, then applied to THIS specific unit's
-own authoritative MSRP. Consequences proven here:
+The preferred market rail is OBSERVED TRANSACTION PRICE -> later observed transaction price: the store's own
+recorded used SELLING dollars (the Reynolds 'Vehicle Price') for the SAME governed comparable (model code / trim)
+at the sale's lifecycle age. Because it is trim-specific it already differentiates units, with NO MSRP involved.
+MSRP-normalized retention is used ONLY as a secondary fallback, when same-comparable transaction evidence is
+insufficient — then a broader same-model cohort's retention is re-scaled by THIS unit's own authoritative MSRP.
 
-  * two same-model units (both QX60) on the SAME sale date and SAME lifecycle age but DIFFERENT authoritative
-    MSRPs do NOT receive the same expected price — the shared, pooled quantity is the retention PERCENT, never a
-    raw-dollar median (the defect being repaired);
-  * the price is still time-sensitive on a continuous age-in-months axis (30/60/90/120 days later differ);
-  * the market/value rail (MSRP -> observed retention -> used price) stays independent of the dealer-basis rail
-    (invoice -> write-down -> adjusted basis); Vehicle Cost is never mixed into the market curve;
-  * no authoritative MSRP for the unit, unresolved model year, empty history, or age beyond the observed window
-    all GATE honestly — nothing is manufactured, and the operator is never asked to type MSRP.
+Proven here:
+  * two same-model units of DIFFERENT trims (model codes) get DIFFERENT expected prices directly from observed
+    transaction dollars — no MSRP normalization needed in the primary path;
+  * the observed-dollar curve is time-sensitive on a continuous age-in-months axis (30/60/90/120 later differ);
+  * MSRP is not required for the primary path (a unit with no MSRP still prices from observed transaction dollars
+    for its trim); MSRP retention engages only as the fallback and cites itself as such;
+  * the market rail stays independent of the dealer-basis rail (invoice -> write-down -> adjusted basis);
+  * empty history, unresolved model year, age beyond the observed window, and no defensible evidence at all GATE
+    honestly — nothing is manufactured.
 """
 import os
 import datetime as dt
@@ -22,27 +24,26 @@ from unittest.mock import patch
 
 from elite.ui.fixtures import Phase10
 from elite.workflow.fixtures import SCOPE
-from elite.loaner.sl_decision import (build_unit_decision, _retention_price, _unit_inventory_facts,
+from elite.loaner.sl_decision import (build_unit_decision, _market_price, _unit_inventory_facts,
                                       _age_months_at)
 from elite.loaner.intelligence import UnitIntel
 from elite.loaner.sl_policy import SLPolicyStore
 from elite.loaner.program_inputs import ProgramInputsStore
 
 VIN = "5N1AL1HU8TC348756"          # last-8 TC348756 joins to the inventory Serial
-VIN_B = "5N1AL1HU8TDD990000"       # a SECOND physical QX60, a different trim/model code + MSRP
+VIN_B = "5N1AL1HU8TDD990000"       # a SECOND physical QX60, a different trim/model code
 
-
-# Authoritative original MSRP by (model_code, model year) — the anchors used to normalize each historical sale
-# and to value the current units. Two QX60 trims: 84616 (loaded, higher MSRP) and 84617 (base, lower MSRP).
+# Two QX60 trims: 84616 (loaded, higher MSRP + higher observed transaction prices) and 84617 (base, lower).
 _MSRP = {"84616": {2024: 58000, 2025: 60000, 2026: 62000},
          "84617": {2024: 50000, 2025: 52000, 2026: 54000}}
+# The observed used SELLING price level each trim actually transacts at when new-ish (before age decline).
+_PRICE0 = {"84616": 60000, "84617": 50000}
 
 
 def _inv(active=(("TC348756", "S1", "84616", "2026", 62000),
                  ("DD990000", "S2", "84617", "2026", 54000))):
     """Inventory/pipeline rows: the authoritative physical-unit MSRP + model-code source. Carries the two active
-    units (matched by Serial last-8) plus per-(code, MY) MSRP anchors for the historical retention join. No full
-    VIN column — a unit is identified by Serial/Stock#, exactly like the real DMS pipeline export."""
+    units (matched by Serial last-8) plus per-(code, MY) MSRP anchors used ONLY for the retention fallback."""
     rows = [{"vin": None, "serial": s, "stock_number": st, "model": "QX60",
              "model_code": c, "model_year": my, "msrp": str(ms)} for (s, st, c, my, ms) in active]
     for code, by_my in _MSRP.items():
@@ -52,21 +53,21 @@ def _inv(active=(("TC348756", "S1", "84616", "2026", 62000),
     return rows
 
 
-def _rows(slope=400, model="QX60", codes=("84616", "84617"), ages=range(3, 16), per=5):
-    """Real-shaped resale history whose RETENTION (price / original MSRP) declines with lifecycle age, pooled
-    across model years and both trims. Each sale carries its governed model_number (code) + year so its original
-    MSRP is recoverable — no raw dollar is ever pooled across trims."""
+def _rows(slope=400, codes=("84616", "84617"), ages=range(3, 16), per=5):
+    """Real-shaped resale ledger: each row is an observed used SALE carrying its governed model_number (trim
+    code), model year and 'Vehicle Price' (the used selling price), declining with lifecycle age. Each trim
+    transacts at its own dollar level, so the observed-price curves differ by trim without any MSRP."""
     out = []
     for code in codes:
         for my in (2024, 2025, 2026):
-            msrp = _MSRP[code][my]
+            p0 = _PRICE0[code] + (my - 2026) * 2000
             for a in ages:
                 t = my * 12 + a
                 y, m = t // 12, t % 12 + 1
                 for k in range(per):
-                    out.append({"model": model, "model_number": code, "year": str(my),
+                    out.append({"model": "QX60", "model_number": code, "year": str(my),
                                 "sold_date": f"{y:04d}-{m:02d}-15",
-                                "price": str(msrp - slope * a + (k - 2) * 100), "days_to_sell": "40"})
+                                "price": str(p0 - slope * a + (k - 2) * 100), "days_to_sell": "40"})
     return out
 
 
@@ -76,40 +77,32 @@ def _unit(vin=VIN):
                      quality_flags=(), model_year="2026")
 
 
-class TestRetentionCurvePure(unittest.TestCase):
-    def test_two_units_same_date_and_age_different_msrp_get_different_price(self):
-        # THE ACCEPTANCE PROOF: two MY2026 QX60s, identical sale date and lifecycle age, but different
-        # authoritative MSRPs. They must NOT be handed the same expected price merely because both are QX60s.
+class TestObservedTransactionRailPrimary(unittest.TestCase):
+    def test_two_trims_priced_from_observed_dollars_no_msrp(self):
+        # THE ACCEPTANCE PROOF: two MY2026 QX60s of different trims, same sale date and lifecycle age. They get
+        # DIFFERENT expected prices directly from observed transaction dollars — the primary path uses NO MSRP.
         rows, inv = _rows(), _inv()
-        msrp_a, code_a = _unit_inventory_facts(inv, VIN)      # 84616 / $62,000
-        msrp_b, code_b = _unit_inventory_facts(inv, VIN_B)    # 84617 / $54,000
-        self.assertEqual((msrp_a, code_a), (62000.0, "84616"))
-        self.assertEqual((msrp_b, code_b), (54000.0, "84617"))
+        msrp_a, code_a = _unit_inventory_facts(inv, VIN)      # 84616
+        msrp_b, code_b = _unit_inventory_facts(inv, VIN_B)    # 84617
+        self.assertEqual(code_a, "84616")
+        self.assertEqual(code_b, "84617")
         sd = "2026-08-15"
-        pa, prov_a, _ca = _retention_price(rows, inv, "QX60", "2026", sd, msrp_a, code_a)
-        pb, _pb, _cb = _retention_price(rows, inv, "QX60", "2026", sd, msrp_b, code_b)
+        pa, prov_a, _ca = _market_price(rows, inv, "QX60", "2026", sd, msrp_a, code_a)
+        pb, _pb, _cb = _market_price(rows, inv, "QX60", "2026", sd, msrp_b, code_b)
         self.assertIsNotNone(pa)
         self.assertIsNotNone(pb)
-        self.assertNotEqual(pa, pb)                            # NOT the same price
-        self.assertGreater(pa, pb)                             # the higher-MSRP unit is worth more
-        self.assertIn("observed retention", prov_a)            # cites the retention %, not a dollar median
-        self.assertIn("this unit's authoritative MSRP $62,000", prov_a)
-        # each price is that unit's OWN MSRP times an observed retention percent (never a shared raw dollar)
-        self.assertAlmostEqual(pa, msrp_a * (pa / msrp_a), places=6)
-        self.assertAlmostEqual(pb, msrp_b * (pb / msrp_b), places=6)
+        self.assertNotEqual(pa, pb)                            # different trims -> different observed prices
+        self.assertGreater(pa, pb)                             # the higher-transacting trim is worth more
+        self.assertIn("observed used transaction price", prov_a)   # PRIMARY rail cites observed dollars
+        self.assertIn("same model code 84616", prov_a)
+        self.assertNotIn("MSRP", prov_a)                       # NO MSRP normalization in the primary path
 
-    def test_shared_model_cohort_retention_applies_each_units_own_msrp(self):
-        # when the evidence degrades to the broader same-model cohort, the retention PERCENT is shared but each
-        # unit's price still applies ITS OWN MSRP — so the two prices scale exactly with their MSRPs, and are
-        # NOT equal (the raw-dollar-median defect would have made them identical).
+    def test_msrp_not_required_for_primary(self):
+        # a unit with NO resolvable MSRP still prices from observed transaction dollars for its trim
         rows, inv = _rows(), _inv()
-        sd = "2026-08-15"
-        pa = _retention_price(rows, inv, "QX60", "2026", sd, 62000.0, None)      # code None -> broader cohort
-        pb = _retention_price(rows, inv, "QX60", "2026", sd, 54000.0, None)
-        self.assertIn("same model (MSRP-normalized)", pa[1])
-        self.assertNotEqual(pa[0], pb[0])
-        self.assertAlmostEqual(pa[0] / pb[0], 62000.0 / 54000.0, places=4)       # scales with own MSRP
-        self.assertAlmostEqual(pa[0] / 62000.0, pb[0] / 54000.0, places=6)       # identical shared retention %
+        price, prov, _c = _market_price(rows, inv, "QX60", "2026", "2026-08-15", None, "84616")
+        self.assertIsNotNone(price)
+        self.assertIn("observed used transaction price", prov)
 
     def test_five_points_time_sensitive_and_cited(self):
         rows, inv = _rows(), _inv()
@@ -117,9 +110,9 @@ class TestRetentionCurvePure(unittest.TestCase):
         pts = []
         for days in (0, 30, 60, 90, 120):
             sd = (base + dt.timedelta(days=days)).isoformat()
-            price, prov, conf = _retention_price(rows, inv, "QX60", "2026", sd, 62000.0, "84616")
+            price, prov, conf = _market_price(rows, inv, "QX60", "2026", sd, 62000.0, "84616")
             self.assertIsNotNone(price, days)
-            self.assertIn("observed retention", prov)
+            self.assertIn("observed used transaction price", prov)
             self.assertNotEqual(conf, "none")
             pts.append(price)
         self.assertGreater(len(set(pts)), 1)                                        # not merely repeated
@@ -128,28 +121,44 @@ class TestRetentionCurvePure(unittest.TestCase):
 
     def test_same_integer_age_different_months_differ(self):
         rows, inv = _rows(), _inv()
-        p_aug = _retention_price(rows, inv, "QX60", "2026", "2026-08-15", 62000.0, "84616")[0]   # int age 0
-        p_dec = _retention_price(rows, inv, "QX60", "2026", "2026-12-15", 62000.0, "84616")[0]   # int age 0 too
+        p_aug = _market_price(rows, inv, "QX60", "2026", "2026-08-15", 62000.0, "84616")[0]   # int age 0
+        p_dec = _market_price(rows, inv, "QX60", "2026", "2026-12-15", 62000.0, "84616")[0]   # int age 0 too
         self.assertEqual(_age_months_at("2026", "2026-08-15"), 7)
         self.assertEqual(_age_months_at("2026", "2026-12-15"), 11)
         self.assertNotEqual(p_aug, p_dec)
 
-    def test_broader_model_retention_used_when_same_code_thin(self):
-        # the current unit's own model code has NO history; the broader same-model (MSRP-normalized) retention
-        # is used instead — never a raw-dollar pool of a different trim.
+
+class TestMsrpRetentionFallback(unittest.TestCase):
+    def test_fallback_used_only_when_same_trim_transaction_evidence_insufficient(self):
+        # the current unit's own trim has NO transaction history -> secondary rail: broader same-model retention
+        # (MSRP-normalized) re-scaled by THIS unit's own authoritative MSRP. Cites itself as the fallback.
         rows = _rows(codes=("84617",))                          # only the OTHER trim traded
         inv = _inv()
-        price, prov, _c = _retention_price(rows, inv, "QX60", "2026", "2026-08-15", 62000.0, "84616")
+        price, prov, _c = _market_price(rows, inv, "QX60", "2026", "2026-08-15", 62000.0, "84616")
         self.assertIsNotNone(price)
-        self.assertIn("same model (MSRP-normalized)", prov)     # tier 2, not the missing same-code tier
+        self.assertIn("observed retention", prov)
+        self.assertIn("MSRP-normalized fallback", prov)
         self.assertIn("this unit's authoritative MSRP $62,000", prov)
+
+    def test_fallback_scales_with_each_units_own_msrp(self):
+        # in the fallback, the retention PERCENT is shared but each unit's price applies ITS OWN MSRP, so the two
+        # prices scale with their MSRPs and are NOT equal.
+        rows = _rows(codes=("84617",))                          # neither unit's-own-trim (84616) traded
+        inv = _inv()
+        pa = _market_price(rows, inv, "QX60", "2026", "2026-08-15", 62000.0, "84616")
+        pb = _market_price(rows, inv, "QX60", "2026", "2026-08-15", 54000.0, "84616")
+        self.assertIn("MSRP-normalized fallback", pa[1])
+        self.assertNotEqual(pa[0], pb[0])
+        self.assertAlmostEqual(pa[0] / pb[0], 62000.0 / 54000.0, places=4)
+        self.assertAlmostEqual(pa[0] / 62000.0, pb[0] / 54000.0, places=6)         # shared retention %
 
     def test_gates_without_manufacturing(self):
         rows, inv = _rows(), _inv()
-        self.assertIsNone(_retention_price([], inv, "QX60", "2026", "2026-08-26", 62000.0, "84616")[0])   # no hist
-        self.assertIsNone(_retention_price(rows, inv, "QX60", "2026", "2026-08-26", None, "84616")[0])    # no MSRP
-        self.assertIsNone(_retention_price(rows, inv, "QX60", "", "2026-08-26", 62000.0, "84616")[0])     # MY gate
-        self.assertIsNone(_retention_price(rows, inv, "QX60", "2026", "2031-08-26", 62000.0, "84616")[0]) # age gate
+        # no observed transaction dollars for the trim AND no MSRP -> gate (nothing to normalize)
+        self.assertIsNone(_market_price(rows, inv, "QX60", "2026", "2026-08-26", None, "99999")[0])
+        self.assertIsNone(_market_price([], inv, "QX60", "2026", "2026-08-26", 62000.0, "84616")[0])   # no history
+        self.assertIsNone(_market_price(rows, inv, "QX60", "", "2026-08-26", 62000.0, "84616")[0])     # MY gate
+        self.assertIsNone(_market_price(rows, inv, "QX60", "2026", "2031-08-26", 62000.0, "84616")[0]) # age gate
 
 
 class TestHoldBenefitReflectsMarketAndBasis(unittest.TestCase):
@@ -174,11 +183,10 @@ class TestHoldBenefitReflectsMarketAndBasis(unittest.TestCase):
              patch("elite.loaner.sl_decision._inventory_rows", return_value=_inv()):
             return build_unit_decision(self.app, SCOPE, _unit(), None, today="2026-08-26", keep_horizon_days=90)
 
-    def test_unit_msrp_resolved_and_carried(self):
+    def test_price_is_observed_transaction_dollars(self):
         d = self._decide(400)
-        self.assertEqual(d["facts"]["unit_msrp"], 62000.0)         # authoritative, from inventory (not typed)
         self.assertEqual(d["facts"]["unit_model_code"], "84616")
-        self.assertIn("authoritative MSRP $62,000", d["facts"]["price_now_basis"])
+        self.assertIn("observed used transaction price", d["facts"]["price_now_basis"])
 
     def test_hold_benefit_is_market_plus_basis_not_basis_alone(self):
         d = self._decide(400)
@@ -200,14 +208,11 @@ class TestHoldBenefitReflectsMarketAndBasis(unittest.TestCase):
         self.assertLess(steep["components"]["front_end_gross_future"],
                         shallow["components"]["front_end_gross_future"])          # market value moved the answer
 
-    def test_basis_rail_never_uses_msrp_market_rail_never_uses_invoice(self):
-        # two-rail separation: the market price is MSRP × retention (independent of the $60,000 invoice), and the
-        # adjusted basis derives from invoice + write-down (independent of the $62,000 MSRP).
+    def test_basis_rail_independent_of_market_rail(self):
         d = self._decide(400)
         f, c = d["facts"], d["components"]
-        self.assertEqual(f["invoice"], 60000)
-        self.assertEqual(f["unit_msrp"], 62000.0)
-        self.assertNotAlmostEqual(f["price_now"], c["adjusted_basis_now"], places=0)   # rails are distinct numbers
+        self.assertEqual(f["invoice"], 60000)                                    # basis rail = invoice + write-down
+        self.assertNotAlmostEqual(f["price_now"], c["adjusted_basis_now"], places=0)
         self.assertGreater(c["adjusted_basis_now"], 0)
 
 

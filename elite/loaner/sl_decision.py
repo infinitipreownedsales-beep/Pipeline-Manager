@@ -163,31 +163,83 @@ def _unit_inventory_facts(inv, vin):
     return msrp, code
 
 
-def _retention_price(retail_rows, inv, model, model_year, sale_date, unit_msrp, unit_code):
-    """Expected used SELLING PRICE for a SPECIFIC physical unit at a specific sale date. Built from OBSERVED
-    RETENTION (used price / authoritative original MSRP) on the store's own resale history and applied to THIS
-    unit's own authoritative MSRP — so two same-model units on the same date with different authoritative MSRPs
-    get different expected prices. The shared, pooled quantity is the retention PERCENT, never a raw dollar
-    median. This is the market/value rail only; dealer Vehicle Cost / invoice (the basis rail) is never mixed
-    in. Gates when the unit MSRP is unresolved or the observed retention cannot support the age. Returns
-    (price, provenance, confidence)."""
+def _price_observations(rows, model):
+    """Observed used TRANSACTION points (age_in_months, used_selling_price, model_code) from the store's own
+    retail sales ledger. `price` is the Reynolds 'Vehicle Price' — verified as the used retail SELLING price
+    (a positive transaction price recorded above 'Vehicle Cost', the separate dealer-basis field, which is
+    never read here). This is the raw material of the primary market rail: observed transaction price by age."""
+    model_u = (model or "").upper()
+    out = []
+    for r in rows or ():
+        if (r.get("model") or "").upper() != model_u:
+            continue
+        price = _price_num(r.get("price"))
+        am = _age_months_at(r.get("year"), r.get("sold_date"))
+        code = _code_norm(r.get("model_number") or r.get("model_code"))
+        if price is None or price <= 0 or am is None or code is None:
+            continue
+        out.append((am, price, code))
+    return out
+
+
+def _observed_price_at(obs, target, want_code):
+    """Median observed used TRANSACTION price at ~target age (months) for the SAME governed comparable
+    (model_code / trim), tightest defensible age window first. Different trims transact at different dollar
+    levels, so restricting to the unit's own model code differentiates units without any MSRP normalization.
+    Returns (dollars, window, n) or (None, None, 0)."""
+    if want_code is None:
+        return None, None, 0
+    pool = [o for o in obs if o[2] == want_code]
+    for w in (2, 3, 4, 6):
+        win = [p for am, p, _c in pool if target - w <= am <= target + w]
+        if len(win) >= RESALE_WINDOW_GATE:
+            return median(win), w, len(win)
+    return None, None, 0
+
+
+def _market_price(retail_rows, inv, model, model_year, sale_date, unit_msrp, unit_code):
+    """Expected used SELLING PRICE for a SPECIFIC physical unit at a specific sale date, on the market/value rail
+    only (dealer Vehicle Cost / invoice is never mixed in). Governed evidence hierarchy, most authoritative
+    first:
+
+      PRIMARY — observed transaction price -> later observed transaction price. The store's own recorded used
+        SELLING dollars for the SAME governed comparable (model code / trim) at the sale's lifecycle age. This
+        is a direct, empirically-observed price by age; because it is trim-specific it already differentiates
+        units, with NO MSRP involved.
+      SECONDARY (fallback) — when same-comparable transaction evidence is insufficient, borrow a broader
+        same-model cohort's observed RETENTION (used price / authoritative original MSRP) and re-scale by THIS
+        unit's own authoritative MSRP. MSRP is used ONLY here, as the fallback normalizer.
+      else GATE — no defensible observed evidence (never manufactured).
+
+    Returns (price, provenance, confidence)."""
     target = _age_months_at(model_year, sale_date)
     if target is None:
-        return None, "model-year / sale-date unresolved — cannot place on the retention curve", "none"
-    if unit_msrp is None or unit_msrp <= 0:
-        return None, "authoritative MSRP for this unit unresolved from inventory — cannot value", "none"
+        return None, "model-year / sale-date unresolved — cannot place on the age curve", "none"
     model_u = (model or "").upper()
-    by_code_my, by_code = _msrp_maps(inv)
-    obs = _retention_observations(retail_rows, by_code_my, by_code, model)
-    if len(obs) < RESALE_WINDOW_GATE:
-        return None, f"no defensible {model_u} retention sample (needs authoritative MSRP per sale)", "none"
-    ret, w, n, tier, conf = _retention_at(obs, target, unit_code)
-    if ret is None:
-        return None, (f"insufficient {model_u} retention within ±6mo of ~{target}mo age — "
-                      "gated (not manufactured)"), "none"
-    return (round(unit_msrp * ret, 2),
-            f"{model_u} observed retention {ret:.1%} at ~{target}mo age (±{w}mo, n={n}, {tier}) × this unit's "
-            f"authoritative MSRP ${unit_msrp:,.0f}", conf)
+
+    # PRIMARY: observed used transaction dollars for the same model code / trim.
+    price_obs = _price_observations(retail_rows, model)
+    dollars, w, n = _observed_price_at(price_obs, target, unit_code)
+    if dollars is not None:
+        conf = "moderate" if w <= 3 else "thin"
+        return (round(dollars, 2),
+                f"{model_u} observed used transaction price median ${dollars:,.0f} at ~{target}mo age "
+                f"(±{w}mo, n={n}, same model code {unit_code})", conf)
+
+    # SECONDARY: MSRP-normalized retention from the broader same-model cohort, applied to this unit's own MSRP.
+    if unit_msrp is not None and unit_msrp > 0:
+        by_code_my, by_code = _msrp_maps(inv)
+        ret_obs = _retention_observations(retail_rows, by_code_my, by_code, model)
+        if len(ret_obs) >= RESALE_WINDOW_GATE:
+            ret, rw, rn, tier, conf = _retention_at(ret_obs, target, unit_code)
+            if ret is not None:
+                return (round(unit_msrp * ret, 2),
+                        f"{model_u} observed retention {ret:.1%} at ~{target}mo age (±{rw}mo, n={rn}, {tier}) × "
+                        f"this unit's authoritative MSRP ${unit_msrp:,.0f} (MSRP-normalized fallback — "
+                        "insufficient same-trim transaction evidence)", conf)
+
+    return None, (f"insufficient {model_u} observed used-price evidence within ±6mo of ~{target}mo age "
+                  "— gated (not manufactured)"), "none"
 
 
 def _iso_today(clock):
@@ -308,9 +360,9 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
         lm, lc = _lifecycle_facts(app, scope, vin)
         unit_msrp = unit_msrp if unit_msrp is not None else lm
         unit_code = unit_code or lc
-    price_now, pn_basis, pn_conf = _retention_price(retail_rows, inv, model, my, sale_now, unit_msrp, unit_code)
-    price_future, pf_basis, pf_conf = _retention_price(retail_rows, inv, model, my, sale_future, unit_msrp,
-                                                       unit_code)
+    price_now, pn_basis, pn_conf = _market_price(retail_rows, inv, model, my, sale_now, unit_msrp, unit_code)
+    price_future, pf_basis, pf_conf = _market_price(retail_rows, inv, model, my, sale_future, unit_msrp,
+                                                    unit_code)
     if price_now is None:
         gated.append("expected used price now")
     if price_future is None:
