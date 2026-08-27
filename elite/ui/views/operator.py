@@ -1220,28 +1220,32 @@ def register(app):
         s = req.session
         app.require(s, "workspace.view")
         inv_raw = req.form.get("inv") or ""
+        # Unavailable marks are STABLE UNIT KEYS, so they survive a re-paste / reordered snapshot (they bind to
+        # the unit/order, not a row position). Keys that no longer match any pasted unit are simply inert.
+        prior = _ws_get(app, s.scope, "trade_their", {}) or {}
         _ws_put(app, s.scope, "trade_their", {
             "requested": (req.form.get("requested") or "").strip(),
             "inv_raw": inv_raw,
             # Keep legacy line storage for backward compatibility with old sessions.
             "inv": [ln.strip() for ln in inv_raw.splitlines() if ln.strip()],
-            "unavail": []})
+            "unavail": sorted(str(x) for x in prior.get("unavail", []) if isinstance(x, str))})
         s.flash = "Their-trade session saved."
         return Response.redirect("/dealer-trade?tab=their")
 
     @app.post("/dealer-trade/their/unavailable")
     def their_unavail(app, req):
+        # Exclude the exact unit/order by its STABLE identity key (dealer + stage + stock + serial/order), never
+        # by row position — so a re-pasted / reordered snapshot keeps the same unit unavailable and no
+        # configuration-wide blacklist ever occurs.
         s = req.session
         app.require(s, "workspace.view")
         st = _ws_get(app, s.scope, "trade_their", {}) or {}
-        try:
-            idx = int(req.form.get("idx"))
-            un = set(st.get("unavail", []))
-            un.add(idx)
+        key = (req.form.get("key") or "").strip()
+        if key:
+            un = {str(x) for x in st.get("unavail", [])}   # keys only (legacy int-index marks are ignored)
+            un.add(key)
             st["unavail"] = sorted(un)
             _ws_put(app, s.scope, "trade_their", st)
-        except (TypeError, ValueError):
-            pass
         return Response.redirect("/dealer-trade?tab=their")
 
     @app.post("/dealer-trade/our")
@@ -3028,13 +3032,17 @@ def _trade_availability(unit):
             stage = tok
             break
     if stage == "OTHER":                                   # infer only when the source carried no explicit stage
+        try:
+            dis = int(unit.get("dis") or 0)
+        except (TypeError, ValueError):
+            dis = 0
         eta = str(unit.get("eta") or "").strip()
-        dis = int(unit.get("dis") or 0)
         has_stock = bool(str(unit.get("stock_number") or "").strip())
-        if has_stock or dis > 0:
-            stage = "DLR-INV"                              # a physical unit with a stock number / days-in-stock
-        elif eta:
-            stage = "ONS"                                  # a future order carrying only an ETA/month
+        if dis > 0:
+            stage = "DLR-INV"          # physically on a lot now: days-in-stock have accrued
+        elif eta:                      # not in stock yet, but a future arrival/ETA is known -> INBOUND, not now
+            stage = "SIT" if has_stock else "ONS"   # a stock# identified inbound = SIT; an order-only row = ONS
+        # else: ambiguous (e.g. a stock# with DIS 0 and NO ETA) -> stays OTHER, never guessed AVAILABLE NOW
     tier = {"DLR-INV": 1, "SIT": 2, "NNA-INV": 2, "ONS": 3}.get(stage, 4)
     return stage, tier
 
@@ -3072,6 +3080,24 @@ def _trade_has_identity(unit):
     to mark an anonymous candidate unavailable, and never present one as an actionable Best ask."""
     return bool(str(unit.get("stock_number") or "").strip() or str(unit.get("serial") or "").strip())
 
+
+def _trade_unit_key(unit):
+    """A STABLE external-candidate identity key for the Unavailable mark — bound to the unit/order, NOT the row
+    position. A re-pasted or reordered snapshot keeps the same unit unavailable, and never blacklists a whole
+    configuration. Physical unit: dealer + stage + stock + serial (dealer+stock+serial is sufficient identity).
+    ONS/order: dealer + stage + serial/order. A deliberate free-text combination (no unit/order) keys by dealer
+    + stage + what was entered — still specific to that entry, never a configuration-wide ban."""
+    def _n(v):
+        return " ".join(str(v or "").split()).upper()
+    dealer = _n(unit.get("dealer"))
+    stock = _n(unit.get("stock_number"))
+    serial = _n(unit.get("serial"))
+    stage, _tier = _trade_availability(unit)
+    if stock or serial:
+        return "|".join(("U", dealer, stage, stock, serial))
+    return "|".join(("C", dealer, stage, _n(unit.get("identity") or unit.get("description"))))
+
+
 def _their_trade(app, s, short, over):
     st = _ws_get(app, s.scope, "trade_their", {}) or {}
     combos = [lbl for _cid, lbl in _known_combos(app, s.scope)]
@@ -3099,23 +3125,23 @@ def _their_trade(app, s, short, over):
     # against the certified combination-level shortage board.
     raw_inventory = st.get("inv_raw", "\n".join(st.get("inv", [])))
     candidates = _parse_external_trade_inventory(raw_inventory)
-    unavail = set(st.get("unavail", []))
+    unavail = {str(x) for x in st.get("unavail", [])}       # stable unit keys (legacy int-index marks ignored)
 
     scored = []
     for i, unit in enumerate(candidates):
         score, reason, shortage_qty = _score_external_trade_candidate(unit, short)
         stage, tier = _trade_availability(unit)
         scored.append({"idx": i, "unit": unit, "score": score, "reason": reason, "qty": shortage_qty,
-                       "stage": stage, "tier": tier})
+                       "stage": stage, "tier": tier, "key": _trade_unit_key(unit)})
 
     # rank WITHIN each availability tier by the existing certified shortage FIT (age only as a tie-breaker). We
     # never mix tiers into one flat rank, so an anonymous/future ONS row cannot silently outrank an equivalent
-    # exact physical DLR-INV unit.
+    # exact physical DLR-INV unit. The Unavailable filter is by STABLE UNIT KEY, never row position.
     def _fit_key(t):
         u = t["unit"]
         return (-t["score"], -int(u.get("dis", 0) or 0), str(u.get("stock_number", "")),
                 str(u.get("serial", "")), str(u.get("identity", "")))
-    available = sorted((t for t in scored if t["idx"] not in unavail), key=lambda t: (t["tier"], *_fit_key(t)))
+    available = sorted((t for t in scored if t["key"] not in unavail), key=lambda t: (t["tier"], *_fit_key(t)))
     by_tier = {}
     for t in available:
         by_tier.setdefault(t["tier"], []).append(t)
@@ -3153,14 +3179,15 @@ def _their_trade(app, s, short, over):
             actionable = _trade_has_identity(unit) or not unit.get("structured", False)
             display = _trade_identity(unit, stage) if actionable else (
                 (unit.get("identity") or unit.get("description") or "") + " · combination only (no specific unit)")
-            unavail_btn = safe(_ws_btn(s, "/dealer-trade/their/unavailable", "idx", str(t["idx"]), "Unavailable")) \
+            unavail_btn = safe(_ws_btn(s, "/dealer-trade/their/unavailable", "key", t["key"], "Unavailable")) \
                 if actionable else safe('<span class="muted">—</span>')
             rows.append([safe(tier_badge) + (f' #{rank}' if rank > 1 else ' Best'),
                          esc(display), esc(f"{t['score']} | {t['reason']}"), unavail_btn])
 
-    # ---- units the operator marked unavailable (identity preserved; the mark bound to the exact unit/order) ----
+    # ---- units the operator marked unavailable (identity preserved; the mark is bound to the exact unit/order
+    #      by STABLE KEY, so it survives a re-paste/reorder and never blacklists a whole configuration) ----
     for t in scored:
-        if t["idx"] not in unavail:
+        if t["key"] not in unavail:
             continue
         rows.append([safe(badge("stale", "unavailable")),
                      esc(_trade_identity(t["unit"], t["stage"])), esc("—"), safe("")])

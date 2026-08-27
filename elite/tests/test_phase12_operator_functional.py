@@ -128,6 +128,50 @@ class TestOperatorFunctional(unittest.TestCase):
         tbl = b[b.index("What we should ask for back"):]
         self.assertLess(tbl.index("NIDVC60615"), tbl.index("900111"))
 
+    def test_their_trade_sit_row_is_in_transit_not_available_now(self):
+        # Real SIT screen shape: stock + serial present, DIS 0, a SPECIFIC future ETA date, and NO literal 'SIT'
+        # Location token in the copied row. The conservative fallback must classify this as IN TRANSIT — never
+        # AVAILABLE NOW just because it carries a stock number.
+        st = NewInvStore(self.conn, self.p.clock)
+        self._persist(st, self._combo(st, "8521", "GAT", "N"), acq=2, exc=0)
+        raw = ("5\tGrubbs INFINITI\tSITSTOCK1\t770001\tQX65 AUTO AWD\tAUTO\t"
+               "GAT\tN\t$65,000\t$63,000\t0\t09/07/2026\tSUV")
+        self.full.post("/dealer-trade/their", {"requested": "QX65 something", "inv": raw})
+        b = self.full.get("/dealer-trade", tab="their").body
+        self.assertIn("BEST IN-TRANSIT ASK", b)
+        self.assertNotIn("BEST AVAILABLE-NOW ASK", b)       # a SIT unit must never surface as available now
+        self.assertIn("IN TRANSIT", b)
+        self.assertIn("SITSTOCK1", b)                       # identity preserved
+        self.assertIn("770001", b)
+        self.assertIn("ETA 09/07/2026", b)                  # the specific future arrival is shown
+
+    def test_their_trade_unavailable_is_stable_across_reorder(self):
+        # Marking a physical unit unavailable must bind to its STABLE identity (dealer + stock + serial), not the
+        # row position: after the pasted rows are reordered, the SAME unit stays unavailable, the OTHER GAT/N unit
+        # stays eligible, and no configuration-wide blacklist occurs.
+        from elite.ui.views.operator import _parse_external_trade_inventory, _trade_unit_key
+        st = NewInvStore(self.conn, self.p.clock)
+        self._persist(st, self._combo(st, "8521", "GAT", "N"), acq=3, exc=0)
+        unit_a = ("12\tNalley INFINITI / Atlanta\tNIDVC60615\t606152\tQX65 AUTO AWD\tAUTO\t"
+                  "GAT\tN\t$64,000\t$62,000\t23\t\tDLR-INV")
+        unit_b = ("9\tNalley INFINITI / Atlanta\tNIDVC70000\t700000\tQX65 AUTO AWD\tAUTO\t"
+                  "GAT\tN\t$64,000\t$62,000\t14\t\tDLR-INV")
+        # paste A then B, then mark A (NIDVC60615 / 606152) unavailable by its stable key
+        self.full.post("/dealer-trade/their", {"requested": "QX65 something", "inv": unit_a + "\n" + unit_b})
+        key_a = _trade_unit_key(_parse_external_trade_inventory(unit_a)[0])
+        self.full.post("/dealer-trade/their/unavailable", {"key": key_a})
+        # REORDER: re-paste B then A (row positions swapped). The stable-key mark must follow the unit.
+        self.full.post("/dealer-trade/their", {"requested": "QX65 something", "inv": unit_b + "\n" + unit_a})
+        b = self.full.get("/dealer-trade", tab="their").body
+        self.assertIn("NIDVC60615", b)
+        self.assertIn("NIDVC70000", b)
+        # the marked unit A is the one shown unavailable; B is the actionable available-now ask
+        best = b[b.index("BEST AVAILABLE-NOW ASK"):b.index("What we should ask for back")]
+        self.assertIn("NIDVC70000", best)                   # B provides the available-now ask
+        self.assertNotIn("NIDVC60615", best)                # A stayed unavailable after the reorder
+        # exactly one unavailable badge/row — no configuration-wide blacklist of GAT/N
+        self.assertEqual(b.count("unavailable</span>"), 1)
+
     def test_their_trade_real_nna_tsv_ranks_exact_combination(self):
         # Real browser clipboard shape from NNA: tab-separated rows with hidden model-code metadata stripped.
         st = NewInvStore(self.conn, self.p.clock)
