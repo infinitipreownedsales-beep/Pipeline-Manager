@@ -2546,13 +2546,21 @@ def _ctp_board(app, scope, descriptions=None):
             order_code = xlat.order_code_for_code(d.model_code)
             if order_code and order_code not in line:
                 line = f"{order_code} {line}"
-        colors = d.colours(with_code=False, drop_unmapped=True) if d else ""
+        # A CTP CHANGE must be a COMPLETE, actionable configuration: BOTH color dimensions shown with their codes
+        # (never drop a dimension whose human name is unmapped — that produced the "— Graphite" one-colour target).
+        # color_complete is False when either exterior or interior CODE is missing (identity, not just name):
+        # such a target is gated in evaluate() rather than presented as an incomplete change.
+        colors = d.colours(with_code=True, drop_unmapped=False) if d else ""
+        ext_code = (getattr(d, "exterior_code", "") or "").strip() if d else ""
+        int_code = (getattr(d, "interior_code", "") or "").strip() if d else ""
         board[cid] = {"canonical": canonical, "line": line, "colors": colors,
                       "model": _model_of(_readable(canonical)),
                       # AUTHORITATIVE governed trim from the model-code family / translation (clean 'AUTOGRAPH',
                       # drivetrain kept separate). '' when unresolved — the same-trim rule then gates, never
                       # guessing a trim from the free-text line ('QX60 AUTOGRAPH AWD SUV AUTO' -> not 'AUTO').
                       "trim": (getattr(d, "trim", "") or "").strip() if d else "",
+                      "exterior_code": ext_code, "interior_code": int_code,
+                      "color_complete": bool(ext_code and int_code),
                       "excess": int(c["arrived_excess"]) + int(c["incoming_excess"]), "short": int(c["acquire_units"])}
     return board
 
@@ -3001,6 +3009,69 @@ def _score_external_trade_candidate(unit, short):
 
     return best_score, best_reason, best_qty
 
+
+_TRADE_TIER_LABEL = {1: "AVAILABLE NOW", 2: "IN TRANSIT", 3: "FUTURE / ORDER"}
+_TRADE_BEST_HEAD = {1: "BEST AVAILABLE-NOW ASK", 2: "BEST IN-TRANSIT ASK", 3: "BEST FUTURE / ORDER OPPORTUNITY"}
+
+
+def _trade_availability(unit):
+    """Governed availability class for a counterparty candidate, preserving its real source state (never
+    flattened). Returns (stage, tier): stage in DLR-INV / SIT / NNA-INV / ONS / OTHER; tier 1 = on a dealer lot
+    now (DLR-INV), 2 = positively-identified inbound (SIT / NNA-INV), 3 = future order (ONS), 4 = unknown. The
+    exact source Location token wins; only when absent is the class inferred conservatively from the preserved
+    stock / DIS / ETA fields. A future ONS row must never silently occupy the immediate-availability slot."""
+    hay = " ".join(str(unit.get(k) or "") for k in
+                   ("location", "stage", "status", "availability", "body_style", "raw")).upper()
+    stage = "OTHER"
+    for tok in ("DLR-INV", "NNA-INV", "SIT", "ONS"):
+        if tok in hay:
+            stage = tok
+            break
+    if stage == "OTHER":                                   # infer only when the source carried no explicit stage
+        eta = str(unit.get("eta") or "").strip()
+        dis = int(unit.get("dis") or 0)
+        has_stock = bool(str(unit.get("stock_number") or "").strip())
+        if has_stock or dis > 0:
+            stage = "DLR-INV"                              # a physical unit with a stock number / days-in-stock
+        elif eta:
+            stage = "ONS"                                  # a future order carrying only an ETA/month
+    tier = {"DLR-INV": 1, "SIT": 2, "NNA-INV": 2, "ONS": 3}.get(stage, 4)
+    return stage, tier
+
+
+def _trade_identity(unit, stage):
+    """The COMPLETE external-source identity for one candidate — never an anonymous combination when the source
+    row named a specific unit/order. dealer · Stock / Serial-or-Order · stage · model[/code] ext/int · DIS/ETA."""
+    parts = []
+    if unit.get("dealer"):
+        parts.append(str(unit["dealer"]))
+    ids = []
+    if str(unit.get("stock_number") or "").strip():
+        ids.append(f"Stock {unit['stock_number']}")
+    if str(unit.get("serial") or "").strip():
+        ids.append(f"Serial/Order {unit['serial']}")       # ONS orders keep their real order/serial identifier
+    if ids:
+        parts.append(" · ".join(ids))
+    if stage and stage != "OTHER":
+        parts.append(stage)
+    label = unit.get("identity") or unit.get("description") or ""
+    if label:
+        parts.append(str(label))
+    tail = []
+    if stage == "DLR-INV" and unit.get("dis"):
+        tail.append(f"DIS {unit['dis']}")
+    if str(unit.get("eta") or "").strip() and stage in ("ONS", "SIT", "NNA-INV"):
+        tail.append(f"ETA {unit['eta']}")
+    if tail:
+        parts.append(" · ".join(tail))
+    return " — ".join(parts)
+
+
+def _trade_has_identity(unit):
+    """True when the source row named a SPECIFIC unit/order (stock or serial/order#). We never ask the operator
+    to mark an anonymous candidate unavailable, and never present one as an actionable Best ask."""
+    return bool(str(unit.get("stock_number") or "").strip() or str(unit.get("serial") or "").strip())
+
 def _their_trade(app, s, short, over):
     st = _ws_get(app, s.scope, "trade_their", {}) or {}
     combos = [lbl for _cid, lbl in _known_combos(app, s.scope)]
@@ -3033,65 +3104,78 @@ def _their_trade(app, s, short, over):
     scored = []
     for i, unit in enumerate(candidates):
         score, reason, shortage_qty = _score_external_trade_candidate(unit, short)
-        # Older external units are preferred only as a tie-breaker: they may be easier
-        # for the counterparty dealer to release. Business fit always dominates age.
-        scored.append((i, unit, score, reason, shortage_qty))
+        stage, tier = _trade_availability(unit)
+        scored.append({"idx": i, "unit": unit, "score": score, "reason": reason, "qty": shortage_qty,
+                       "stage": stage, "tier": tier})
 
-    scored.sort(key=lambda t: (
-        t[0] in unavail,             # available first
-        -t[2],                       # strongest business fit
-        -int(t[1].get("dis", 0) or 0),  # older first only within equal fit
-        t[1].get("stock_number", ""),
-        t[1].get("identity", ""),
-    ))
+    # rank WITHIN each availability tier by the existing certified shortage FIT (age only as a tie-breaker). We
+    # never mix tiers into one flat rank, so an anonymous/future ONS row cannot silently outrank an equivalent
+    # exact physical DLR-INV unit.
+    def _fit_key(t):
+        u = t["unit"]
+        return (-t["score"], -int(u.get("dis", 0) or 0), str(u.get("stock_number", "")),
+                str(u.get("serial", "")), str(u.get("identity", "")))
+    available = sorted((t for t in scored if t["idx"] not in unavail), key=lambda t: (t["tier"], *_fit_key(t)))
+    by_tier = {}
+    for t in available:
+        by_tier.setdefault(t["tier"], []).append(t)
 
-    rows = []
-    available = [t for t in scored if t[0] not in unavail]
-    for rank, (i, unit, score, reason, shortage_qty) in enumerate(available, 1):
-        tag = "Best ask" if rank == 1 else f"#{rank}"
-
-        if unit.get("structured"):
-            label = unit.get("identity") or unit.get("description")
-            detail = []
-            if unit.get("stock_number"):
-                detail.append(f"Stock {unit['stock_number']}")
-            if unit.get("description"):
-                detail.append(unit["description"])
-            if unit.get("dis"):
-                detail.append(f"DIS {unit['dis']}")
-            display = label + (" | " + " | ".join(detail) if detail else "")
-        else:
-            display = unit.get("identity", "")
-
-        fit = f"{score} | {reason}"
-        rows.append([
-            esc(tag),
-            esc(display),
-            esc(fit),
-            safe(_ws_btn(s, "/dealer-trade/their/unavailable", "idx", str(i), "Unavailable"))
-        ])
-
-    for i, unit, score, reason, shortage_qty in scored:
-        if i not in unavail:
+    # ---- best-per-tier summary (immediate physical, in-transit, and future shown side by side, never merged) ----
+    best_items = ""
+    for tier in (1, 2, 3):
+        picks = by_tier.get(tier, [])
+        if not picks:
             continue
-        display = unit.get("identity") or unit.get("description") or unit.get("raw", "")
-        rows.append([
-            safe(badge("stale", "unavailable")),
-            esc(display),
-            esc("?"),
-            safe("")
-        ])
+        best = picks[0]
+        tag = safe(badge("stale", "FUTURE")) if tier == 3 else (
+              safe(badge("completed", "AVAILABLE NOW")) if tier == 1 else safe(badge("need", "IN TRANSIT")))
+        best_items += (f'<li><strong>{esc(_TRADE_BEST_HEAD[tier])}:</strong> {tag} '
+                       f'{esc(_trade_identity(best["unit"], best["stage"]))} '
+                       f'<span class="muted">— {esc(best["reason"])}</span></li>')
+    best_card = (f'<div class="card"><h3>Best ask by availability</h3>'
+                 f'<ul style="margin:4px 0;padding-left:18px">{best_items}</ul>'
+                 '<p class="muted">A future/order match may be strategically stronger, but it is a different '
+                 'transaction than an immediate physical unit — compare them side by side.</p></div>') if best_items else ""
+
+    # ---- full ranked table, grouped by availability tier, EVERY row carrying its complete source identity ----
+    rows = []
+    for tier in (1, 2, 3, 4):
+        picks = by_tier.get(tier, [])
+        if not picks:
+            continue
+        label = _TRADE_TIER_LABEL.get(tier, "UNKNOWN")
+        for rank, t in enumerate(picks, 1):
+            unit, stage = t["unit"], t["stage"]
+            tier_badge = badge("completed" if tier == 1 else "need" if tier == 2 else "stale", label)
+            # A STRUCTURED source row that lost its unit identity is never actionable (we never ask the operator
+            # to mark an anonymous unit unavailable). A deliberate free-text combination entry stays actionable —
+            # it is a combination-level ask by design, not a specific unit whose identity was dropped.
+            actionable = _trade_has_identity(unit) or not unit.get("structured", False)
+            display = _trade_identity(unit, stage) if actionable else (
+                (unit.get("identity") or unit.get("description") or "") + " · combination only (no specific unit)")
+            unavail_btn = safe(_ws_btn(s, "/dealer-trade/their/unavailable", "idx", str(t["idx"]), "Unavailable")) \
+                if actionable else safe('<span class="muted">—</span>')
+            rows.append([safe(tier_badge) + (f' #{rank}' if rank > 1 else ' Best'),
+                         esc(display), esc(f"{t['score']} | {t['reason']}"), unavail_btn])
+
+    # ---- units the operator marked unavailable (identity preserved; the mark bound to the exact unit/order) ----
+    for t in scored:
+        if t["idx"] not in unavail:
+            continue
+        rows.append([safe(badge("stale", "unavailable")),
+                     esc(_trade_identity(t["unit"], t["stage"])), esc("—"), safe("")])
 
     if candidates:
         parsed_note = (
             f'<p class="muted">{len(candidates)} external candidate'
-            f'{"s" if len(candidates) != 1 else ""} parsed. '
-            'Exact certified combination shortages rank ahead of model-level matches. '
-            'External units do not become our supply until a trade is committed.</p>'
-        )
-        out += ('<div class="card"><h3>What we should ask for back (ranked)</h3>'
+            f'{"s" if len(candidates) != 1 else ""} parsed. Availability is tiered — physical DLR-INV units are '
+            'immediate; SIT/NNA-INV are inbound; ONS are future orders (their order/serial and ETA are kept). '
+            'Within each tier, exact certified combination shortages rank ahead of model-level matches. External '
+            'units do not become our supply until a trade is committed.</p>')
+        out += best_card
+        out += ('<div class="card"><h3>What we should ask for back (by availability, ranked)</h3>'
                 + parsed_note
-                + table(["Rank", "Their unit / combination", "Fit", ""], rows)
+                + table(["Availability", "Their unit / order (full identity)", "Fit", ""], rows)
                 + '</div>')
     else:
         out += empty("Paste their inventory to rank the best ask.")

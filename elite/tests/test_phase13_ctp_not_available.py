@@ -277,6 +277,43 @@ class TestSameTrimSessionRule(unittest.TestCase):
         self.assertEqual(r.proposed_combination_id, "luxe")      # lock unaffected by the learned rule
 
 
+# ---- A4. COMPLETE-CONFIGURATION REQUIRED: a CTP CHANGE must carry both colour dimensions -------------------
+class TestCtpCompleteConfiguration(unittest.TestCase):
+    """Every recommended CTP CHANGE must be a COMPLETE governed target — model code, trim/drivetrain, and BOTH
+    exterior and interior. A target missing a colour dimension's identity is gated, never presented as a
+    one-colour change."""
+
+    def _board(self, *, target_complete=True, target_colors="Mineral Black (GAT) / Graphite (G)"):
+        return {
+            "src": {"canonical": "84317 QX60 LUXE FWD KAD/K", "line": "84317 QX60 LUXE FWD",
+                    "colors": "Graphite Shadow (KAD) / Stone Gray (K)", "model": "QX60", "trim": "LUXE",
+                    "color_complete": True, "excess": 2, "short": 0},
+            "tgt": {"canonical": "84617 QX60 AUTOGRAPH AWD GAT/G", "line": "84617 QX60 AUTOGRAPH AWD",
+                    "colors": target_colors, "model": "QX60", "trim": "AUTOGRAPH",
+                    "color_complete": target_complete, "excess": 0, "short": 3},
+        }
+
+    def _order(self):
+        c = CTP.Candidate(order_number="TK1", model="QX60", arrival_month="2026-11")
+        return CTP.Reconciled(c, CTP.MATCHED, {"combination_id": "src", "model": "QX60", "arrival_month": "2026-11"},
+                              "matched", "order#")
+
+    def test_complete_target_change_shows_both_colours(self):
+        r = CTP.evaluate([self._order()], self._board())[0]
+        self.assertEqual(r.decision_state, CTP.CHANGE)
+        self.assertEqual(r.proposed_combination_id, "tgt")
+        self.assertIn("(GAT)", r.proposed_colors)             # exterior dimension present with its code
+        self.assertIn("(G)", r.proposed_colors)               # interior dimension present with its code
+        self.assertIn("/", r.proposed_colors)                 # both dimensions, not one
+
+    def test_incomplete_colour_target_is_gated_not_recommended(self):
+        # target missing a colour dimension's identity -> gated (never a one-colour "— Graphite" change)
+        r = CTP.evaluate([self._order()],
+                         self._board(target_complete=False, target_colors="Graphite (G)"))[0]
+        self.assertEqual(r.decision_state, CTP.KEEP)
+        self.assertNotEqual(r.proposed_combination_id, "tgt")
+
+
 # ---- C. CONFIRMED CHANGED is a fixed execution constraint (engine-level) ----------------------------------
 class TestConfirmedChangedEngine(unittest.TestCase):
     def _board(self):

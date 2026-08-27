@@ -526,7 +526,8 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
     state = {cid: {"excess": int(b.get("excess", 0) or 0), "short": int(b.get("short", 0) or 0),
                    "canonical": b.get("canonical", cid), "line": b.get("line", ""), "colors": b.get("colors", ""),
                    "model": (b.get("model") or _model_of(b.get("line", ""))).upper(),
-                   "trim": _norm_trim(b.get("trim", ""))}    # AUTHORITATIVE governed trim supplied by the caller
+                   "trim": _norm_trim(b.get("trim", "")),    # AUTHORITATIVE governed trim supplied by the caller
+                   "color_complete": bool(b.get("color_complete", True))}   # both colour dims resolved (or gate)
              for cid, b in (board or {}).items()}            # (model-code family / translation) — never line-sliced
 
     def short_targets(model):
@@ -669,6 +670,9 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
                 return False                                  # (1) exact configuration rejected
             if same_trim_only and source_trim and st.get("trim", "") != source_trim:
                 return False                                  # (2) cross-trim target removed by the learned rule
+            if not st.get("color_complete", True):
+                return False                                  # (3) incomplete config (missing exterior/interior
+                                                              #     identity) — gate, never present a partial change
             return True
         eligible = [(tcid, st) for tcid, st in all_targets if _eligible_target(tcid, st)]
         cross_trim_blocked = bool(same_trim_only and source_trim and all_targets and not eligible

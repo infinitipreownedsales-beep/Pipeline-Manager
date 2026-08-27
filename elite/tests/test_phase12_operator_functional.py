@@ -81,13 +81,52 @@ class TestOperatorFunctional(unittest.TestCase):
 
     # Dealer Trade Their: paste inventory, best-ask ranks, Unavailable promotes next
     def test_their_trade_unavailable_promotes(self):
-        self.full.post("/dealer-trade/their", {"requested": "QX60 something",
-                                              "inv": "QX60 LUXE unit A\nQX80 unit B"})
+        # A specific physical DLR-INV unit is an actionable, identity-bearing candidate: it surfaces as an
+        # AVAILABLE-NOW ask, and marking it unavailable excludes that exact unit (by its parsed source index).
+        st = NewInvStore(self.conn, self.p.clock)
+        self._persist(st, self._combo(st, "8521", "GAT", "N"), acq=2, exc=0)
+        raw = ("12\tNalley INFINITI / Atlanta\tNIDVC60615\t606152\tQX65 AUTO AWD\tAUTO\t"
+               "GAT\tN\t$64,815\t$62,267\t23\t\tDLR-INV")
+        self.full.post("/dealer-trade/their", {"requested": "QX65 something", "inv": raw})
         b = self.full.get("/dealer-trade", tab="their").body
-        self.assertIn("Best ask", b)
+        self.assertIn("Best ask by availability", b)
+        self.assertIn("AVAILABLE NOW", b)
+        self.assertIn("NIDVC60615", b)                      # stock preserved
+        self.assertIn("606152", b)                          # serial preserved
         self.full.post("/dealer-trade/their/unavailable", {"idx": "0"})
         b2 = self.full.get("/dealer-trade", tab="their").body
         self.assertIn("unavailable", b2.lower())
+        self.assertIn("NIDVC60615", b2)                     # identity preserved on the unavailable row
+
+    def test_their_trade_tiers_physical_dlr_inv_above_future_ons(self):
+        # LIVE NALLEY CASE: a physical DLR-INV GAT/N unit plus two future ONS orders (exact GAT/N and XEX/G).
+        # Availability must NOT be flattened: the immediate physical unit surfaces as the AVAILABLE-NOW ask with
+        # its full identity, and the future orders keep their order/serial + ETA and are labeled FUTURE — a
+        # future/order row never silently occupies the immediate slot.
+        st = NewInvStore(self.conn, self.p.clock)
+        self._persist(st, self._combo(st, "8521", "GAT", "N"), acq=2, exc=0)
+        raw = "\n".join([
+            "12\tNalley INFINITI / Atlanta\tNIDVC60615\t606152\tQX65 AUTO AWD\tAUTO\tGAT\tN\t$64,000\t$62,000\t23\t\tDLR-INV",
+            "0\tGrubbs INFINITI\t\t900111\tQX65 AUTO AWD\tAUTO\tGAT\tN\t$65,000\t$63,000\t0\t2026-12\tONS",
+            "0\tGrubbs INFINITI\t\t900222\tQX65 AUTO AWD\tAUTO\tXEX\tG\t$65,000\t$63,000\t0\t2027-01\tONS",
+        ])
+        self.full.post("/dealer-trade/their", {"requested": "QX65 something", "inv": raw})
+        b = self.full.get("/dealer-trade", tab="their").body
+        # best-per-tier: immediate physical unit and future order are shown side by side, not merged
+        self.assertIn("BEST AVAILABLE-NOW ASK", b)
+        self.assertIn("BEST FUTURE / ORDER OPPORTUNITY", b)
+        self.assertLess(b.index("BEST AVAILABLE-NOW ASK"), b.index("BEST FUTURE / ORDER OPPORTUNITY"))
+        # the physical DLR-INV unit keeps its complete identity and is tier 1
+        self.assertIn("NIDVC60615", b)
+        self.assertIn("606152", b)
+        self.assertIn("DLR-INV", b)
+        # the future ONS orders keep their real order/serial + ETA, labeled FUTURE (not anonymous)
+        self.assertIn("Serial/Order 900111", b)
+        self.assertIn("2026-12", b)
+        self.assertIn("FUTURE", b)
+        # in the ranked table the immediate physical unit (tier 1) precedes the future ONS orders (tier 3)
+        tbl = b[b.index("What we should ask for back"):]
+        self.assertLess(tbl.index("NIDVC60615"), tbl.index("900111"))
 
     def test_their_trade_real_nna_tsv_ranks_exact_combination(self):
         # Real browser clipboard shape from NNA: tab-separated rows with hidden model-code metadata stripped.
@@ -113,9 +152,9 @@ class TestOperatorFunctional(unittest.TestCase):
         self.assertIn("VC605214", b)
         self.assertIn("VC601030", b)
 
-        # Exact GAT/N shortage must rank above same-code/same-exterior GAT/G,
-        # regardless of the latter unit being substantially older.
-        ranked = b[b.index("What we should ask for back (ranked)"):]
+        # Exact GAT/N shortage must rank above same-code/same-exterior GAT/G within the same availability tier,
+        # regardless of the latter unit being substantially older. Both are physical DLR-INV units.
+        ranked = b[b.index("What we should ask for back (by availability, ranked)"):]
         self.assertLess(ranked.index("VC605214"), ranked.index("VC601030"))
 
     # Data: bench persists + excludes from CPO; unavailable interval persists; ICV/Velocity program persists
