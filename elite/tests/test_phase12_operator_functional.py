@@ -10,7 +10,7 @@ from elite.workflow.fixtures import SCOPE
 from elite.db import current_version
 from elite.newinv.store import NewInvStore
 from elite.newinv.dms_identity import resolve_or_create_planning_combination
-from elite.newinv.models import InventoryPlanResult
+from elite.newinv.models import InventoryPlanResult, InventoryPlanMonth
 from elite.ids import new_id
 
 FORBIDDEN = ["not yet built", "not built", "not wired", "intentionally deferred", "coming soon",
@@ -127,6 +127,49 @@ class TestOperatorFunctional(unittest.TestCase):
         # in the ranked table the immediate physical unit (tier 1) precedes the future ONS orders (tier 3)
         tbl = b[b.index("What we should ask for back"):]
         self.assertLess(tbl.index("NIDVC60615"), tbl.index("900111"))
+
+    def _persist_series(self, st, cb, *, acq, months):
+        # persist an issued plan WITH a certified time-phased shortage series (inventory_plan_month)
+        st.add_plan(InventoryPlanResult(
+            id=new_id("plan"), store_scope=SCOPE, planning_state="short", combination_id=cb.id,
+            expected_demand=1.0, current_supply=0, future_supply=0, committed_supply=0, qualifying_supply=0,
+            desired_ending_coverage={"target_units": 2.0}, need=float(acq), excess=0.0, confidence="medium",
+            evidence={"model": "m", "decision": {"acquire_units": acq, "arrived_excess": 0, "incoming_excess": 0,
+                                                 "target_level": 2.0, "incoming_in_horizon": 0, "dts_burden": 1.0}},
+            policy_versions=[], calculation_version="cv", reproducibility_package="r", demand_result_id=None,
+            status="issued",
+            months=[InventoryPlanMonth(id=new_id("ipm"), plan_id="", month=m, expected_demand=1.0,
+                                       cumulative_demand=1.0, cumulative_supply=0, shortage=float(sh), excess=0.0,
+                                       confidence="medium", seq=i) for i, (m, sh) in enumerate(months)]))
+
+    def test_their_trade_best_overall_picks_immediate_exact_over_later_exact(self):
+        # LIVE NALLEY DECISION CASE. GAT/N is a certified shortage projected short across the horizon. Three
+        # candidates: an IMMEDIATE exact DLR-INV unit, a same-code IN-TRANSIT unit, and a LATER (October) exact
+        # ONS order. Elite must pick ONE best overall — the immediate exact unit — because it relieves the most
+        # projected shortage-months; the later exact order and the weaker in-transit unit are alternatives only.
+        st = NewInvStore(self.conn, self.p.clock)
+        gatn = self._combo(st, "8521", "GAT", "N")
+        self._persist_series(st, gatn, acq=2, months=[("2026-09", 1), ("2026-10", 1), ("2026-11", 1),
+                                                      ("2026-12", 1), ("2027-01", 1), ("2027-02", 1)])
+        raw = "\n".join([
+            "23\tNalley INFINITI / Atlanta\tNIDVC60615\t606152\tQX65 AUTO AWD\tAUTO\tGAT\tN\t$64,000\t$62,000\t23\t\tDLR-INV",
+            "0\tGrubbs INFINITI\tNIDVC60850\t608501\tQX65 AUTO AWD\tAUTO\tGAQ\tG\t$64,000\t$62,000\t0\t09/07/2026\tSIT",
+            "0\tGrubbs INFINITI\t\tTK65949\tQX65 AUTO AWD\tAUTO\tGAT\tN\t$65,000\t$63,000\t0\tOctober\tONS",
+        ])
+        self.full.post("/dealer-trade/their", {"requested": "QX65 something", "inv": raw})
+        b = self.full.get("/dealer-trade", tab="their").body
+        self.assertIn("Best overall trade opportunity", b)
+        card = b[b.index("Best overall trade opportunity"):b.index("Best ask by availability")]
+        headline = card[:card.index("Why this is best")]
+        self.assertIn("NIDVC60615", headline)               # the immediate exact unit is the overall choice
+        self.assertNotIn("TK65949", headline)               # not the later October exact order
+        self.assertNotIn("NIDVC60850", headline)            # not the weaker in-transit unit
+        self.assertIn("AVAILABLE NOW", card)                # its availability is shown
+        self.assertIn("shortage-month", card)               # the why cites projected shortage relieved
+        self.assertIn("Show best-overall comparison", card) # comparison proof exposed
+        # the alternatives are retained below as supporting, not decisions
+        self.assertIn("Best ask by availability", b)
+        self.assertIn("Supporting alternatives", b)
 
     def test_their_trade_sit_row_is_in_transit_not_available_now(self):
         # Real SIT screen shape: stock + serial present, DIS 0, a SPECIFIC future ETA date, and NO literal 'SIT'

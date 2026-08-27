@@ -3098,6 +3098,115 @@ def _trade_unit_key(unit):
     return "|".join(("C", dealer, stage, _n(unit.get("identity") or unit.get("description"))))
 
 
+def _trade_eta_month(unit, stage):
+    """The month a candidate would realistically become OUR supply: DLR-INV -> None (now); SIT/ONS -> its
+    specific ETA / production month, parsed conservatively to 'YYYY-MM' (or 'MONTH-NN' when only a month name is
+    given, resolved against the horizon), or '' when no usable timing is present."""
+    if stage == "DLR-INV":
+        return None
+    import re
+    e = str(unit.get("eta") or "").strip()
+    if not e:
+        return ""
+    m = re.match(r"^(\d{4})-(\d{1,2})", e)                   # YYYY-MM(-DD)
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}"
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})", e)         # MM/DD/YYYY
+    if m:
+        return f"{m.group(3)}-{int(m.group(1)):02d}"
+    m = re.match(r"^(\d{1,2})/(\d{4})$", e)                  # MM/YYYY
+    if m:
+        return f"{m.group(2)}-{int(m.group(1)):02d}"
+    names = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+             "november", "december"]
+    tok = e.split()[0].lower() if e.split() else ""
+    if tok in names:
+        return f"MONTH-{names.index(tok) + 1:02d}"           # year-agnostic month; resolved against the horizon
+    return ""
+
+
+def _trade_combo_key(model, code, ext, intr):
+    return (str(model or "").upper(), str(code or "").upper(), str(ext or "").upper(), str(intr or "").upper())
+
+
+def _trade_shortage_series(app, scope):
+    """Per-configuration certified time-phased SHORTAGE series (no recompute), keyed by governed build identity
+    (model, model_code, exterior, interior) -> {'months': [(YYYY-MM, shortage)], 'acquire_now': n}. Read straight
+    from the issued inventory_plan_result + inventory_plan_month — the SAME certified projection every other
+    engine reads. Nothing is fabricated and no shortage math is changed."""
+    conn = _conn(app)
+    ident = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
+        "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (scope,)).fetchall()}
+    pmonths = _plan_months(app, scope)
+    series = {}
+    for r in conn.execute("SELECT id, combination_id, evidence FROM inventory_plan_result "
+                          "WHERE store_scope=? AND status='issued'", (scope,)).fetchall():
+        readable = _readable(ident.get(r["combination_id"], r["combination_id"]))
+        parts = readable.split()
+        code = parts[1] if len(parts) > 1 else ""
+        colors = parts[2] if len(parts) > 2 else ""
+        ext, intr = (colors.split("/", 1) + [""])[:2] if "/" in colors else ("", "")
+        key = _trade_combo_key(_model_of(readable), code, ext, intr)
+        months = pmonths.get(r["id"]) or {}
+        ms = sorted(((m, float(row["shortage"] or 0.0)) for m, row in months.items()), key=lambda t: t[0])
+        try:
+            dec = (json.loads(r["evidence"]) if r["evidence"] else {}).get("decision") or {}
+        except Exception:   # noqa: BLE001
+            dec = {}
+        series[key] = {"months": ms, "acquire_now": int(dec.get("acquire_units", 0) or 0)}
+    return series
+
+
+def _trade_overall_benefit(unit, stage, series):
+    """The horizon-aware inventory-position benefit of trading FOR this candidate: the certified projected
+    shortage of the candidate's EXACT configuration that this ONE unit would relieve, measured from the month it
+    would actually become our supply through the end of the certified horizon (one unit relieves at most one unit
+    of shortage per month). Uses only the governed projection — no invented weights, no availability bonuses.
+    Returns a dict, or None when the candidate's exact configuration is not a certified plan/shortage."""
+    key = _trade_combo_key(unit.get("model"), unit.get("model_code"), unit.get("ext"), unit.get("int"))
+    s = series.get(key)
+    if not s or not s["months"]:
+        return None
+    months = s["months"]
+    avail = _trade_eta_month(unit, stage)
+    if avail is None:
+        start = 0                                            # available now -> the whole horizon
+    elif avail == "":
+        start = len(months)                                 # no usable timing -> credit no early relief
+    elif avail.startswith("MONTH-"):
+        mm = avail.split("-")[1]
+        start = next((i for i, (ym, _sh) in enumerate(months) if ym.split("-")[1] == mm), len(months))
+    else:
+        start = next((i for i, (ym, _sh) in enumerate(months) if ym >= avail), len(months))
+    relieved = sum(min(1.0, max(0.0, sh)) for _ym, sh in months[start:])
+    horizon = sum(min(1.0, max(0.0, sh)) for _ym, sh in months)
+    return {"benefit": round(relieved, 3), "horizon_short": round(horizon, 3),
+            "avail_month": (months[start][0] if start < len(months) else (avail or "beyond horizon")),
+            "months_relieved": len(months) - start,
+            "shortage_at_avail": (round(months[start][1], 2) if start < len(months) else 0.0)}
+
+
+def _trade_overall_why(t, ov, harmful, alt):
+    """Plain-business explanation of why this candidate is the best OVERALL trade: fit, timing, projected need
+    when it would arrive, effect on our future inventory position, and outgoing-unit harm."""
+    when = "available now on a dealer lot" if t["stage"] == "DLR-INV" else \
+        f"arriving {ov['avail_month'] if ov else 'later'} ({t['stage']})"
+    if ov and ov["benefit"] > 0:
+        need = (f"our certified board still projects this exact configuration short by "
+                f"{ov['shortage_at_avail']} when it would arrive, and one unit relieves about "
+                f"{ov['benefit']} shortage-month(s) across the horizon — the largest projected relief of any "
+                f"available candidate")
+    elif ov:
+        need = ("our certified board does not project this configuration short by the time it would arrive, so it "
+                "adds flexibility rather than filling a proven gap")
+    else:
+        need = ("this configuration is not a certified shortage, so it is a model-level flexibility play rather "
+                "than a proven-need fill")
+    harm = (f" Rather than releasing the requested unit (a build we are short on), offer “{alt}” instead — we "
+            f"are over-stocked there, so the outgoing harm is lower.") if (harmful and alt) else ""
+    return f"{t['reason']}, {when}; {need}.{harm}"
+
+
 def _their_trade(app, s, short, over):
     st = _ws_get(app, s.scope, "trade_their", {}) or {}
     combos = [lbl for _cid, lbl in _known_combos(app, s.scope)]
@@ -3112,6 +3221,7 @@ def _their_trade(app, s, short, over):
     out = '<div class="card"><h2>Their Trade</h2><p class="muted">Help the other store while protecting our own '
     out += 'inventory. External inventory never becomes our supply until a trade is committed.</p>' + entry + '</div>'
     req = st.get("requested", "")
+    harmful, alt = False, None
     if req:
         # is what they asked for something WE are short on? then propose a lower-harm alternative from our over-stock
         harmful = any(b["model"] in req.upper() or b["identity"] in req for b in short)
@@ -3146,7 +3256,53 @@ def _their_trade(app, s, short, over):
     for t in available:
         by_tier.setdefault(t["tier"], []).append(t)
 
-    # ---- best-per-tier summary (immediate physical, in-transit, and future shown side by side, never merged) ----
+    # ---- DECISION LAYER: the single BEST OVERALL trade across ALL availability states. Each candidate's value
+    #      is measured at the month it would actually become our supply, against the certified projected shortage
+    #      of its EXACT configuration over the horizon (governed inventory_plan_month). Availability tiers are NOT
+    #      hardwired — timing is captured only through when the relief starts. Fit is the tie-break; sooner is the
+    #      final tie-break, never an override. ----
+    series = _trade_shortage_series(app, s.scope)
+    for t in scored:
+        t["overall"] = _trade_overall_benefit(t["unit"], t["stage"], series)
+
+    def _overall_key(t):
+        ben = t["overall"]["benefit"] if t["overall"] else -1.0
+        return (-ben, -t["score"], t["tier"], str(t["unit"].get("identity", "")))
+    best_overall = min(available, key=_overall_key) if available else None
+
+    overall_card = ""
+    if best_overall is not None:
+        bo, ov = best_overall, best_overall["overall"]
+        why = _trade_overall_why(bo, ov, harmful, alt)
+        offer_line = (f'<p><strong>Offer instead:</strong> {esc(alt)} '
+                      '<span class="muted">(we are over-stocked there — lower outgoing harm than releasing the '
+                      'requested unit)</span></p>') if (harmful and alt) else ""
+        # comparison proof: best-of-each-tier by the same horizon-aware benefit, so the operator sees why A beat B/C
+        cmp_rows = []
+        for tier in (1, 2, 3):
+            picks = by_tier.get(tier, [])
+            if not picks:
+                continue
+            bt = min(picks, key=_overall_key)
+            btov = bt["overall"]
+            cmp_rows.append((_TRADE_TIER_LABEL[tier],
+                             f'{_trade_identity(bt["unit"], bt["stage"])} — fit {bt["score"]} '
+                             f'({bt["reason"]}); projected shortage relieved '
+                             f'{btov["benefit"] if btov else 0} over {btov["months_relieved"] if btov else 0} mo '
+                             f'from {btov["avail_month"] if btov else "n/a"}'))
+        overall_card = (
+            '<div class="card" style="border-left:4px solid var(--accent,#2f6fed)">'
+            '<h3>Best overall trade opportunity</h3>'
+            f'<div style="font-weight:600">{esc(_trade_identity(bo["unit"], bo["stage"]))}</div>'
+            f'<div class="muted">{esc(_TRADE_TIER_LABEL.get(bo["tier"], "UNKNOWN"))}'
+            + (f' · would become our supply {esc(ov["avail_month"])}' if ov else '') + '</div>'
+            f'<p><strong>Ask for this unit / order back.</strong></p>'
+            + offer_line
+            + f'<p><strong>Why this is best:</strong> {esc(why)}</p>'
+            + disclosure("Show best-overall comparison (why this beat the alternatives)", kv(cmp_rows))
+            + '</div>')
+
+    # ---- best-per-tier summary (SUPPORTING ALTERNATIVES, not decisions the operator must make) ----
     best_items = ""
     for tier in (1, 2, 3):
         picks = by_tier.get(tier, [])
@@ -3160,8 +3316,9 @@ def _their_trade(app, s, short, over):
                        f'<span class="muted">— {esc(best["reason"])}</span></li>')
     best_card = (f'<div class="card"><h3>Best ask by availability</h3>'
                  f'<ul style="margin:4px 0;padding-left:18px">{best_items}</ul>'
-                 '<p class="muted">A future/order match may be strategically stronger, but it is a different '
-                 'transaction than an immediate physical unit — compare them side by side.</p></div>') if best_items else ""
+                 '<p class="muted">Supporting alternatives by availability. Elite\'s single overall recommendation '
+                 'is above — these are the best in each timing bucket for reference, not decisions to weigh.</p>'
+                 '</div>') if best_items else ""
 
     # ---- full ranked table, grouped by availability tier, EVERY row carrying its complete source identity ----
     rows = []
@@ -3199,6 +3356,7 @@ def _their_trade(app, s, short, over):
             'immediate; SIT/NNA-INV are inbound; ONS are future orders (their order/serial and ETA are kept). '
             'Within each tier, exact certified combination shortages rank ahead of model-level matches. External '
             'units do not become our supply until a trade is committed.</p>')
+        out += overall_card
         out += best_card
         out += ('<div class="card"><h3>What we should ask for back (by availability, ranked)</h3>'
                 + parsed_note
