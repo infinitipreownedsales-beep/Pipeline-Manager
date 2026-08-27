@@ -15,11 +15,74 @@ already earned is sunk/common; Velocity is contingent on meeting the 240-day dea
 from __future__ import annotations
 
 import datetime as _dt
+from statistics import median
 
 from .sl_policy import SLPolicyStore
 from .program_inputs import ProgramInputsStore
 from .keep_pull_swap import compare_actions
 from .sell_time import estimate_sell_time, latest_prudent_release
+
+RESALE_WINDOW_GATE = 5        # minimum observed resales in an age window before a time-sensitive price is defensible
+
+
+def _my_int(v):
+    d = "".join(ch for ch in str(v or "") if ch.isdigit())
+    return int(d[:4]) if len(d) >= 4 else None
+
+
+def _price_num(v):
+    s = str(v if v is not None else "").replace(",", "").replace("$", "").strip()
+    try:
+        return float(s) if s else None
+    except ValueError:
+        return None
+
+
+def _age_months_at(model_year, sale_date):
+    """Vehicle lifecycle AGE in whole months at a sale date = months from Jan 1 of its model year to the sale
+    date. A continuous axis: two sales in the same integer model-year-age bucket but different months differ."""
+    my = _my_int(model_year)
+    if my is None:
+        return None
+    try:
+        d = _dt.date.fromisoformat(str(sale_date)[:10])
+    except (ValueError, TypeError):
+        return None
+    return (d.year - my) * 12 + (d.month - 1)
+
+
+def _time_resale_price(rows, model, model_year, sale_date):
+    """Expected used SELLING PRICE at a SPECIFIC sale date from the store's OWN observed resales, on a continuous
+    AGE-IN-MONTHS-from-model-year axis POOLED across model years (a real depreciation-by-age curve). This makes a
+    30/60/90-day-later sale price differ from now even when both fall in the same integer model-year-age bucket.
+
+    Governance: real observations only (no invented monthly rate, no static all-MY median, no oldest-cohort
+    fallback); dealer Vehicle Cost is never mixed into this market curve; MSRP is not required. If the observed
+    history cannot support a defensible price within ±6 months of the target age, it GATES. Returns
+    (price, provenance, confidence)."""
+    target = _age_months_at(model_year, sale_date)
+    if target is None:
+        return None, "model-year / sale-date unresolved — cannot place on the age curve", "none"
+    model_u = (model or "").upper()
+    obs = []
+    for r in rows or ():
+        if (r.get("model") or "").upper() != model_u:
+            continue
+        price = _price_num(r.get("price"))
+        am = _age_months_at(r.get("year"), r.get("sold_date"))
+        if price is None or price <= 0 or am is None:
+            continue
+        obs.append((am, price))
+    if len(obs) < RESALE_WINDOW_GATE:
+        return None, f"no defensible {model_u} resale sample for a time-sensitive curve", "none"
+    for w in (2, 3, 4, 6):
+        win = [p for am, p in obs if target - w <= am <= target + w]
+        if len(win) >= RESALE_WINDOW_GATE:
+            conf = "moderate" if w <= 3 else "thin"
+            return (round(median(win), 2),
+                    f"{model_u} observed resale median at ~{target}mo model-year age (±{w}mo window, "
+                    f"n={len(win)} real sales)", conf)
+    return None, f"insufficient {model_u} resale history within ±6mo of ~{target}mo age — gated (not manufactured)", "none"
 
 
 def _iso_today(clock):
@@ -97,8 +160,8 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
     total_to_retail = (vel_e.day_cap if (vel_e and vel_e.day_cap is not None) else 240)  # 240 = total-to-retail
 
     # --- learned estimates ---
-    sell = estimate_sell_time(_retail_rows(app, scope), model=model, model_year=my,
-                              trim=None, drivetrain=None)
+    retail_rows = _retail_rows(app, scope)
+    sell = estimate_sell_time(retail_rows, model=model, model_year=my, trim=None, drivetrain=None)
     sell_days = sell["days"] if sell else None
     buffer_days = pol.protection_buffer_days()
     release = latest_prudent_release(in_service_date=in_service, total_to_retail_days=total_to_retail,
@@ -113,18 +176,22 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
             except (ValueError, TypeError):
                 keep_horizon_days = 0
 
-    # --- forward exit prices (front-end) from maturity evidence ---
-    def _age_years(days_from_in_service):
+    # --- forward exit prices (front-end) from the TIME-SENSITIVE observed resale curve ---
+    # price is a function of the actual SALE DATE (continuous age-in-months), so holding to a later date yields a
+    # different empirical price even when both dates fall in the same integer model-year-age bucket. This prevents
+    # KEEP looking superior merely because write-down lowers basis while a flat resale price stays constant.
+    def _exit_date(days_from_in_service):
         if not in_service:
             return None
         try:
-            exit_date = _dt.date.fromisoformat(in_service[:10]) + _dt.timedelta(days=int(days_from_in_service))
-            return exit_date.year - int(my) if my.isdigit() else None
+            return (_dt.date.fromisoformat(in_service[:10])
+                    + _dt.timedelta(days=int(days_from_in_service))).isoformat()
         except (ValueError, TypeError):
             return None
-    price_now, pn_basis, pn_conf = _price_at_model_year_age(mi, _age_years(tenure_days_now or 0))
-    price_future, pf_basis, pf_conf = _price_at_model_year_age(
-        mi, _age_years((tenure_days_now or 0) + keep_horizon_days + (sell_days or 0)))
+    sale_now = _exit_date(tenure_days_now or 0)
+    sale_future = _exit_date((tenure_days_now or 0) + keep_horizon_days + (sell_days or 0))
+    price_now, pn_basis, pn_conf = _time_resale_price(retail_rows, model, my, sale_now)
+    price_future, pf_basis, pf_conf = _time_resale_price(retail_rows, model, my, sale_future)
     if price_now is None:
         gated.append("expected used price now")
     if price_future is None:

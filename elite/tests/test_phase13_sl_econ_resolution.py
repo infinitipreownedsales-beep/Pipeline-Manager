@@ -39,6 +39,19 @@ def _unit(my=""):
                      quality_flags=(), model_year=my)
 
 
+def _priced_rows(model="QX60", ages=range(3, 16), per=5):
+    """Real-shaped resale history spanning lifecycle age (months from model year), price declining with age."""
+    out = []
+    for my in (2024, 2025, 2026):
+        for a in ages:
+            t = my * 12 + a
+            y, m = t // 12, t % 12 + 1
+            for k in range(per):
+                out.append({"model": model, "year": str(my), "sold_date": f"{y:04d}-{m:02d}-15",
+                            "price": str(52000 - 400 * a + (k - 2) * 200), "days_to_sell": "40"})
+    return out
+
+
 class TestIcvResolvesFromInServiceMonth(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -135,18 +148,17 @@ class TestUnitDecisionResolvesWithUnknownMy(unittest.TestCase):
         self.assertIn("expected used price now", d["gated"])             # price gates on unknown MY, never flat median
         self.assertEqual(d["action"], "UNRESOLVED")
 
-    def test_resolved_my_yields_age_specific_decision(self):
-        # a RESOLVED MY (2026) + age bins -> real decision, price_now != price_future when the exit crosses a year
-        mi = ModelIntel(model="QX60", active_units=10, sales_count=60, dts=None, resale_model=_resale_model(41000.0),
-                        maturity=(MaturityBin("0", 15, 48000.0, False), MaturityBin("1", 12, 43000.0, False)))
-        with patch("elite.loaner.sl_decision._retail_rows",
-                   return_value=[{"model": "QX60", "year": "2026", "days_to_sell": 40} for _ in range(8)]):
-            d = build_unit_decision(self.app, SCOPE, _unit(my="2026"), mi, today="2026-08-09",
+    def test_resolved_my_yields_time_sensitive_decision(self):
+        # a RESOLVED MY (2026) + real resale history -> real decision, and price_future < price_now purely because
+        # holding pushes the sale to a later date (older lifecycle age on the empirical curve), NOT integer age.
+        rows = _priced_rows()
+        with patch("elite.loaner.sl_decision._retail_rows", return_value=rows):
+            d = build_unit_decision(self.app, SCOPE, _unit(my="2026"), None, today="2026-08-09",
                                     keep_horizon_days=200)
         self.assertIn(d["action"], ("KEEP", "PULL", "SWAP"))             # real decision
         self.assertEqual(d["facts"]["icv"], 6500)
-        self.assertEqual(d["facts"]["price_now"], 48000.0)             # age-0 bin
-        self.assertLess(d["facts"]["price_future"], d["facts"]["price_now"])   # future exit depreciates
+        self.assertIsNotNone(d["facts"]["price_now"])
+        self.assertLess(d["facts"]["price_future"], d["facts"]["price_now"])   # later sale date -> lower price
 
 
 if __name__ == "__main__":

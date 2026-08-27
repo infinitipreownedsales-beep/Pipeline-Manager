@@ -27,6 +27,20 @@ def _mi(price_age0=52000, price_age1=45000):
                       maturity=(MaturityBin("0", 12, price_age0, False), MaturityBin("1", 10, price_age1, False)))
 
 
+def _priced_rows(model="QX60", ages=range(3, 16), per=5):
+    """Real-shaped resale history spanning lifecycle age (months from model year), price declining ~$400/month —
+    the empirical curve the time-sensitive resale price is built from (build_unit_decision prices from this)."""
+    out = []
+    for my in (2024, 2025, 2026):
+        for a in ages:
+            t = my * 12 + a
+            y, m = t // 12, t % 12 + 1
+            for k in range(per):
+                out.append({"model": model, "year": str(my), "sold_date": f"{y:04d}-{m:02d}-15",
+                            "price": str(52000 - 400 * a + (k - 2) * 200), "days_to_sell": "40"})
+    return out
+
+
 class TestUnitDecision(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -45,8 +59,7 @@ class TestUnitDecision(unittest.TestCase):
         self.p.close()
 
     def test_full_inputs_produce_action_with_facts(self):
-        with patch("elite.loaner.sl_decision._retail_rows",
-                   return_value=[{"model": "QX60", "year": "2026", "days_to_sell": 40} for _ in range(8)]):
+        with patch("elite.loaner.sl_decision._retail_rows", return_value=_priced_rows()):
             d = build_unit_decision(self.app, SCOPE, _unit(), _mi(), today="2026-08-09", keep_horizon_days=60)
         self.assertIn(d["action"], ("KEEP", "PULL", "SWAP"))
         self.assertEqual(d["facts"]["invoice"], 60000)
@@ -72,11 +85,11 @@ class TestUnitDecision(unittest.TestCase):
 
     def test_future_price_reflects_maturity_depreciation(self):
         # a MY2026 unit whose future exit crosses into model-year age 1 -> lower expected price
-        with patch("elite.loaner.sl_decision._retail_rows",
-                   return_value=[{"model": "QX60", "year": "2026", "days_to_sell": 300}]):
+        with patch("elite.loaner.sl_decision._retail_rows", return_value=_priced_rows()):
             d = build_unit_decision(self.app, SCOPE, _unit(in_service="2026-06-01", age=60), _mi(52000, 40000),
                                     today="2026-08-01", keep_horizon_days=200)
-        # future exit lands in a later calendar year -> maturity age 1 median (40000) < age 0 (52000)
+        # held longer -> a LATER sale date -> older lifecycle age on the empirical curve -> lower expected price,
+        # even though both sale dates fall in the same integer model-year-age bucket (calendar 2026/early-2027)
         self.assertLess(d["facts"]["price_future"], d["facts"]["price_now"])
 
     def test_no_resale_evidence_gates_prices(self):
