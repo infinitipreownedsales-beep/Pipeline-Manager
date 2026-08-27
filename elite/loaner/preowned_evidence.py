@@ -301,10 +301,39 @@ def latest_retail_rows(conn, scope):
         "ORDER BY received_at DESC, id DESC LIMIT 1", (scope,)).fetchone()
     if not batch:
         return [], None
-    rows = [_json(o[0]) for o in conn.execute(
-        "SELECT normalized_values FROM source_observation WHERE import_batch_id=? AND acceptance_status='accepted'",
-        (batch[0],)).fetchall()]
+    rows = []
+    for o in conn.execute(
+            "SELECT normalized_values, raw_values FROM source_observation "
+            "WHERE import_batch_id=? AND acceptance_status='accepted'", (batch[0],)).fetchall():
+        row = _json(o[0])
+        # Authoritative ORIGINAL MSRP: the Reynolds retail-history export carries it, but it was omitted from
+        # earlier schema profiles, so for already-loaded batches it survives only in the retained RAW row.
+        # Surface it (never mutating the raw record) so the market/value rail can normalize each sale into an
+        # observed retention ratio. Newer imports carry 'msrp' in normalized_values directly.
+        if _retail_msrp(row) is None:
+            rm = _retail_msrp(_json(o[1]))
+            if rm is not None:
+                row = {**row, "msrp": rm}
+        rows.append(row)
     return rows, batch[1]
+
+
+_MSRP_HEADERS = ("msrp", "MSRP", "Msrp", "list_price", "List Price", "ListPrice", "List_Price")
+
+
+def _retail_msrp(row):
+    """Authoritative original MSRP from a retail-history row (normalized or raw), tolerant of the header
+    spellings a real DMS export uses. Returns a positive float or None — never a manufactured value."""
+    for k in _MSRP_HEADERS:
+        if k in row:
+            s = str(row.get(k) or "").replace(",", "").replace("$", "").strip()
+            try:
+                v = float(s) if s else None
+            except ValueError:
+                v = None
+            if v is not None and v > 0:
+                return v
+    return None
 
 
 def build_preowned_evidence(conn, scope):
@@ -392,3 +421,40 @@ def build_preowned_evidence(conn, scope):
         fleet_models_resolved=True,
         model_years=summarize_model_year_sales(rows, active_models),
     )
+
+
+def _msrp_num(v):
+    s = str(v if v is not None else "").replace(",", "").replace("$", "").strip()
+    try:
+        return float(s) if s else None
+    except ValueError:
+        return None
+
+
+def inventory_lifecycle_facts(conn, scope, vin):
+    """This physical unit's authoritative (MSRP, model_code) recovered from the FULL inventory/pipeline
+    lifecycle — every completed business-date snapshot, newest first, not only the latest New-Retail snapshot.
+
+    A Service Loaner that has moved out of New-Retail inventory is absent from today's snapshot, but its MSRP was
+    retained when it was new inventory (the pipeline summary is a per-business-date longitudinal-memory source).
+    The join uses the same governed VIN/Serial/Stock linkage (value + last-8) used to resolve model year — never
+    a VIN structural decode, never a manual entry. Returns (msrp, model_code); either is None when no retained
+    snapshot carried this unit with that field."""
+    keys = _id_match_keys(vin)
+    if not keys:
+        return None, None
+    for source_id in ("src_p11_new_inventory_pipeline_summary", "src_p11_new_inventory_current"):
+        for batch in conn.execute(
+                "SELECT id FROM import_batch WHERE source_id=? AND store_scope=? "
+                "AND lifecycle_status='completed' ORDER BY received_at DESC, id DESC",
+                (source_id, scope)).fetchall():
+            for obs in conn.execute(
+                    "SELECT raw_values FROM source_observation WHERE import_batch_id=? "
+                    "AND acceptance_status='accepted'", (batch[0],)).fetchall():
+                raw = _json(obs[0])
+                if keys & _id_match_keys(raw.get("vin"), raw.get("serial"), raw.get("stock_number")):
+                    msrp = _msrp_num(raw.get("msrp"))
+                    code = str(raw.get("model_code") or "").strip().upper() or None
+                    if msrp is not None or code is not None:
+                        return msrp, code
+    return None, None

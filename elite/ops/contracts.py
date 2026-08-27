@@ -82,12 +82,13 @@ SOURCE_CONTRACTS = {
         required_fields=("vin", "sold_date", "model"),
         optional_fields=(
             "stock_number", "year", "make", "trim", "days_to_sell",
-            "model_number", "vehicle_cost", "price", "gross_profit", "deal_number",
+            "model_number", "vehicle_cost", "price", "gross_profit", "deal_number", "msrp",
         ),
         units={
             "vehicle_cost": "currency",
             "price": "currency",
             "gross_profit": "currency",
+            "msrp": "currency",
         },
         header_aliases={
             "VIN": "vin",
@@ -102,6 +103,7 @@ SOURCE_CONTRACTS = {
             "Vehicle Cost": "vehicle_cost",
             "Vehicle Price": "price",
             "Gross Profit": "gross_profit",
+            "MSRP": "msrp",
         },
         stock_number_is_identity=False,
         raw_retention="original DMS sales export retained via FileIntake; rows retained as Source Observations",

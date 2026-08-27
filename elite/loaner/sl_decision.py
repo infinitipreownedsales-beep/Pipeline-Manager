@@ -96,8 +96,11 @@ def _retention_observations(rows, by_code_my, by_code, model):
     """Observed RETENTION points (age_in_months, retention, model_code) from the store's OWN historical retail
     sales, where retention = observed used selling price / authoritative original MSRP. Each sale's original MSRP
     is resolved from the physical-unit inventory source by that sale's own governed (model_code, model_year) —
-    NO raw dollar price is pooled, and retail_history is never mutated. Sales without a resolvable authoritative
-    MSRP are dropped honestly (never normalized by an invented number)."""
+    Original MSRP for each sale is taken, in order of authority: (1) the sale's OWN retained original MSRP (the
+    Reynolds retail-history export carries it — the authoritative historical value, never reconstructed); (2)
+    failing that, the inventory (model_code, model_year) MSRP median for that same governed identity. NO raw
+    dollar price is ever pooled, and retail_history is never mutated. Sales with no resolvable authoritative MSRP
+    are dropped honestly (never normalized by an invented number)."""
     model_u = (model or "").upper()
     out = []
     for r in rows or ():
@@ -109,7 +112,9 @@ def _retention_observations(rows, by_code_my, by_code, model):
         my = _my_int(r.get("year"))
         if price is None or price <= 0 or am is None or code is None:
             continue
-        msrp, _b = _msrp_for(by_code_my, by_code, code, my)
+        msrp = _price_num(r.get("msrp"))                          # (1) the sale's own authoritative original MSRP
+        if msrp is None or msrp <= 0:
+            msrp, _b = _msrp_for(by_code_my, by_code, code, my)   # (2) inventory (code, MY) anchor for that sale
         if msrp is None or msrp <= 0:
             continue
         out.append((am, price / msrp, code))
@@ -295,6 +300,14 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
     # then price from OBSERVED RETENTION (used price / authoritative MSRP) applied to this unit's own MSRP.
     inv = _inventory_rows(app, scope)
     unit_msrp, unit_code = _unit_inventory_facts(inv, vin)
+    if unit_msrp is None or unit_code is None:
+        # VIN-lifecycle fallback: a Service Loaner has moved OUT of today's New-Retail snapshot, but its
+        # authoritative MSRP + model code were retained when it was new inventory (the pipeline summary is a
+        # per-business-date longitudinal-memory source). Recover them from any retained snapshot — never a
+        # manual entry — so the unit is not gated merely for no longer being in the latest inventory export.
+        lm, lc = _lifecycle_facts(app, scope, vin)
+        unit_msrp = unit_msrp if unit_msrp is not None else lm
+        unit_code = unit_code or lc
     price_now, pn_basis, pn_conf = _retention_price(retail_rows, inv, model, my, sale_now, unit_msrp, unit_code)
     price_future, pf_basis, pf_conf = _retention_price(retail_rows, inv, model, my, sale_future, unit_msrp,
                                                        unit_code)
@@ -384,3 +397,14 @@ def _inventory_rows(app, scope):
         return read_new_retail_units(app, scope) or []
     except Exception:   # noqa: BLE001
         return []
+
+
+def _lifecycle_facts(app, scope, vin):
+    """This unit's authoritative (MSRP, model_code) from the FULL inventory/pipeline lifecycle (every retained
+    business-date snapshot), used when the unit has left today's latest New-Retail snapshot. Read-only; returns
+    (None, None) if inventory is unavailable so the market rail still gates honestly."""
+    try:
+        from .preowned_evidence import inventory_lifecycle_facts
+        return inventory_lifecycle_facts(app.stack.db.conn, scope, vin)
+    except Exception:   # noqa: BLE001
+        return None, None
