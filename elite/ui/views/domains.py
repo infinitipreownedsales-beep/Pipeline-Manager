@@ -216,37 +216,84 @@ def _unit_icv_cell(store, u):
     return f"${v:,}" if v is not None else safe(badge("unresolved", "Unknown"))
 
 
-def _fleet_unit_row(u, icv_cell):
-    """Compact current-fleet cascade row: identity + the lifecycle facts we authoritatively have (in-service
-    date, age, mileage, applicable ICV). Timing/economic call (release-by, retail window) is Pending
-    Economics — one row per unit, so the fleet reads without opening 27 pages."""
+def _fleet_decisions(app, scope, intel):
+    """The SINGLE per-unit KEEP/PULL/SWAP decision map ({unit_id: decision}) every Service-Loaner surface
+    consumes — ONE decision engine (build_unit_decision), computed once with shared inputs so the Command Board,
+    Current Fleet, operating plan and per-unit table can never disagree."""
+    from ...loaner.sl_decision import build_unit_decision
+    from ...clock import to_utc_iso
+    out = {}
+    units = [u for u in getattr(intel, "units", ()) if u.vin]
+    if not units:
+        return out
+    mi_by_model = {(mi.model or "").upper(): mi for mi in getattr(intel, "models", ())}
+    today = to_utc_iso(app.stack.clock.now())[:10]
+    swap_net = None
+    try:
+        from ...loaner.unit_econ import build_placement_econ
+        econ = build_placement_econ(app, scope, today[:7], n=1)
+        if econ.get("have_economics") and econ.get("all_econ"):
+            swap_net = econ["all_econ"][0].net()
+    except Exception:   # noqa: BLE001
+        swap_net = None
+    for u in units:
+        try:
+            out[u.id] = build_unit_decision(app, scope, u, mi_by_model.get((u.model or "").upper()),
+                                            today=today, swap_candidate_net=swap_net)
+        except Exception:   # noqa: BLE001 — a single unit must never break the board
+            continue
+    return out
+
+
+_RELEASE_ACTIONS = ("PULL", "SWAP")
+
+
+def _fleet_unit_row(u, icv_cell, decision=None):
+    """Compact current-fleet cascade row: identity + lifecycle facts + the SAME certified per-unit economic call
+    (KEEP / PULL / SWAP / UNRESOLVED) the per-unit table shows — never a hardcoded 'Pending Economics'."""
     age = f"{u.age_days}d" if u.age_days is not None else "—"
     miles = f"{u.mileage:,}" if (u.mileage_available and u.mileage is not None) else "—"
     src = esc(u.rental_state or u.membership_state or "—")
+    action = (decision or {}).get("action")
+    call = (safe(badge(_ACTION_TONE.get(action, "pending"), action)) if action
+            else safe(badge("unresolved", "UNRESOLVED")))
     return [safe(f'<a href="/service-loaner/unit/{esc(u.id)}">{esc(u.stock if hasattr(u, "stock") else (u.vin or "")[-8:])}</a>'),
             esc((u.vin or "—")[-8:]), esc(u.model or "—"), src, esc(u.in_service_date or "—"), esc(age), esc(miles),
-            icv_cell, safe(badge("pending", "Pending Economics"))]
+            icv_cell, call]
 
 
-def _fleet_position_card(app, scope):
-    """Fleet Position band — the legacy program's signature top strip, rebuilt on the self-balancing engine:
-    in service / target / releasing / expected to remain / calculated add, with a source recommendation and a
-    human Why. Authoritative state only; economic timing stays Pending."""
+def _fleet_position_card(app, scope, decisions=None):
+    """Fleet Position band. 'Releasing now' and 'Expected to remain' reconcile to the ECONOMIC OPERATING PLAN
+    (the per-unit PULL/SWAP exits), not a separate rail: releasing = count of current PULL/SWAP calls; remaining
+    = in-service − releasing; and the calculated Add cannot contradict that remaining."""
     from ...loaner.self_balancing import build_requirement, human_why, source_label
     sb = build_requirement(_conn(app), scope, app.prefs)
     tone = {"no_target": "attention", "resolved_zero": "healthy", "resolved_need": "pending"}.get(sb.resolution, "pending")
-    need_txt = ("— set target" if sb.resolution == "no_target"
-                else str(sb.calculated_need) + (" (lower bound)" if sb.is_lower_bound and sb.calculated_need else ""))
+    if decisions:
+        releasing = sum(1 for d in decisions.values() if d.get("action") in _RELEASE_ACTIONS)
+        remaining = max(0, int(sb.current_active) - releasing)
+        if sb.desired is not None:
+            need_val = max(0, int(sb.desired) - remaining)
+            need_txt = str(need_val)
+            need_attn = need_val > 0
+        else:
+            need_txt, need_attn = "— set target", False
+    else:
+        releasing, remaining = sb.releasing_now, sb.remaining
+        need_txt = ("— set target" if sb.resolution == "no_target"
+                    else str(sb.calculated_need) + (" (lower bound)" if sb.is_lower_bound and sb.calculated_need else ""))
+        need_attn = sb.resolution == "resolved_need"
     band = stat_row([metric(sb.current_active, "In service"),
                      metric(sb.desired if sb.desired is not None else "not set", "Target"),
-                     metric(sb.releasing_now, "Releasing now"),
-                     metric(sb.remaining, "Expected to remain"),
-                     metric(need_txt, "Add (calculated)", attn=(sb.resolution == "resolved_need"))])
+                     metric(releasing, "Releasing now"),
+                     metric(remaining, "Expected to remain"),
+                     metric(need_txt, "Add (calculated)", attn=need_attn)])
     return ('<div class="card"><h2 style="margin-top:4px">Fleet position — self-balancing</h2>' + band
             + f'<p style="margin:6px 0 2px">{badge(tone, source_label(sb))}</p>'
             + f'<p style="margin:4px 0"><strong>Why:</strong> {esc(human_why(sb))}</p>'
-            + '<p class="muted" style="font-size:12px">Economic retention, retirement and release timing, and the '
-            'month-by-month exit plan, stay Pending until authoritative lifecycle economics exist — never guessed.</p>'
+            + '<p class="muted" style="font-size:12px">Releasing now / Expected to remain reflect the current '
+            'per-unit economic operating plan (PULL / SWAP exits). Retirement/release timing detail stays Pending '
+            'until authoritative lifecycle economics exist — never guessed.</p>'
             + '<p style="margin-top:6px"><a href="/ordering/sl-requirements">Open planning &amp; directives →</a></p></div>')
 
 
@@ -261,18 +308,18 @@ _OUTCOME_BADGE = {
 _ACTION_TONE = {"KEEP": "healthy", "PULL": "attention", "SWAP": "pending", "UNRESOLVED": "unresolved"}
 
 
-def _fleet_plan_card(app, scope, intel, add_n=0):
+def _fleet_plan_card(app, scope, intel, add_n=0, decisions=None):
     """The unmistakable operating plan (item 10): the per-unit economic decisions consolidated into KEEP /
     PULL·RETIRE / SWAP·BALANCE / ADD / ORDER / UPCOMING, each naming the exact physical vehicle. It REUSES the
-    existing KEEP/PULL/SWAP economic core (build_unit_decision) and the certified placement econ — it does not
-    re-derive economics. SWAP names the incoming New-Retail replacement VIN whenever it is physically known;
-    ORDER is only the residual that physical placement/swap cannot satisfy (never a fabricated model order)."""
-    from ...loaner.sl_decision import build_unit_decision
+    SHARED KEEP/PULL/SWAP decision map (one engine) and the certified placement econ — it does not re-derive
+    economics. SWAP names the incoming New-Retail replacement VIN whenever it is physically known; ORDER is only
+    the residual that physical placement/swap cannot satisfy (never a fabricated model order)."""
     from ...clock import to_utc_iso
     units = [u for u in getattr(intel, "units", ()) if u.vin]
     if not units:
         return ""
-    mi_by_model = {(mi.model or "").upper(): mi for mi in getattr(intel, "models", ())}
+    if decisions is None:
+        decisions = _fleet_decisions(app, scope, intel)
     today = to_utc_iso(app.stack.clock.now())[:10]
 
     # strongest eligible New-Retail replacements (physical VIN/stock), grouped by model, for SWAP/ADD naming
@@ -305,10 +352,8 @@ def _fleet_plan_card(app, scope, intel, add_n=0):
         return None
 
     for u in units:
-        try:
-            d = build_unit_decision(app, scope, u, mi_by_model.get((u.model or "").upper()), today=today,
-                                    swap_candidate_net=swap_net)
-        except Exception:   # noqa: BLE001 — one unit must never break the plan
+        d = decisions.get(u.id)
+        if d is None:
             continue
         f = d["facts"]
         vin = (f.get("vin") or u.vin or "")
@@ -406,31 +451,19 @@ def _fleet_order_residual(app, scope, all_repl, used_repl):
             + table(["Model", "Planned need", "Physical surplus", "Residual to order", "Call"], rows))
 
 
-def _unit_actions_card(app, scope, intel):
+def _unit_actions_card(app, scope, intel, decisions=None):
     """Concise per-active-unit KEEP / PULL / SWAP / UNRESOLVED recommendation. The economic detail lives in
-    Proof; the operator sees the call, the advantage vs next-best, key facts, and one human Why."""
-    from ...loaner.sl_decision import build_unit_decision
-    from ...clock import to_utc_iso
+    Proof; the operator sees the call, the advantage vs next-best, key facts, and one human Why. Uses the SHARED
+    decision map (one engine) when provided."""
     units = [u for u in getattr(intel, "units", ()) if u.vin]
     if not units:
         return ""
-    mi_by_model = {(mi.model or "").upper(): mi for mi in getattr(intel, "models", ())}
-    today = to_utc_iso(app.stack.clock.now())[:10]
-    # one economic swap-candidate net (the strongest eligible New-Retail placement), computed once
-    swap_net = None
-    try:
-        from ...loaner.unit_econ import build_placement_econ
-        econ = build_placement_econ(app, scope, today[:7], n=1)
-        if econ.get("have_economics") and econ["all_econ"]:
-            swap_net = econ["all_econ"][0].net()
-    except Exception:   # noqa: BLE001
-        swap_net = None
+    if decisions is None:
+        decisions = _fleet_decisions(app, scope, intel)
     rows = []
     for u in units:
-        try:
-            d = build_unit_decision(app, scope, u, mi_by_model.get((u.model or "").upper()), today=today,
-                                    swap_candidate_net=swap_net)
-        except Exception:   # noqa: BLE001 — a single unit must never break the board
+        d = decisions.get(u.id)
+        if d is None:
             continue
         c, f = d["components"], d["facts"]
         nets = d["nets"]
@@ -619,8 +652,12 @@ def _loaner_command_body(app, s, intel, placement, add_n):
             else 'inventory + fleet evidence')
     parts = [workspace_header("Service Loaner Command Board", safe(f'<span class="muted">{asof}</span>'))]
 
-    # ---- FLEET POSITION (self-balancing engine) ----
-    parts.append(_fleet_position_card(app, s.scope))
+    # ONE decision engine, computed once and shared by every surface below (Command Board / operating plan /
+    # per-unit table / Current Fleet) so they can never disagree.
+    decisions = _fleet_decisions(app, s.scope, intel)
+
+    # ---- FLEET POSITION (reconciled to the per-unit operating plan) ----
+    parts.append(_fleet_position_card(app, s.scope, decisions))
 
     # ---- PROGRAM STATE ----
     blocked = sum(1 for u in intel.units if not u.in_service_date or not u.mileage_available)
@@ -700,18 +737,30 @@ def _loaner_command_body(app, s, intel, placement, add_n):
     parts.append(_economic_ranking_card(app, s.scope, add_n))
 
     # ---- FLEET OPERATING PLAN: the consolidated KEEP / PULL / SWAP / ADD / ORDER answer (item 10) ----
-    parts.append(_fleet_plan_card(app, s.scope, intel, add_n))
+    parts.append(_fleet_plan_card(app, s.scope, intel, add_n, decisions=decisions))
 
     # ---- PER-UNIT ACTION: KEEP / PULL / SWAP (incremental-from-now; gates cleanly when inputs are missing) ----
-    parts.append(_unit_actions_card(app, s.scope, intel))
+    parts.append(_unit_actions_card(app, s.scope, intel, decisions=decisions))
 
-    # ---- CURRENT FLEET (cascade) ----
+    # ---- CURRENT FLEET (cascade) — same per-unit decision as everywhere else ----
     from .program_inputs import ProgramInputsStore
     icv_store = ProgramInputsStore(app.prefs, s.scope)
-    parts.append('<div class="card"><h2>Current fleet</h2>'
+    _evaluable = sum(1 for u in intel.units if (decisions.get(u.id) or {}).get("action") in ("KEEP", "PULL", "SWAP"))
+    _gated = len(intel.units) - _evaluable
+    fleet_summary = ""
+    if intel.units:
+        _tone = "healthy" if _gated == 0 else "attention"
+        _label = f"{_evaluable} of {len(intel.units)} unit(s) evaluable"
+        _gated_note = (f' <span class="muted">· {_gated} gated (economics not yet resolvable for those units)</span>'
+                       if _gated else '')
+        fleet_summary = ('<p style="margin:4px 0">' + safe(badge(_tone, _label)) + _gated_note + '</p>'
+                         '<p class="muted" style="font-size:12px">Program-level ICV/Velocity coverage being complete '
+                         'does not mean every unit resolves — a unit whose authoritative model year is unresolved (or '
+                         'whose program value is model-year-ambiguous) stays Unknown and its call gates, honestly.</p>')
+    parts.append('<div class="card"><h2>Current fleet</h2>' + fleet_summary
                  + (table(["Stock", "VIN", "Model / trim", "Source state", "In service", "Age", "Last checkout mi",
                            "Applicable ICV", "Economic call"],
-                          [_fleet_unit_row(u, _unit_icv_cell(icv_store, u)) for u in intel.units])
+                          [_fleet_unit_row(u, _unit_icv_cell(icv_store, u), decisions.get(u.id)) for u in intel.units])
                     if intel.units else empty("No active Service-Loaner units."))
                  + '<p class="muted" style="font-size:12px">One row per physical unit. Applicable ICV is resolved '
                  'from each unit\'s authoritative in-service month; Unknown is shown as Unknown, never $0. '

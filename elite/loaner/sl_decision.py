@@ -28,31 +28,44 @@ def _iso_today(clock):
 
 
 def _price_at_model_year_age(mi, age_years):
-    """Expected used SELLING PRICE from the dealership's own maturity evidence (median recorded price by
-    model-year age at resale). Returns (price, basis_label, confidence). Degrades to the model resale median
-    (flat, thin) when the specific maturity bin is thin/absent; None price when there is no defensible
-    resale evidence at all (the KEEP/PULL economics that need it are then gated, not fabricated)."""
+    """Expected used SELLING PRICE from the dealership's own AGE-SPECIFIC maturity evidence (median recorded
+    price by model-year age at resale). Returns (price, basis_label, confidence).
+
+    The evidence hierarchy PRESERVES age/depreciation behaviour and never collapses to a static all-model-years
+    median (which would give materially-different units the same price and make future holding look favourable
+    only because write-down lowers basis while a flat price stays constant):
+      * exact maturity-age bin (populated) -> moderate;
+      * else the NEAREST populated maturity-age bin (still age-specific, so now vs future differ by age) -> thin;
+      * else GATE — no defensible age-aware curve exists (unknown model-year age gates here too)."""
     if mi is None:
         return None, "no model evidence", "none"
     if age_years is None:
-        # The unit's model-year age is UNKNOWN (its model year is unresolved). We must NOT price it off the
-        # oldest ("5+") maturity cohort as if it were 5+ years old — that is exactly what produced the nonsensical
-        # ~$18,993 expected used price for a near-new loaner. Instead DEGRADE (never gate to nothing when real
-        # evidence exists) to the model's ALL-model-years resale median — the same governed thin fallback used
-        # for a thin maturity bin, NOT an oldest-cohort assumption — at THIN confidence so the decision is
-        # honestly low-confidence rather than UNRESOLVED. When even that has no defensible sample, gate.
-        rm = getattr(mi, "resale_model", None)
-        if rm is not None and getattr(rm, "gated", False):
-            return float(rm.dist.median), "model resale median (model-year age unknown — degraded)", "thin"
-        return None, "model-year age unknown (unit model year unresolved) — no comparable resale cohort", "none"
+        # Model-year age unknown (unit MY unresolved). Never price off a static all-MY median or the oldest
+        # cohort — gate honestly so the decision is not driven by a flat, depreciation-blind number.
+        return None, "model-year age unknown (unit model year unresolved) — no age-specific resale cohort", "none"
+    bins = [b for b in (getattr(mi, "maturity", ()) or ()) if b.median_price is not None]
     label = "5+" if age_years >= 5 else str(max(0, int(age_years)))
-    for b in getattr(mi, "maturity", ()) or ():
-        if b.label == label and b.median_price is not None and not b.thin:
+    for b in bins:
+        if b.label == label and not b.thin:
             return float(b.median_price), f"maturity age {label}", "moderate"
-    rm = getattr(mi, "resale_model", None)
-    if rm is not None and getattr(rm, "gated", False):
-        return float(rm.dist.median), "model resale median (maturity age thin)", "thin"
-    return None, "no defensible resale evidence", "none"
+    near = _nearest_maturity_bin(bins, age_years)         # still age-specific -> preserves depreciation
+    if near is not None:
+        return float(near.median_price), f"nearest maturity age {near.label} (age {label} thin/absent)", "thin"
+    return None, "no defensible age-specific resale evidence", "none"
+
+
+def _bin_age(label):
+    """Numeric model-year age for a maturity-bin label ('0','1',...,'5+' -> 0,1,...,5)."""
+    d = "".join(ch for ch in str(label or "") if ch.isdigit())
+    return int(d) if d else None
+
+
+def _nearest_maturity_bin(bins, age_years):
+    """The populated maturity bin whose model-year age is closest to `age_years` (ties -> the OLDER/lower-priced
+    bin, the conservative resale side). Age-specific by construction, so it preserves depreciation across time."""
+    cand = [(abs(_bin_age(b.label) - int(age_years)), -_bin_age(b.label), b)
+            for b in bins if _bin_age(b.label) is not None]
+    return min(cand)[2] if cand else None
 
 
 def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=None, keep_horizon_days=None):

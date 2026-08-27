@@ -239,9 +239,27 @@ def active_fleet_model_years(conn, scope):
     return resolved, conflicts
 
 
+def _id_match_keys(*values):
+    """Cross-source identifier match keys for a physical unit: each raw identifier UPPER-cased, plus its last-8
+    (the DMS 'serial'/short-stock form, e.g. VIN 5N1AL1HU8TC348756 -> TC348756). This joins a loaner's full VIN
+    to a DMS inventory row that only carries Serial/Stock# — never decodes model year from VIN structure."""
+    keys = set()
+    for v in values:
+        s = str(v or "").strip().upper()
+        if not s:
+            continue
+        keys.add(s)
+        if len(s) >= 8:
+            keys.add(s[-8:])
+    return keys
+
+
 def _resolve_my_from_inventory(conn, scope, want_vins, resolved, conflicts):
-    """Fill in model years for `want_vins` from the latest completed DMS inventory snapshot (pipeline summary or
-    current), by exact VIN, using the governed model-year headers only. Mutates `resolved`/`conflicts`."""
+    """Fill in model years for `want_vins` from the latest completed DMS inventory snapshot (pipeline summary,
+    then current), using the governed model-year headers only. The pipeline export carries NO full VIN column —
+    it identifies a physical unit by Serial / Stock# — so the join matches on ANY available identifier (vin /
+    serial / stock_number) and its last-8 form. Model year is never inferred from VIN structure; only an exact
+    source identifier join contributes. Mutates `resolved` / `conflicts`."""
     for source_id in ("src_p11_new_inventory_pipeline_summary", "src_p11_new_inventory_current"):
         if not want_vins:
             return
@@ -250,22 +268,29 @@ def _resolve_my_from_inventory(conn, scope, want_vins, resolved, conflicts):
             "ORDER BY received_at DESC, id DESC LIMIT 1", (source_id, scope)).fetchone()
         if not batch:
             continue
+        key_to_my = {}                                   # identifier match-key -> set of MYs seen for it
         for obs in conn.execute("SELECT raw_values FROM source_observation WHERE import_batch_id=? "
                                 "AND acceptance_status='accepted'", (batch[0],)).fetchall():
             raw = _json(obs[0])
-            vin = str(raw.get("vin") or "").strip().upper()
-            if vin not in want_vins:
-                continue
             present = {k: raw.get(k) for k in MODEL_YEAR_SOURCE_HEADERS if str(raw.get(k) or "").strip() != ""}
             if not present:
                 continue
-            norm = {k: _norm_model_year(v) for k, v in present.items()}
-            distinct = {nv for nv in norm.values() if nv is not None}
-            if [k for k, nv in norm.items() if nv is None]:
-                continue                                 # malformed here -> leave UNKNOWN (fleet source governs)
-            if len(distinct) == 1:
-                resolved[vin] = next(iter(distinct))
-                want_vins.discard(vin)
+            norm = {nv for nv in (_norm_model_year(v) for v in present.values()) if nv is not None}
+            if len(norm) != 1:
+                continue                                 # malformed / self-conflicting row -> skip (honest)
+            my = next(iter(norm))
+            for key in _id_match_keys(raw.get("vin"), raw.get("serial"), raw.get("stock_number")):
+                key_to_my.setdefault(key, set()).add(my)
+        for wv in list(want_vins):
+            cand = set()
+            for key in _id_match_keys(wv):
+                cand |= key_to_my.get(key, set())
+            if len(cand) == 1:
+                resolved[wv] = next(iter(cand))
+                want_vins.discard(wv)
+            elif len(cand) > 1:
+                conflicts[wv] = f"model year ambiguous across matched inventory rows {sorted(cand)}"
+                want_vins.discard(wv)
 
 
 def latest_retail_rows(conn, scope):

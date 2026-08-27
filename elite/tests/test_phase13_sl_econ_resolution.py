@@ -72,20 +72,38 @@ class TestIcvResolvesFromInServiceMonth(unittest.TestCase):
 
 
 class TestUsedPriceDegrade(unittest.TestCase):
-    def test_unknown_age_degrades_to_model_median_not_oldest_cohort(self):
+    def test_unknown_age_gates_never_static_median(self):
+        # unknown model-year age must GATE — never a flat all-model-years median (the $36,780 bug) or the 5+ cohort
         mi = ModelIntel(model="QX60", active_units=10, sales_count=60, dts=None, resale_model=_resale_model(41000.0),
                         maturity=(MaturityBin("0", 15, 48250.0, False), MaturityBin("5+", 22, 18993.0, False)))
-        self.assertEqual(_price_at_model_year_age(mi, 5)[0], 18993.0)     # the 5+ cohort remains the $18,993 source
-        price, basis, conf = _price_at_model_year_age(mi, None)           # unknown age
-        self.assertEqual(price, 41000.0)                                  # model all-MY median, NOT 18993
-        self.assertEqual(conf, "thin")
-        self.assertIn("degraded", basis)
-
-    def test_unknown_age_without_model_evidence_still_gates(self):
-        mi = ModelIntel(model="QX60", active_units=1, sales_count=0, dts=None, resale_model=None, maturity=())
-        price, _b, conf = _price_at_model_year_age(mi, None)
-        self.assertIsNone(price)                                          # nothing real to degrade to -> honest gate
+        price, _basis, conf = _price_at_model_year_age(mi, None)
+        self.assertIsNone(price)
         self.assertEqual(conf, "none")
+
+    def test_pricing_is_age_specific_and_preserves_depreciation(self):
+        # a populated younger and older bin -> now (age 0) and future (age 1) differ; never a flat median
+        mi = ModelIntel(model="QX60", active_units=10, sales_count=60, dts=None, resale_model=_resale_model(41000.0),
+                        maturity=(MaturityBin("0", 15, 48000.0, False), MaturityBin("1", 12, 43000.0, False)))
+        self.assertEqual(_price_at_model_year_age(mi, 0)[0], 48000.0)
+        self.assertEqual(_price_at_model_year_age(mi, 1)[0], 43000.0)     # depreciates with age
+
+    def test_thin_bin_uses_age_specific_evidence_not_flat_median(self):
+        # exact age-2 bin is thin -> still use the age-specific evidence (thin confidence), NEVER the 41000 flat
+        # all-model-years median; when the exact age is absent the nearest populated age bin is used instead.
+        mi = ModelIntel(model="QX60", active_units=10, sales_count=60, dts=None, resale_model=_resale_model(41000.0),
+                        maturity=(MaturityBin("0", 15, 48000.0, False), MaturityBin("1", 12, 43000.0, False),
+                                  MaturityBin("2", 2, 40000.0, True)))
+        price, basis, conf = _price_at_model_year_age(mi, 2)             # exact bin thin
+        self.assertEqual(price, 40000.0)                                  # age-specific (age 2), not the 41000 flat median
+        self.assertNotEqual(price, 41000.0)
+        self.assertEqual(conf, "thin")
+        # an ABSENT age (age 4) degrades to the nearest populated age bin (age 2 = 40000), still age-specific
+        self.assertEqual(_price_at_model_year_age(mi, 4)[0], 40000.0)
+
+    def test_no_age_specific_evidence_gates(self):
+        mi = ModelIntel(model="QX60", active_units=1, sales_count=0, dts=None, resale_model=_resale_model(41000.0),
+                        maturity=())                                      # only a flat model median exists
+        self.assertIsNone(_price_at_model_year_age(mi, 0)[0])            # never the flat median -> gate
 
 
 class TestUnitDecisionResolvesWithUnknownMy(unittest.TestCase):
@@ -106,18 +124,29 @@ class TestUnitDecisionResolvesWithUnknownMy(unittest.TestCase):
     def tearDown(self):
         self.p.close()
 
-    def test_unknown_my_unit_now_resolves_with_thin_confidence(self):
+    def test_unknown_my_gates_price_never_flat_median(self):
+        # MY unknown -> age unknown -> used price GATES (no static median). ICV still resolves from in-service month.
         mi = ModelIntel(model="QX60", active_units=10, sales_count=60, dts=None, resale_model=_resale_model(41000.0),
-                        maturity=())
+                        maturity=(MaturityBin("0", 15, 48000.0, False),))
         with patch("elite.loaner.sl_decision._retail_rows",
                    return_value=[{"model": "QX60", "year": "2026", "days_to_sell": 40} for _ in range(8)]):
             d = build_unit_decision(self.app, SCOPE, _unit(my=""), mi, today="2026-08-09", keep_horizon_days=60)
-        self.assertIn(d["action"], ("KEEP", "PULL", "SWAP"))             # a real decision, no longer UNRESOLVED
-        self.assertEqual(d["facts"]["icv"], 6500)                        # ICV resolved from in-service month
-        self.assertEqual(d["facts"]["velocity"], 2500)
-        self.assertEqual(d["facts"]["price_now"], 41000.0)              # degraded model median (not the 5+ bug)
-        self.assertEqual(d["confidence"], "thin")                        # honestly low-confidence
-        self.assertEqual(d["gated"], [])
+        self.assertEqual(d["facts"]["icv"], 6500)                        # ICV resolves from in-service month
+        self.assertIn("expected used price now", d["gated"])             # price gates on unknown MY, never flat median
+        self.assertEqual(d["action"], "UNRESOLVED")
+
+    def test_resolved_my_yields_age_specific_decision(self):
+        # a RESOLVED MY (2026) + age bins -> real decision, price_now != price_future when the exit crosses a year
+        mi = ModelIntel(model="QX60", active_units=10, sales_count=60, dts=None, resale_model=_resale_model(41000.0),
+                        maturity=(MaturityBin("0", 15, 48000.0, False), MaturityBin("1", 12, 43000.0, False)))
+        with patch("elite.loaner.sl_decision._retail_rows",
+                   return_value=[{"model": "QX60", "year": "2026", "days_to_sell": 40} for _ in range(8)]):
+            d = build_unit_decision(self.app, SCOPE, _unit(my="2026"), mi, today="2026-08-09",
+                                    keep_horizon_days=200)
+        self.assertIn(d["action"], ("KEEP", "PULL", "SWAP"))             # real decision
+        self.assertEqual(d["facts"]["icv"], 6500)
+        self.assertEqual(d["facts"]["price_now"], 48000.0)             # age-0 bin
+        self.assertLess(d["facts"]["price_future"], d["facts"]["price_now"])   # future exit depreciates
 
 
 if __name__ == "__main__":
