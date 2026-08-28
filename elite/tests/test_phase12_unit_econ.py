@@ -127,6 +127,18 @@ class TestWriteDownPolicy(unittest.TestCase):
         self.assertEqual(self.pol.invoice_for_vin("5n1az2cs0pc900001"), 55000)   # normalized
         self.assertIsNone(self.pol.invoice_for_vin("OTHER"))
 
+    def test_invoice_read_from_governed_inv_field_never_msrp_or_cost(self):
+        # The source contract new_inventory_pipeline_summary maps the DMS "Inv" column onto canonical `inv`.
+        # _invoice_of must consume it (currency string, no VIN needed), never MSRP, never generic vehicle cost.
+        from elite.loaner.unit_econ import _invoice_of
+        row = {"stock_number": "Q26029", "serial": "430938", "msrp": "72,000", "inv": "63,500",
+               "vehicle_cost": "60,000"}                                          # cost present but MUST be ignored
+        self.assertEqual(_invoice_of(row, "", self.pol), 63500)                   # reads inv, no VIN required
+        # msrp / vehicle_cost alone (no inv) -> no invoice (fails closed, never substituted)
+        self.assertIsNone(_invoice_of({"msrp": "72,000", "vehicle_cost": "60,000"}, "", self.pol))
+        # an explicit invoice header still wins over inv
+        self.assertEqual(_invoice_of({"invoice": "61,000", "inv": "63,500"}, "", self.pol), 61000)
+
 
 class TestBuildAndSourcing(unittest.TestCase):
     def setUp(self):

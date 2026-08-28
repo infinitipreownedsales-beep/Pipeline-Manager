@@ -180,6 +180,22 @@ class TestAddRanking(unittest.TestCase):
         self.assertEqual(len(res["blocked"]), 1)
         self.assertIn("sell-time", res["blocked"][0].missing.lower())     # names the missing sell-time evidence
 
+    def test_invoice_consumed_from_source_inv_field_without_vin(self):
+        # The real pipeline_summary row shape: NO full VIN (serial/stock only), invoice carried on the row under
+        # the governed `inv` field (DMS "Inv" column). The unit must resolve READY reading invoice from `inv` —
+        # no per-VIN override, no invented VIN, no manual entry.
+        row = {"stock_number": "Q26029", "serial": "430938", "model_code": CODE, "exterior": "QBE",
+               "interior": "G", "dis": 12, "status": "Deal Open", "location": "DLR-INV", "year": "2026",
+               "model": MODEL, "trim": "SPORT 4WD", "drivetrain": "4WD", "msrp": "72,000", "inv": "63,500"}
+        res = self._run([row], _harm({(CODE, "QBE", "G"): EXCESS}), n=4)
+        self.assertEqual(len(res["ready"]), 1)                            # resolves from source data we already have
+        self.assertEqual(res["blocked"], [])                             # no longer blocked on authoritative invoice
+        c = res["ready"][0]
+        self.assertEqual(c.invoice, 63500)                               # read from `inv`, not MSRP (72,000)
+        self.assertFalse(c.vin_authoritative)                            # serial-only source; no VIN invented
+        self.assertEqual(c.serial, "430938")
+        self.assertEqual(round(c.adjusted_basis, 2), round(63500 - c.write_down, 2))
+
     def test_committed_vin_excluded(self):
         rows = [_unit("A1", "A1", invoice="65000")]
         committed = frozenset({_vin("A1")})

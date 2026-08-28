@@ -85,8 +85,13 @@ def compute_placement_econ(*, unit_id, identity, model, stock, icv, velocity, us
                          tuple(terms)), []
 
 
-# authoritative original-invoice headers on a New-Retail inventory row (governed allowlist; never MSRP/ICV)
-_INVOICE_HEADERS = ("invoice", "invoice_price", "original_invoice", "dealer_invoice", "Invoice", "InvoicePrice")
+# Authoritative original-invoice headers on a New-Retail inventory row (governed allowlist; never MSRP/ICV, never
+# generic Vehicle Cost). `inv` is the canonical field the governed source contract new_inventory_pipeline_summary
+# maps the real DMS "Inv" column onto (ops/contracts.py header_aliases: "Inv" -> "inv"); it is the dealer invoice
+# carried on each physical pipeline row, distinct from retail_history.vehicle_cost (which is a separate rail and
+# is never read here). Reading it here consumes the authoritative invoice the source ALREADY supplies.
+_INVOICE_HEADERS = ("invoice", "invoice_price", "original_invoice", "dealer_invoice", "Invoice", "InvoicePrice",
+                    "inv")
 
 
 def _invoice_of(row, vin, pol):
