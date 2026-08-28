@@ -1,19 +1,20 @@
 """Service-Loaner USED-ledger VIN identity bridge (live acceptance 2026-08-28).
 
-Live permanent-DB proof: the QX60 used-sales ledger carries BLANK / TRUCK in Model Number (740 BLANK + 17 TRUCK
-of 757), so NO DMS model code ever reached _price_observations — exact code, raw code4, market-lineage, and
-MSRP-retention all appeared empty. But the SAME FULL VIN exists in the dealership's New-Retail lifecycle with the
-authoritative model code:
+Live permanent-DB proof: the QX60 used-sales ledger carries BLANK / TRUCK in Model Number (738 BLANK/special +
+17 TRUCK of 757; only 2 coded), so NO DMS model code reaches _price_observations — exact code, raw code4,
+market-lineage, and MSRP-retention all appear empty for the WHOLE model. But the dealership's HISTORICAL NEW-CAR
+SALES (the DMS sales ledger's own coded rows — the ORIGINAL new sale of each VIN) carry the authoritative Model
+Number for the SAME full VIN:
 
-  5N1AL1HU6SC339383  2025 QX60 AUTOGRAPH  used $64,000  -> New Retail model number 84615 (raw 8461)
-  5N1AL1HU2TC334313  2026 QX60 AUTOGRAPH  used $56,488  -> New Retail model number 84816 (raw 8481)
-  5N1DL1HU8RC336427  2024 QX60 AUTOGRAPH  used $53,988  -> New Retail model number 84614 (raw 8461)
+  5N1AL1HU6SC339383  used 2025 QX60 AUTOGRAPH $64,000  <- New-Car sale model number 84615 (raw 8461)
+  5N1AL1HU2TC334313  used 2026 QX60 AUTOGRAPH $56,488  <- New-Car sale model number 84816 (raw 8481)
+  5N1DL1HU8RC336427  used 2024 QX60 AUTOGRAPH $53,988  <- New-Car sale model number 84614 (raw 8461)
 
-latest_retail_rows now bridges IDENTITY ONLY from the same-VIN New-Retail lifecycle record: it recovers the
-authoritative model code (and original MSRP where the used row lacks it), leaving the used sale date, used
-transaction price, used VIN and used model year exactly as the used ledger recorded them. Provenance is stamped
-('original New Retail VIN lifecycle record'); a non-code sentinel never becomes identity; a VIN with no lifecycle
-match stays unresolved (never inferred).
+latest_retail_rows now bridges IDENTITY ONLY by EXACT FULL VIN from the historical New-Car sales record: it
+recovers the authoritative model code (and original MSRP where the used row lacks it) while leaving the used sale
+date, used transaction price, used VIN and used model year exactly as the used ledger recorded them. A non-code
+sentinel never becomes identity; a VIN with no New-Car match stays unresolved (never inferred); a New-Car model
+that disagrees with the used row is surfaced as a conflict and NOT bridged. Raw import history is never mutated.
 """
 import json
 import os
@@ -24,10 +25,10 @@ from elite.ids import new_id
 from elite.ui.fixtures import Phase10
 from elite.workflow.fixtures import SCOPE
 from elite.loaner.preowned_evidence import latest_retail_rows, new_retail_identity_index, _is_real_code
-from elite.loaner.sl_decision import _price_observations, _market_price, _code_norm, _code4
+from elite.loaner.sl_decision import _price_observations, _code_norm, _code4
 from elite.newinv.dms_identity import code4
 
-# (used VIN, used model year, used price, used-ledger Model Number sentinel, New-Retail model code)
+# (used VIN, used model year, used price, used-ledger Model Number sentinel, New-Car model code)
 CASES = [
     ("5N1AL1HU6SC339383", "2025", 64000, "BLANK", "84615"),   # 2025 Autograph -> 8461
     ("5N1AL1HU2TC334313", "2026", 56488, "TRUCK", "84816"),   # 2026 Autograph -> 8481
@@ -51,18 +52,20 @@ def _batch(conn, source_id, received_at, obs, *, schema=None):
     conn.commit()
 
 
-def _used_row(vin, my, price, sentinel):
-    """A used-ledger sale in the LIVE shape: real VIN + used facts, Model Number is a non-code sentinel."""
-    r = {"vin": vin, "model": "QX60", "model_number": sentinel, "year": my,
+def _used_row(vin, my, price, sentinel, model="QX60"):
+    """A used-ledger sale in the LIVE shape: real full VIN + used facts; Model Number is a non-code sentinel."""
+    r = {"vin": vin, "model": model, "model_number": sentinel, "year": my,
          "sold_date": f"{my}-06-15", "price": float(price), "days_to_sell": 42}
     return (r, r)
 
 
-def _pipe_row(vin, code, msrp, my):
-    """A New-Retail lifecycle record carrying only the DMS Serial (last-8 of the VIN) + authoritative code/MSRP."""
-    r = {"serial": vin[-8:], "stock_number": vin[-8:], "model": "QX60", "model_code": code,
-         "model_year": my, "msrp": str(msrp)}
-    return (r, r)
+def _newcar_sale(vin, code, my, msrp, model="QX60"):
+    """A HISTORICAL NEW-CAR SALE (earlier retail_history batch): full VIN + authoritative Model Number + model
+    line + its own new-sale price (which the bridge must NEVER borrow)."""
+    norm = {"vin": vin, "model": model, "model_number": code, "year": str(int(my) - 1),
+            "sold_date": f"{int(my) - 1}-09-01", "price": 71000.0}
+    raw = {**norm, "MSRP": str(msrp)}
+    return (norm, raw)
 
 
 class TestVinIdentityBridge(unittest.TestCase):
@@ -70,13 +73,13 @@ class TestVinIdentityBridge(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.p = Phase10(os.path.join(self.tmp, "elite.db"))
         self.conn = self.p.app.stack.db.conn
-        # used ledger: every row has a real VIN but a BLANK/TRUCK Model Number
-        used = [_used_row(vin, my, price, sent) for (vin, my, price, sent, _code) in CASES]
-        used.append(_used_row("5N1XXORPHAN0000000", "2025", 61000, "BLANK"))   # no lifecycle match anywhere
+        # HISTORICAL NEW-CAR SALES (earlier batch): same full VINs, authoritative Model Number
+        _batch(self.conn, "src_p11_retail_history", "2024-01-01T00:00:00Z",
+               [_newcar_sale(vin, code, my, 70000) for (vin, my, _p, _s, code) in CASES], schema=3)
+        # USED sales ledger (latest batch): real VIN, BLANK/TRUCK Model Number, + an orphan with no New-Car match
+        used = [_used_row(vin, my, price, sent) for (vin, my, price, sent, _c) in CASES]
+        used.append(_used_row("5N1XXORPHAN0000000", "2025", 61000, "BLANK"))
         _batch(self.conn, "src_p11_retail_history", "2026-08-27T00:00:00Z", used, schema=3)
-        # New-Retail lifecycle: the SAME VINs (by Serial last-8) with authoritative code + MSRP
-        _batch(self.conn, "src_p11_new_inventory_pipeline_summary", "2025-01-01T00:00:00Z",
-               [_pipe_row(vin, code, 70000, my) for (vin, my, _p, _s, code) in CASES])
 
     def tearDown(self):
         self.p.close()
@@ -90,9 +93,9 @@ class TestVinIdentityBridge(unittest.TestCase):
         for vin, my, price, sentinel, code in CASES:
             r = by[vin]
             self.assertTrue(_is_real_code(r.get("model_number")))            # BLANK/TRUCK replaced by a real code
-            self.assertEqual(r["model_number"], code)                        # same-VIN New-Retail code recovered
+            self.assertEqual(r["model_number"], code)                        # same-VIN New-Car code recovered
             self.assertNotIn(r["model_number"], ("BLANK", "TRUCK"))
-            self.assertEqual(r["model_number_source"], "original New Retail VIN lifecycle record")  # provenance
+            self.assertIn("authoritative New-Car history", r["model_number_source"])   # exact provenance wording
 
     def test_specific_codes_and_raw_config(self):
         by = self._rows_by_vin()
@@ -108,16 +111,27 @@ class TestVinIdentityBridge(unittest.TestCase):
         for vin, my, price, sentinel, code in CASES:
             r = by[vin]
             self.assertEqual(r["price"], float(price))                       # USED Vehicle Price unchanged
-            self.assertEqual(r["sold_date"], f"{my}-06-15")                  # used sale date unchanged
+            self.assertEqual(r["sold_date"], f"{my}-06-15")                  # used sale date unchanged (not the new sale)
             self.assertEqual(str(r["year"]), my)                            # used model year unchanged
             self.assertEqual(r["vin"], vin)                                 # used VIN unchanged
 
-    def test_no_false_match_and_no_inference_without_lifecycle(self):
+    def test_no_false_match_and_no_inference_without_newcar(self):
         by = self._rows_by_vin()
         orphan = by["5N1XXORPHAN0000000"]
         self.assertFalse(_is_real_code(orphan.get("model_number")))          # stays a sentinel -> no code
         self.assertEqual(orphan.get("model_number"), "BLANK")
         self.assertNotIn("model_number_source", orphan)                      # nothing inferred without a VIN match
+
+    def test_model_conflict_is_surfaced_not_bridged(self):
+        # a used QX80 row whose New-Car history VIN is a QX60 code must NOT bridge — conflict surfaced
+        _batch(self.conn, "src_p11_retail_history", "2023-01-01T00:00:00Z",
+               [_newcar_sale("5N1QX80CONFLICT0001", "84615", "2024", 70000, model="QX60")], schema=3)
+        _batch(self.conn, "src_p11_retail_history", "2026-09-01T00:00:00Z",
+               [_used_row("5N1QX80CONFLICT0001", "2025", 70000, "BLANK", model="QX80")], schema=3)
+        rows, _ = latest_retail_rows(self.conn, SCOPE)
+        r = next(x for x in rows if x.get("vin") == "5N1QX80CONFLICT0001")
+        self.assertFalse(_is_real_code(r.get("model_number")))               # NOT bridged across a model conflict
+        self.assertIn("model_number_conflict", r)
 
     def test_price_observations_now_see_recovered_codes(self):
         rows, _as_of = latest_retail_rows(self.conn, SCOPE)
@@ -131,13 +145,12 @@ class TestVinIdentityBridge(unittest.TestCase):
         self.assertIn("8461", c4)                                            # 2024/2025 Autograph -> raw 8461
         self.assertIn("8481", c4)                                            # 2026 Autograph -> raw 8481
 
-    def test_index_is_identity_only_direct_lookup(self):
+    def test_index_exact_full_vin_only(self):
         idx = new_retail_identity_index(self.conn, SCOPE)
-        # keyed by last-8 (the Serial form) so a full used VIN resolves
-        self.assertIn("SC339383", idx)
-        self.assertEqual(idx["SC339383"]["model_code"], "84615")
-        self.assertEqual(idx["SC339383"]["source"], "original New Retail VIN lifecycle record")
-        self.assertNotIn("5N1XXORPHAN0000000"[-8:], idx)                     # no phantom entries
+        self.assertIn("5N1AL1HU6SC339383", idx)                              # keyed by the exact full VIN
+        self.assertEqual(idx["5N1AL1HU6SC339383"]["model_code"], "84615")
+        self.assertEqual(idx["5N1AL1HU6SC339383"]["source"], "authoritative New-Car sales history")
+        self.assertNotIn("5N1XXORPHAN0000000", idx)                          # no phantom entries
 
 
 if __name__ == "__main__":

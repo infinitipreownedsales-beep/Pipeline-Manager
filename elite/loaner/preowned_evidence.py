@@ -332,29 +332,49 @@ def _is_real_code(v):
 
 
 def new_retail_identity_index(conn, scope):
-    """VIN-keyed authoritative IDENTITY recovered from the dealership's historical New-Retail VIN lifecycle — the
-    new-inventory pipeline snapshots (authoritative model_code + original MSRP) and the Speed-to-Sell new-sales
-    export (VIN + model_code). Returns {id_key: {"model_code", "msrp", "source"}}, where id_key is each raw
-    VIN/Serial/Stock identifier and its last-8 (the _id_match_keys join) so a used-ledger row carrying a full VIN
-    resolves against a pipeline row that only carries a Serial/Stock#.
+    """VIN-keyed authoritative IDENTITY for used-ledger rows that carry no usable model code, recovered from the
+    dealership's historical NEW-car records that DO carry it:
 
-    IDENTITY ONLY. This never carries a new sale's price/cost/date into a used transaction — only the original
-    model code and (where present) the original MSRP, each tagged with provenance so a bridged code is never
-    presented as if it were on the used ledger. Newest lifecycle record wins per key. Read-only."""
+      * HISTORICAL NEW-CAR SALES (the DMS sales ledger's own coded rows) — the original NEW sale of a VIN carries
+        the authoritative Model Number, while its later USED resale carries BLANK/TRUCK. All completed
+        retail_history batches are scanned (the new sale predates the used resale, in an earlier batch);
+      * the new-inventory pipeline snapshots (model_code + original MSRP) and Speed-to-Sell (VIN + model_code) —
+        additional coverage.
+
+    Returns {id_key: {"model_code", "msrp", "model", "source"}}. Keys are the raw identifiers and their last-8
+    (via _id_match_keys) so the index can be built from any source; the BRIDGE itself matches on the EXACT FULL
+    VIN only (see _bridge_identity_by_vin) — never fuzzy. IDENTITY ONLY: never a new sale's price/cost/date.
+    Newest record wins per key; read-only (raw import history is never mutated)."""
     index = {}
 
-    def _add(keys, code, msrp, source):
+    def _add(keys, code, msrp, model, source):
         for k in keys:
             cur = index.get(k)
             if cur is None:
-                index[k] = {"model_code": code, "msrp": msrp, "source": source}
+                index[k] = {"model_code": code, "msrp": msrp, "model": model, "source": source}
             else:                                           # fill gaps without overwriting a newer record's fields
                 if cur.get("model_code") is None and code is not None:
-                    cur["model_code"] = code
-                    cur["source"] = source
+                    cur["model_code"], cur["model"], cur["source"] = code, (model or cur.get("model")), source
                 if cur.get("msrp") is None and msrp is not None:
                     cur["msrp"] = msrp
 
+    # (1) Historical NEW-CAR SALES — the authoritative bridge source (VIN + Model Number + model line).
+    for batch in conn.execute(
+            "SELECT id FROM import_batch WHERE source_id='src_p11_retail_history' AND store_scope=? "
+            "AND lifecycle_status='completed' ORDER BY received_at DESC, id DESC", (scope,)).fetchall():
+        for o in conn.execute("SELECT normalized_values, raw_values FROM source_observation "
+                              "WHERE import_batch_id=? AND acceptance_status='accepted'", (batch[0],)).fetchall():
+            norm, raw = _json(o[0]), _json(o[1])
+            code = norm.get("model_number")
+            if not _is_real_code(code):
+                code = raw.get("model_number") or raw.get("Model Number")
+            vin = norm.get("vin") or raw.get("vin") or raw.get("VIN")
+            if not _is_real_code(code) or not vin:
+                continue
+            model = str(norm.get("model") or raw.get("model") or raw.get("Model") or "").strip()
+            _add(_id_match_keys(vin), str(code).strip().upper(), _retail_msrp(raw), model,
+                 "authoritative New-Car sales history")
+    # (2) New-inventory pipeline snapshots (model_code + MSRP) and (3) Speed-to-Sell (VIN + model_code).
     for source_id in ("src_p11_new_inventory_pipeline_summary", "src_p11_new_inventory_current"):
         for batch in conn.execute(
                 "SELECT id FROM import_batch WHERE source_id=? AND store_scope=? AND lifecycle_status='completed' "
@@ -362,13 +382,12 @@ def new_retail_identity_index(conn, scope):
             for obs in conn.execute("SELECT raw_values FROM source_observation WHERE import_batch_id=? "
                                     "AND acceptance_status='accepted'", (batch[0],)).fetchall():
                 raw = _json(obs[0])
-                code = str(raw.get("model_code") or "").strip().upper() if _is_real_code(raw.get("model_code")) else None
+                code = str(raw.get("model_code")).strip().upper() if _is_real_code(raw.get("model_code")) else None
                 msrp = _msrp_num(raw.get("msrp"))
                 if code is None and msrp is None:
                     continue
                 _add(_id_match_keys(raw.get("vin"), raw.get("serial"), raw.get("stock_number")), code, msrp,
-                     "original New Retail VIN lifecycle record")
-    # Speed-to-Sell new-sales export (VIN + model code; no MSRP) — additional VIN coverage for identity only.
+                     str(raw.get("model") or "").strip(), "original New Retail VIN lifecycle record")
     for batch in conn.execute(
             "SELECT id FROM import_batch WHERE source_id='src_p11_speed_to_sell' AND store_scope=? "
             "AND lifecycle_status='completed' ORDER BY received_at DESC, id DESC", (scope,)).fetchall():
@@ -377,7 +396,7 @@ def new_retail_identity_index(conn, scope):
             raw = _json(obs[0])
             if _is_real_code(raw.get("model_code")):
                 _add(_id_match_keys(raw.get("vin"), raw.get("serial"), raw.get("stock_number")),
-                     str(raw.get("model_code")).strip().upper(), None,
+                     str(raw.get("model_code")).strip().upper(), None, str(raw.get("model") or "").strip(),
                      "original New Retail VIN lifecycle record")
     return index
 
@@ -385,28 +404,41 @@ def new_retail_identity_index(conn, scope):
 def _bridge_identity_by_vin(row, idmap):
     """If a used-ledger row's model_number/model_code is absent or a non-code sentinel (BLANK/TRUCK/…), recover
     the authoritative model code — and original MSRP where the used row lacks it — from the SAME FULL VIN's
-    New-Retail lifecycle record. IDENTITY ONLY: the used sale date, used transaction price, used VIN, used model
-    year and every other used fact are left exactly as the used ledger recorded them. Provenance is stamped so a
-    bridged code is never presented as if it were on the used ledger. No VIN match -> nothing inferred."""
+    historical New-Car record. STRICT: EXACT full-VIN match only (never fuzzy, never last-8 for the bridge
+    decision), never inferred from trim text / MSRP / price / normalize_code. The used sale date, used
+    transaction price, used VIN and used model year are left exactly as the used ledger recorded them. If the
+    New-Car source reports a DIFFERENT commercial model than the used row, the conflict is surfaced and NO bridge
+    is applied. Raw import history is never mutated (this is a read-time normalized-evidence bridge)."""
     have_code = _is_real_code(row.get("model_number")) or _is_real_code(row.get("model_code"))
     have_msrp = _retail_msrp(row) is not None
     if have_code and have_msrp:
+        return row                                          # preserve any valid code / MSRP already present
+    vin = str(row.get("vin") or "").strip().upper()
+    if not vin:
         return row
-    keys = _id_match_keys(row.get("vin"))
-    hit = None
-    for k in keys:
-        if k in idmap:
-            hit = idmap[k]
-            break
+    hit = idmap.get(vin)                                    # EXACT full-VIN match only
     if hit is None:
         return row
+    code = hit.get("model_code")
+    # (8) model cross-check: New-Car model (explicit, else derived from the code) must agree with the used row.
+    if not have_code and code:
+        from ..newinv.dms_identity import model_from_code
+        used_model = str(row.get("model") or "").strip().upper()
+        new_model = (str(hit.get("model") or "").strip().upper() or (model_from_code(code) or "").upper())
+        if used_model and new_model and used_model != new_model:
+            out = dict(row)
+            out["model_number_conflict"] = (f"used ledger says {used_model} but New-Car history says {new_model} "
+                                            f"for VIN {vin} (code {code}) — not bridged")
+            return out
     out = dict(row)
-    if not have_code and hit.get("model_code"):
-        out["model_number"] = hit["model_code"]             # identity recovered from the New-Retail lifecycle
-        out["model_number_source"] = hit.get("source", "original New Retail VIN lifecycle record")
+    prov = f"historical used transaction VIN matched to original New sale VIN; model code {code} from " \
+           f"authoritative New-Car history."
+    if not have_code and code:
+        out["model_number"] = code
+        out["model_number_source"] = prov
     if not have_msrp and hit.get("msrp") is not None:
         out["msrp"] = hit["msrp"]
-        out["msrp_source"] = hit.get("source", "original New Retail VIN lifecycle record")
+        out["msrp_source"] = prov
     return out
 
 
