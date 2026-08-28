@@ -76,7 +76,9 @@ class TestAddRanking(unittest.TestCase):
         self.p = Phase10(os.path.join(self.tmp, "elite.db"))
         self.app = self.p.app
         pol = SLPolicyStore(self.app.prefs, SCOPE)
-        pol.set_projected_tenure_months(9, actor="k", at="t")          # governed expected hold
+        # NOTE: no projected_tenure_months is set — the ADD hold is DERIVED from the governed release backsolve
+        # (total-to-retail − learned sell time − protection buffer), so a fixed tenure input is not required.
+        pol.set_protection_buffer_days(15, actor="k", at="t")          # governed process/protection buffer (days)
         pis = ProgramInputsStore(self.app.prefs, SCOPE)
         pis.add("icv", effective_month="2026-01", model=MODEL, model_year="2026", value=6000, actor="k",
                 recorded_at="t")
@@ -143,6 +145,40 @@ class TestAddRanking(unittest.TestCase):
         self.assertEqual(len(res4["backups"]), 2)                        # remaining surplus as backups
         res6 = self._run(rows, harm, n=6)
         self.assertEqual(len(res6["ready"]), 6)                           # operator-adjustable up
+
+    def test_hold_is_derived_from_release_backsolve_not_fixed_tenure(self):
+        # no projected_tenure_months is set anywhere; the hold must still resolve from the governed backsolve:
+        #   release_by = today + total_to_retail(240) − sell_time(45) − buffer(15) = today + 180
+        rows = [_unit("A1", "A1", invoice="65000")]
+        res = self._run(rows, _harm({(CODE, "QBE", "G"): EXCESS}), n=1)
+        self.assertEqual(len(res["ready"]), 1)                            # resolves WITHOUT a fixed tenure input
+        c = res["ready"][0]
+        self.assertEqual(c.hold_days, 240 - 45 - 15)                      # derived, not hardwired
+        self.assertEqual(c.release_by, "2027-02-23")                      # today (2026-08-27) + 180 days
+        # write-down accrues over exactly the derived hold, and Velocity is preserved (final sale inside 240)
+        self.assertTrue(c.velocity_preserved)
+
+    def test_missing_protection_buffer_blocks_with_named_field(self):
+        # an UNSET governed buffer (None) -> the release backsolve cannot resolve -> BLOCKED on THAT exact input
+        with patch.object(SLPolicyStore, "protection_buffer_days", return_value=None):
+            rows = [_unit("A1", "A1", invoice="65000")]
+            res = self._run(rows, _harm({(CODE, "QBE", "G"): EXCESS}), n=4)
+        self.assertEqual(res["ready"], [])
+        self.assertEqual(len(res["blocked"]), 1)
+        self.assertIn("buffer", res["blocked"][0].missing.lower())        # names the protection/process buffer
+
+    def test_missing_sell_time_evidence_blocks_with_named_field(self):
+        # no resale history for the model -> estimate_sell_time returns None -> BLOCKED on sell-time evidence
+        rows = [_unit("A1", "A1", invoice="65000")]
+        with patch("elite.loaner.sl_add.read_new_retail_units", return_value=rows), \
+             patch("elite.loaner.sl_add.certified_harm_index",
+                   return_value=_harm({(CODE, "QBE", "G"): EXCESS})), \
+             patch("elite.loaner.sl_add._retail_rows", return_value=[]), \
+             patch("elite.loaner.sl_add._inventory_rows", return_value=rows):
+            res = rank_add_candidates(self.app, SCOPE, n=4, today=TODAY)
+        self.assertEqual(res["ready"], [])
+        self.assertEqual(len(res["blocked"]), 1)
+        self.assertIn("sell-time", res["blocked"][0].missing.lower())     # names the missing sell-time evidence
 
     def test_committed_vin_excluded(self):
         rows = [_unit("A1", "A1", invoice="65000")]

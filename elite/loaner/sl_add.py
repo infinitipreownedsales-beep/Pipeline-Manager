@@ -13,6 +13,14 @@ Per candidate the total-dealership result of placing it is, incrementally:
 
     adjusted_basis = original authoritative INVOICE − cumulative Service-Loaner write-down (1.25%/mo, daily-prorated)
 
+The prospective HOLD is not a typed/fixed tenure — it is DERIVED from the already-governed release backsolve
+(sell_time.latest_prudent_release), exactly as the active-loaner board does. For a NEW add placed today:
+prospective in-service = today; final retail deadline = today + total-to-retail (Velocity day_cap, else the
+governed 240-day rule); latest prudent release = deadline − learned post-loaner sell time − governed process/
+protection buffer; hold_days = today → release_by. The write-down and the expected used transaction value at
+release both use THAT derived hold. It fails closed only when a real release-timing input is unresolved (no
+sell-time evidence, no protection buffer, no applicable total-to-retail rule) — never by hardwiring a tenure.
+
 Write-down is counted ONCE (inside the adjusted basis, never also as a separate cost); ICV and Velocity are
 separate program benefits added once each; MSRP is never substituted for the transaction rail (it appears only
 inside the settled _market_price SECONDARY normalizer). Every required term is authoritative or the unit is
@@ -28,14 +36,13 @@ from __future__ import annotations
 import datetime as _dt
 from dataclasses import dataclass
 
-from .sl_policy import SLPolicyStore, cumulative_writedown, DAYS_PER_MONTH
+from .sl_policy import SLPolicyStore, cumulative_writedown
 from .program_inputs import ProgramInputsStore
-from .sell_time import estimate_sell_time
+from .sell_time import estimate_sell_time, latest_prudent_release
 from .placement import (read_new_retail_units, certified_harm_index, _to_candidate, _authoritative_vin,
                         _eligible, EXCESS, COVERED, SHORTAGE, UNKNOWN)
 from .unit_econ import _invoice_of
-from .sl_decision import (_market_price, _retail_rows, _inventory_rows, _price_num, _code_norm, _my_int,
-                          _iso_today)
+from .sl_decision import (_market_price, _retail_rows, _inventory_rows, _price_num, _code_norm, _iso_today)
 
 DEFAULT_ADD_TARGET = 4          # operator default; adjustable at call time without any code change
 TOTAL_TO_RETAIL_DEFAULT = 240   # days from in-service to final retail (the Velocity deadline)
@@ -112,7 +119,7 @@ def _velocity_incentive(vel_e):
     return vel_e.value, cap
 
 
-def _evaluate_unit(app, scope, row, *, pol, pis, today, month, rate, tenure_months, retail_rows, inv):
+def _evaluate_unit(app, scope, row, *, pol, pis, today, month, rate, retail_rows, inv):
     """Run the SETTLED transaction-price economics for placing ONE physical New-Retail surplus `row` into
     Service Loaner today. Returns (AddCandidate, None) when fully evaluable, else (None, missing_field)."""
     vin, vin_ok, serial = _authoritative_vin(row)
@@ -122,27 +129,44 @@ def _evaluate_unit(app, scope, row, *, pol, pis, today, month, rate, tenure_mont
     unit_msrp = _price_num(row.get("msrp"))
     year = cand.year or ""
 
-    # --- projected expected hold (governed program tenure) ---
-    if tenure_months is None:
-        return None, "projected program tenure (months) — set it in Service-Loaner policy"
-    hold_days = int(round(float(tenure_months) * DAYS_PER_MONTH))
+    # --- prospective hold DERIVED from the already-governed release backsolve (no separate fixed tenure input) ---
+    # For a NEW add placed today: prospective in-service = today; the latest prudent loaner release is
+    #   final retail deadline (in-service + total-to-retail) − learned post-loaner sell time − governed buffer,
+    # exactly the architecture the active-loaner board uses. hold_days = today → release_by. Fail closed only when
+    # one of those governed release-timing inputs is genuinely unresolved (never hardwire a tenure).
+    sell = estimate_sell_time(retail_rows, model=model, model_year=year, trim=None, drivetrain=None)
+    sell_days = sell["days"] if sell else None
+    if sell_days is None:
+        return None, "expected post-loaner sell-time evidence (no resale history for this model)"
+    buffer_days = pol.protection_buffer_days()
+    if buffer_days is None:
+        return None, "governed protection / process buffer (days) — set it in Service-Loaner policy"
+    vel_e = pis.applicable("velocity", model, month, model_year=year)
+    velocity, total_to_retail = _velocity_incentive(vel_e)     # Velocity day_cap, else the governed 240-day rule
+    if total_to_retail is None:
+        return None, "applicable total-to-retail deadline (Velocity / program rule)"
+    rel = latest_prudent_release(in_service_date=today, total_to_retail_days=total_to_retail,
+                                 expected_sell_time_days=sell_days, process_buffer_days=buffer_days)
+    if not rel:
+        return None, "release timing unresolved (total-to-retail / sell-time / buffer)"
+    release_by = rel["release_by"]
+    try:
+        hold_days = max(0, (_dt.date.fromisoformat(release_by) - _dt.date.fromisoformat(today)).days)
+    except (ValueError, TypeError):
+        return None, "release timing unresolved (cannot place today → release_by on the calendar)"
 
     # --- authoritative invoice (row allowlist, else per-VIN override) ---
     invoice = _invoice_of(row, (vin if vin_ok else ""), pol)
     if invoice is None:
         return None, "authoritative original invoice"
 
-    # --- adjusted basis = invoice − cumulative write-down (once; 1.25%/mo daily-prorated) ---
+    # --- adjusted basis = invoice − cumulative write-down (once; 1.25%/mo daily-prorated over the derived hold) ---
     wd_dollars, _wd_expl, _pa = cumulative_writedown(invoice=invoice, monthly_rate=rate, tenure_days=hold_days)
     if wd_dollars is None:
         return None, "governed write-down rate / tenure"
     adjusted_basis = round(float(invoice) - wd_dollars, 2)
 
-    # --- expected used SELLING price at the release date, on the settled transaction rail (no MSRP substitution) ---
-    try:
-        release_by = (_dt.date.fromisoformat(today) + _dt.timedelta(days=hold_days)).isoformat()
-    except (ValueError, TypeError):
-        release_by = today
+    # --- expected used SELLING price at the derived release date, on the settled transaction rail (no MSRP sub) ---
     price, price_basis, _pconf = _market_price(retail_rows, inv, model, year, release_by, unit_msrp, model_code)
     if price is None:
         return None, "expected used transaction value at release (governed model-code cohort)"
@@ -154,16 +178,9 @@ def _evaluate_unit(app, scope, row, *, pol, pis, today, month, rate, tenure_mont
         return None, "ICV (program value by model / in-service month)"
     icv = float(icv_e.value)
 
-    # --- Velocity: separate, contingent on the 240-day rule; absent → 0 (settled treatment), flagged ---
-    vel_e = pis.applicable("velocity", model, month, model_year=year)
-    velocity, total_to_retail = _velocity_incentive(vel_e)
-    sell = estimate_sell_time(retail_rows, model=model, model_year=year, trim=None, drivetrain=None)
-    sell_days = sell["days"] if sell else None
-    # preserved when the projected FINAL sale (hold + sell time) still lands inside the deadline; unknown → do
-    # not fabricate a forfeit (matches sl_decision._within_deadline)
-    velocity_preserved = True
-    if sell_days is not None and total_to_retail is not None:
-        velocity_preserved = (hold_days + sell_days) <= total_to_retail
+    # --- Velocity: separate, contingent on the 240-day rule; absent → 0 (settled treatment), flagged. Placing by
+    # the prudent release keeps the projected final sale inside the deadline by construction, so it is preserved. ---
+    velocity_preserved = (hold_days + sell_days) <= total_to_retail
     velocity_val = float(velocity) if (velocity is not None and velocity_preserved) else 0.0
 
     # --- total-dealership net of placing THIS specific VIN (EXCESS → retail opportunity cost 0) ---
@@ -214,9 +231,6 @@ def rank_add_candidates(app, scope, *, n=None, today=None, committed_vins=frozen
     scenario = scenario or {}
     pol = SLPolicyStore(app.prefs, scope)
     pis = ProgramInputsStore(app.prefs, scope)
-    tenure_months = scenario.get("tenure_months")
-    if tenure_months is None:
-        tenure_months = pol.projected_tenure_months()
     rate = scenario.get("writedown_rate")
     if rate is None:
         rate, _rsrc = pol.writedown_monthly_rate(month)
@@ -247,7 +261,7 @@ def rank_add_candidates(app, scope, *, n=None, today=None, committed_vins=frozen
             continue
         # EXCESS surplus only from here — retail-safe, opportunity cost 0
         ac, missing = _evaluate_unit(app, scope, r, pol=pol, pis=pis, today=today, month=month, rate=rate,
-                                     tenure_months=tenure_months, retail_rows=retail_rows, inv=inv)
+                                     retail_rows=retail_rows, inv=inv)
         if ac is not None:
             ready.append(ac)
         else:
