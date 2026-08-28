@@ -129,12 +129,29 @@ class TestObservedTransactionRailPrimary(unittest.TestCase):
 
 
 class TestMsrpRetentionFallback(unittest.TestCase):
+    # The unit is code 84616 (config 8481). A DIFFERENT QX60 family — 84516 (config 8451) — is the only one that
+    # traded, so NEITHER primary tier (exact 84616, nor the year-agnostic 8481 config) matches. Only then does
+    # the secondary MSRP-retention rail engage: broader same-model retention re-scaled by THIS unit's own MSRP.
+    # (84516 -> 8451 and 84616 -> 8481 are distinct governed families, so the year-agnostic tier does not merge
+    # them — that is exactly why the fallback is reached.)
+    def _diff_family_rows(self):
+        rows = []
+        for my in (2024, 2025, 2026):
+            msrp = {2024: 50000, 2025: 52000, 2026: 54000}[my]
+            for a in range(3, 16):
+                t = my * 12 + a
+                y, m = t // 12, t % 12 + 1
+                for k in range(5):
+                    rows.append({"model": "QX60", "model_number": "84516", "year": str(my),
+                                 "sold_date": f"{y:04d}-{m:02d}-15", "price": str(50000 - 400 * a + (k - 2) * 100),
+                                 "msrp": str(msrp), "days_to_sell": "40"})
+        return rows
+
     def test_fallback_used_only_when_same_trim_transaction_evidence_insufficient(self):
-        # the current unit's own trim has NO transaction history -> secondary rail: broader same-model retention
+        # the current unit's own config has NO transaction history -> secondary rail: broader same-model retention
         # (MSRP-normalized) re-scaled by THIS unit's own authoritative MSRP. Cites itself as the fallback.
-        rows = _rows(codes=("84617",))                          # only the OTHER trim traded
-        inv = _inv()
-        price, prov, _c = _market_price(rows, inv, "QX60", "2026", "2026-08-15", 62000.0, "84616")
+        price, prov, _c = _market_price(self._diff_family_rows(), _inv(), "QX60", "2026", "2026-08-15",
+                                        62000.0, "84616")
         self.assertIsNotNone(price)
         self.assertIn("observed retention", prov)
         self.assertIn("MSRP-normalized fallback", prov)
@@ -143,10 +160,9 @@ class TestMsrpRetentionFallback(unittest.TestCase):
     def test_fallback_scales_with_each_units_own_msrp(self):
         # in the fallback, the retention PERCENT is shared but each unit's price applies ITS OWN MSRP, so the two
         # prices scale with their MSRPs and are NOT equal.
-        rows = _rows(codes=("84617",))                          # neither unit's-own-trim (84616) traded
-        inv = _inv()
-        pa = _market_price(rows, inv, "QX60", "2026", "2026-08-15", 62000.0, "84616")
-        pb = _market_price(rows, inv, "QX60", "2026", "2026-08-15", 54000.0, "84616")
+        rows = self._diff_family_rows()
+        pa = _market_price(rows, _inv(), "QX60", "2026", "2026-08-15", 62000.0, "84616")
+        pb = _market_price(rows, _inv(), "QX60", "2026", "2026-08-15", 54000.0, "84616")
         self.assertIn("MSRP-normalized fallback", pa[1])
         self.assertNotEqual(pa[0], pb[0])
         self.assertAlmostEqual(pa[0] / pb[0], 62000.0 / 54000.0, places=4)
@@ -214,6 +230,59 @@ class TestHoldBenefitReflectsMarketAndBasis(unittest.TestCase):
         self.assertEqual(f["invoice"], 60000)                                    # basis rail = invoice + write-down
         self.assertNotAlmostEqual(f["price_now"], c["adjusted_basis_now"], places=0)
         self.assertGreater(c["adjusted_basis_now"], 0)
+
+
+class TestYearAgnosticCodeTier(unittest.TestCase):
+    """Live root cause: DMS 5-digit model codes embed MODEL YEAR in the 5th digit (normalize_code('QX60',
+    '84616') -> '8461'-> governed '8481'; '84614' -> same). A CURRENT-model-year unit's exact 5-digit code can
+    never be carried by its OLDER used comparables, so the exact-code-only match gated every unit. The governed
+    year-agnostic (4-digit) config tier resolves it against its own configuration's older-model-year used sales
+    at the same lifecycle age — without widening the window, lowering the gate, or touching MSRP."""
+
+    def _real_history(self, per=6, ages=range(10, 22)):
+        # Real-shaped: the SAME QX60 configuration across model years carries DIFFERENT 5-digit codes (5th digit
+        # = MY): 2024 -> 84614, 2025 -> 84615. A 2026 unit is code 84616 — absent from all historical rows.
+        out = []
+        for my, code in ((2024, "84614"), (2025, "84615")):
+            for a in ages:
+                t = my * 12 + a
+                y, m = t // 12, t % 12 + 1
+                for k in range(per):
+                    out.append({"model": "QX60", "model_number": code, "year": str(my),
+                                "sold_date": f"{y:04d}-{m:02d}-15", "price": str(48000 - 250 * a + (k - 3) * 120),
+                                "days_to_sell": "45"})
+        return out
+
+    def test_current_my_unit_prices_off_year_agnostic_config_evidence(self):
+        rows = self._real_history()
+        # unit is a 2026 QX60, exact code 84616 — NO historical row carries 84616 (they are 84614 / 84615)
+        price, prov, conf = _market_price(rows, [], "QX60", "2026", "2027-03-15", 62000.0, "84616")
+        self.assertIsNotNone(price)                                   # no longer gated
+        self.assertIn("observed used transaction price", prov)        # still the PRIMARY transaction rail
+        self.assertIn("year-agnostic config code", prov)              # resolved via the governed 4-digit tier
+        self.assertNotIn("MSRP", prov)                                # NOT the MSRP retention fallback
+        self.assertNotEqual(conf, "none")
+
+    def test_exact_code_tier_still_preferred_when_present(self):
+        # add same-year exact-code (84616) evidence: the exact tier must win and cite the exact code, unchanged
+        rows = self._real_history()
+        for a in range(10, 22):
+            t = 2026 * 12 + a
+            y, m = t // 12, t % 12 + 1
+            for k in range(6):
+                rows.append({"model": "QX60", "model_number": "84616", "year": "2026",
+                             "sold_date": f"{y:04d}-{m:02d}-15", "price": str(70000 - 250 * a + (k - 3) * 120),
+                             "days_to_sell": "45"})
+        price, prov, _c = _market_price(rows, [], "QX60", "2026", "2027-03-15", 62000.0, "84616")
+        self.assertIn("same model code 84616", prov)                  # exact tier preferred -> trim/MY specificity
+        self.assertGreater(price, 50000)                              # priced off the higher exact-code cohort
+
+    def test_no_config_evidence_still_gates(self):
+        # a genuinely different configuration (different 4-digit family) with no evidence must still GATE
+        rows = self._real_history()
+        price, prov, conf = _market_price(rows, [], "QX60", "2026", "2027-03-15", 62000.0, "84990")
+        self.assertIsNone(price)                                      # no exact and no year-agnostic match -> gate
+        self.assertEqual(conf, "none")
 
 
 if __name__ == "__main__":

@@ -182,19 +182,43 @@ def _price_observations(rows, model):
     return out
 
 
-def _observed_price_at(obs, target, want_code):
-    """Median observed used TRANSACTION price at ~target age (months) for the SAME governed comparable
-    (model_code / trim), tightest defensible age window first. Different trims transact at different dollar
-    levels, so restricting to the unit's own model code differentiates units without any MSRP normalization.
-    Returns (dollars, window, n) or (None, None, 0)."""
+def _code4(model, code):
+    """The governed YEAR-AGNOSTIC model code: the DMS 5-digit code reduced to its 4-digit matching form (the 5th
+    digit is the MODEL YEAR — see newinv/dms_identity.normalize_code, which also carries the reviewed QX60/QX80
+    consolidations). This is the exact same reduction the rest of Elite uses to join supply/demand across model
+    years. Returns None when no code resolves."""
+    if not code:
+        return None
+    try:
+        from ..newinv.dms_identity import normalize_code
+        return normalize_code(model or "", code) or None
+    except Exception:   # noqa: BLE001 — identity availability must never break the market rail
+        return None
+
+
+def _observed_price_at(obs, target, want_code, model=""):
+    """Median observed used TRANSACTION price at ~target age (months) for the SAME governed comparable, tightest
+    defensible age window first. Two governed code tiers, most specific first:
+      (1) EXACT model code (the full DMS code) — trim- AND model-year-specific;
+      (2) YEAR-AGNOSTIC config code (the 4-digit matching form; the 5th DMS digit is model year) — trim-specific
+          but shared across model years, so a current-model-year unit resolves against its own configuration's
+          older used comparables at the same lifecycle age (the whole point of pricing by age). This is why a
+          new unit — whose exact 5-digit code no older resale can carry — is no longer gated.
+    Never widens the ±window or lowers the sample gate; never pools different configurations. Returns
+    (dollars, window, n, (tier_label, code_shown)) or (None, None, 0, None)."""
     if want_code is None:
-        return None, None, 0
-    pool = [o for o in obs if o[2] == want_code]
-    for w in (2, 3, 4, 6):
-        win = [p for am, p, _c in pool if target - w <= am <= target + w]
-        if len(win) >= RESALE_WINDOW_GATE:
-            return median(win), w, len(win)
-    return None, None, 0
+        return None, None, 0, None
+    want4 = _code4(model, want_code)
+    tiers = [("same model code", [o for o in obs if o[2] == want_code], want_code)]
+    if want4 is not None:
+        tiers.append(("same year-agnostic config code",
+                      [o for o in obs if _code4(model, o[2]) == want4], want4))
+    for label, pool, code_shown in tiers:
+        for w in (2, 3, 4, 6):
+            win = [p for am, p, _c in pool if target - w <= am <= target + w]
+            if len(win) >= RESALE_WINDOW_GATE:
+                return median(win), w, len(win), (label, code_shown)
+    return None, None, 0, None
 
 
 def _market_price(retail_rows, inv, model, model_year, sale_date, unit_msrp, unit_code):
@@ -217,14 +241,16 @@ def _market_price(retail_rows, inv, model, model_year, sale_date, unit_msrp, uni
         return None, "model-year / sale-date unresolved — cannot place on the age curve", "none"
     model_u = (model or "").upper()
 
-    # PRIMARY: observed used transaction dollars for the same model code / trim.
+    # PRIMARY: observed used transaction dollars for the same governed comparable (exact model code first, then
+    # the year-agnostic config code so a current-model-year unit matches its own config's older used sales).
     price_obs = _price_observations(retail_rows, model)
-    dollars, w, n = _observed_price_at(price_obs, target, unit_code)
+    dollars, w, n, tinfo = _observed_price_at(price_obs, target, unit_code, model_u)
     if dollars is not None:
         conf = "moderate" if w <= 3 else "thin"
+        tier_label, code_shown = tinfo
         return (round(dollars, 2),
                 f"{model_u} observed used transaction price median ${dollars:,.0f} at ~{target}mo age "
-                f"(±{w}mo, n={n}, same model code {unit_code})", conf)
+                f"(±{w}mo, n={n}, {tier_label} {code_shown})", conf)
 
     # SECONDARY: MSRP-normalized retention from the broader same-model cohort, applied to this unit's own MSRP.
     if unit_msrp is not None and unit_msrp > 0:
