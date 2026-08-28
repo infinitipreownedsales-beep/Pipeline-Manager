@@ -183,27 +183,31 @@ def _price_observations(rows, model):
 
 
 def _code4(model, code):
-    """The governed YEAR-AGNOSTIC model code: the DMS 5-digit code reduced to its 4-digit matching form (the 5th
-    digit is the MODEL YEAR — see newinv/dms_identity.normalize_code, which also carries the reviewed QX60/QX80
-    consolidations). This is the exact same reduction the rest of Elite uses to join supply/demand across model
-    years. Returns None when no code resolves."""
+    """The RAW first-four-digit configuration code for the used-market comparability tier: the DMS 5-digit code
+    with only its 5th digit (the MODEL YEAR) dropped. This is the PURE `code4` reduction — deliberately NOT
+    `normalize_code`, whose legacy PLANNING consolidations (QX60 8461→8481, QX80 834x→8381) are demand-cohort
+    lineage rules that must NOT silently become used-market transaction comparability. Here 84617/84616/84615
+    all reduce to 8461, but 84417→8441 stays separate, 848xx stays its own family, 834x does NOT fold into 8381,
+    and 86-gen QX80 stays distinct from 83-gen. Returns None when no 4-digit code resolves. `model` is unused
+    (kept for call-site stability); this raw reduction is intentionally model-agnostic."""
     if not code:
         return None
     try:
-        from ..newinv.dms_identity import normalize_code
-        return normalize_code(model or "", code) or None
+        from ..newinv.dms_identity import code4
+        return code4(code) or None
     except Exception:   # noqa: BLE001 — identity availability must never break the market rail
         return None
 
 
 def _observed_price_at(obs, target, want_code, model=""):
-    """Median observed used TRANSACTION price at ~target age (months) for the SAME governed comparable, tightest
-    defensible age window first. Two governed code tiers, most specific first:
+    """Median observed used TRANSACTION price at ~target age (months) for the SAME comparable, tightest defensible
+    age window first. Two code tiers, most specific first:
       (1) EXACT model code (the full DMS code) — trim- AND model-year-specific;
-      (2) YEAR-AGNOSTIC config code (the 4-digit matching form; the 5th DMS digit is model year) — trim-specific
-          but shared across model years, so a current-model-year unit resolves against its own configuration's
-          older used comparables at the same lifecycle age (the whole point of pricing by age). This is why a
-          new unit — whose exact 5-digit code no older resale can carry — is no longer gated.
+      (2) SAME RAW first-four-digit configuration across model years (the 5th DMS digit is model year) — so a
+          current-model-year unit resolves against its own configuration's older used comparables at the same
+          lifecycle age (the whole point of pricing by age). This is why a new unit — whose exact 5-digit code
+          no older resale can carry — is no longer gated. NO family consolidation or lineage borrowing: only the
+          same raw 4-digit configuration is pooled (84617↔84616 via 8461; 84417/848xx/834x/86-gen stay separate).
     Never widens the ±window or lowers the sample gate; never pools different configurations. Returns
     (dollars, window, n, (tier_label, code_shown)) or (None, None, 0, None)."""
     if want_code is None:
@@ -211,7 +215,7 @@ def _observed_price_at(obs, target, want_code, model=""):
     want4 = _code4(model, want_code)
     tiers = [("same model code", [o for o in obs if o[2] == want_code], want_code)]
     if want4 is not None:
-        tiers.append(("same year-agnostic config code",
+        tiers.append(("same raw configuration code",
                       [o for o in obs if _code4(model, o[2]) == want4], want4))
     for label, pool, code_shown in tiers:
         for w in (2, 3, 4, 6):

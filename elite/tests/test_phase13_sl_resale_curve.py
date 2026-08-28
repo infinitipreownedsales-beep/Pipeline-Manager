@@ -232,57 +232,69 @@ class TestHoldBenefitReflectsMarketAndBasis(unittest.TestCase):
         self.assertGreater(c["adjusted_basis_now"], 0)
 
 
-class TestYearAgnosticCodeTier(unittest.TestCase):
-    """Live root cause: DMS 5-digit model codes embed MODEL YEAR in the 5th digit (normalize_code('QX60',
-    '84616') -> '8461'-> governed '8481'; '84614' -> same). A CURRENT-model-year unit's exact 5-digit code can
-    never be carried by its OLDER used comparables, so the exact-code-only match gated every unit. The governed
-    year-agnostic (4-digit) config tier resolves it against its own configuration's older-model-year used sales
-    at the same lifecycle age — without widening the window, lowering the gate, or touching MSRP."""
+class TestRawConfigCodeTier(unittest.TestCase):
+    """Live root cause: DMS 5-digit model codes embed MODEL YEAR in the 5th digit (84614/84615/84616/84617 are
+    the SAME configuration in different model years). A CURRENT-model-year unit's exact 5-digit code can never be
+    carried by its OLDER used comparables, so the exact-code-only match gated every unit. The market rail's
+    tier-2 pools the SAME RAW first-four-digit configuration across model years — the PURE code4 reduction, NOT
+    normalize_code: it must never apply the planning consolidations (8461->8481, 834x->8381) as transaction
+    comparability. Without widening the window, lowering the gate, or touching MSRP."""
 
-    def _real_history(self, per=6, ages=range(10, 22)):
-        # Real-shaped: the SAME QX60 configuration across model years carries DIFFERENT 5-digit codes (5th digit
-        # = MY): 2024 -> 84614, 2025 -> 84615. A 2026 unit is code 84616 — absent from all historical rows.
+    def _hist(self, code, model="QX60", myears=(2024, 2025), per=6, ages=range(10, 22), price0=48000):
         out = []
-        for my, code in ((2024, "84614"), (2025, "84615")):
+        for my in myears:
             for a in ages:
                 t = my * 12 + a
                 y, m = t // 12, t % 12 + 1
                 for k in range(per):
-                    out.append({"model": "QX60", "model_number": code, "year": str(my),
-                                "sold_date": f"{y:04d}-{m:02d}-15", "price": str(48000 - 250 * a + (k - 3) * 120),
+                    out.append({"model": model, "model_number": code, "year": str(my),
+                                "sold_date": f"{y:04d}-{m:02d}-15", "price": str(price0 - 250 * a + (k - 3) * 120),
                                 "days_to_sell": "45"})
         return out
 
-    def test_current_my_unit_prices_off_year_agnostic_config_evidence(self):
-        rows = self._real_history()
-        # unit is a 2026 QX60, exact code 84616 — NO historical row carries 84616 (they are 84614 / 84615)
+    def test_84617_matches_84616_via_raw_8461(self):
+        # a 2026 unit (84616) prices off 2024/2025 used sales of code 84617 — same raw config 8461, different MY
+        rows = self._hist("84617")
         price, prov, conf = _market_price(rows, [], "QX60", "2026", "2027-03-15", 62000.0, "84616")
         self.assertIsNotNone(price)                                   # no longer gated
         self.assertIn("observed used transaction price", prov)        # still the PRIMARY transaction rail
-        self.assertIn("year-agnostic config code", prov)              # resolved via the governed 4-digit tier
+        self.assertIn("same raw configuration code 8461", prov)       # matched via the raw 4-digit config
+        self.assertNotIn("8481", prov)                                # NOT the planning consolidation
         self.assertNotIn("MSRP", prov)                                # NOT the MSRP retention fallback
         self.assertNotEqual(conf, "none")
 
+    def test_84417_does_not_join_8461(self):
+        # a different raw family (84417 -> 8441) must NOT price an 84616 (-> 8461) unit
+        price, _prov, conf = _market_price(self._hist("84417"), [], "QX60", "2026", "2027-03-15", None, "84616")
+        self.assertIsNone(price)                                      # no exact, no raw-config match -> gate
+        self.assertEqual(conf, "none")
+
+    def test_848xx_stays_its_own_family(self):
+        # 848xx must not be pooled with 8461 (this is exactly the normalize_code 8461->8481 fold we reject)
+        price, _prov, conf = _market_price(self._hist("84816"), [], "QX60", "2026", "2027-03-15", None, "84616")
+        self.assertIsNone(price)                                      # 8481 history must not price an 8461 unit
+        self.assertEqual(conf, "none")
+
+    def test_qx80_834x_does_not_join_8381(self):
+        # QX80 planning folds 834x into 8381; transaction comparability must NOT — 8341 stays distinct from 8381
+        price, _prov, conf = _market_price(self._hist("83416", model="QX80"), [], "QX80", "2026", "2027-03-15",
+                                           None, "83816")
+        self.assertIsNone(price)                                      # 8341 history must not price an 8381 unit
+        self.assertEqual(conf, "none")
+
+    def test_86gen_does_not_join_83gen(self):
+        # current 86-gen QX80 must remain separate from the prior 83-gen for transaction comparability
+        price, _prov, conf = _market_price(self._hist("83316", model="QX80"), [], "QX80", "2026", "2027-03-15",
+                                           None, "86316")
+        self.assertIsNone(price)                                      # 8331 history must not price an 8631 unit
+        self.assertEqual(conf, "none")
+
     def test_exact_code_tier_still_preferred_when_present(self):
-        # add same-year exact-code (84616) evidence: the exact tier must win and cite the exact code, unchanged
-        rows = self._real_history()
-        for a in range(10, 22):
-            t = 2026 * 12 + a
-            y, m = t // 12, t % 12 + 1
-            for k in range(6):
-                rows.append({"model": "QX60", "model_number": "84616", "year": "2026",
-                             "sold_date": f"{y:04d}-{m:02d}-15", "price": str(70000 - 250 * a + (k - 3) * 120),
-                             "days_to_sell": "45"})
+        # exact 84616 evidence present -> exact tier wins first and cites the full code (raw-config tier unused)
+        rows = self._hist("84617") + self._hist("84616", myears=(2026,), price0=70000)
         price, prov, _c = _market_price(rows, [], "QX60", "2026", "2027-03-15", 62000.0, "84616")
         self.assertIn("same model code 84616", prov)                  # exact tier preferred -> trim/MY specificity
         self.assertGreater(price, 50000)                              # priced off the higher exact-code cohort
-
-    def test_no_config_evidence_still_gates(self):
-        # a genuinely different configuration (different 4-digit family) with no evidence must still GATE
-        rows = self._real_history()
-        price, prov, conf = _market_price(rows, [], "QX60", "2026", "2027-03-15", 62000.0, "84990")
-        self.assertIsNone(price)                                      # no exact and no year-agnostic match -> gate
-        self.assertEqual(conf, "none")
 
 
 if __name__ == "__main__":
