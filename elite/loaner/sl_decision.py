@@ -201,13 +201,17 @@ def _code4(model, code):
 
 def _observed_price_at(obs, target, want_code, model=""):
     """Median observed used TRANSACTION price at ~target age (months) for the SAME comparable, tightest defensible
-    age window first. Two code tiers, most specific first:
+    age window first. Governed code tiers, most specific first:
       (1) EXACT model code (the full DMS code) — trim- AND model-year-specific;
       (2) SAME RAW first-four-digit configuration across model years (the 5th DMS digit is model year) — so a
           current-model-year unit resolves against its own configuration's older used comparables at the same
-          lifecycle age (the whole point of pricing by age). This is why a new unit — whose exact 5-digit code
-          no older resale can carry — is no longer gated. NO family consolidation or lineage borrowing: only the
-          same raw 4-digit configuration is pooled (84617↔84616 via 8461; 84417/848xx/834x/86-gen stay separate).
+          lifecycle age (the whole point of pricing by age). NO family consolidation: only the same raw 4-digit
+          configuration is pooled (84617↔84616 via 8461; 84417/848xx/834x/86-gen stay separate);
+      (3) EXPLICIT APPROVED MARKET-COMPARABILITY PREDECESSOR — when the configuration's DMS code CHANGED across
+          model years (e.g. QX60 AUTOGRAPH AWD: 2026 = 84816/8481, 2027 = 84617/8461), the current config may
+          borrow its predecessor's observed used-transaction evidence, but ONLY via an explicit governed
+          relationship in loaner/market_lineage.py (same model + governed trim/drivetrain; direct one-hop; never
+          demand/planning/package lineage, never normalize_code).
     Never widens the ±window or lowers the sample gate; never pools different configurations. Returns
     (dollars, window, n, (tier_label, code_shown)) or (None, None, 0, None)."""
     if want_code is None:
@@ -217,6 +221,13 @@ def _observed_price_at(obs, target, want_code, model=""):
     if want4 is not None:
         tiers.append(("same raw configuration code",
                       [o for o in obs if _code4(model, o[2]) == want4], want4))
+        try:
+            from .market_lineage import market_predecessors
+            for pred4 in market_predecessors(model, want4):     # direct approved predecessors only (no chaining)
+                tiers.append(("market-lineage predecessor",
+                              [o for o in obs if _code4(model, o[2]) == pred4], f"{pred4} -> current {want4}"))
+        except Exception:   # noqa: BLE001 — market-lineage availability must never break the rail
+            pass
     for label, pool, code_shown in tiers:
         for w in (2, 3, 4, 6):
             win = [p for am, p, _c in pool if target - w <= am <= target + w]

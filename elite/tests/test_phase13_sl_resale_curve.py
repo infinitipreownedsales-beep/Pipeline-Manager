@@ -269,10 +269,11 @@ class TestRawConfigCodeTier(unittest.TestCase):
         self.assertIsNone(price)                                      # no exact, no raw-config match -> gate
         self.assertEqual(conf, "none")
 
-    def test_848xx_stays_its_own_family(self):
-        # 848xx must not be pooled with 8461 (this is exactly the normalize_code 8461->8481 fold we reject)
-        price, _prov, conf = _market_price(self._hist("84816"), [], "QX60", "2026", "2027-03-15", None, "84616")
-        self.assertIsNone(price)                                      # 8481 history must not price an 8461 unit
+    def test_848xx_not_borrowed_without_approved_lineage(self):
+        # raw code4 never auto-merges families, and 8481 is borrowed ONLY by its approved successor (8461). A
+        # DIFFERENT config with no approved lineage to 8481 (here 84216 -> 8421) must NOT be priced from 8481.
+        price, _prov, conf = _market_price(self._hist("84816"), [], "QX60", "2026", "2027-03-15", None, "84216")
+        self.assertIsNone(price)                                      # 8481 history must not price an 8421 unit
         self.assertEqual(conf, "none")
 
     def test_qx80_834x_does_not_join_8381(self):
@@ -295,6 +296,58 @@ class TestRawConfigCodeTier(unittest.TestCase):
         price, prov, _c = _market_price(rows, [], "QX60", "2026", "2027-03-15", 62000.0, "84616")
         self.assertIn("same model code 84616", prov)                  # exact tier preferred -> trim/MY specificity
         self.assertGreater(price, 50000)                              # priced off the higher exact-code cohort
+
+
+class TestMarketLineagePredecessor(unittest.TestCase):
+    """Live root cause: the QX60 AUTOGRAPH AWD configuration's DMS code CHANGED across model years — 2026 = 84816
+    (code4 8481), 2027 = 84617 (code4 8461). So a 2027 unit (8461) has NO exact and NO raw-8461 used history at
+    all; its real comparables are the 2026 predecessor (8481). Tier-3 borrows that evidence ONLY through the
+    explicit approved market-comparability relationship (loaner/market_lineage.py), never via normalize_code /
+    demand / planning / package lineage, and never chained."""
+
+    def _hist(self, code, model="QX60", myears=(2024, 2025, 2026), per=6, ages=range(10, 22), price0=52000):
+        out = []
+        for my in myears:
+            for a in ages:
+                t = my * 12 + a
+                y, m = t // 12, t % 12 + 1
+                for k in range(per):
+                    out.append({"model": model, "model_number": code, "year": str(my),
+                                "sold_date": f"{y:04d}-{m:02d}-15", "price": str(price0 - 250 * a + (k - 3) * 120),
+                                "days_to_sell": "45"})
+        return out
+
+    def test_2027_8461_borrows_approved_8481_predecessor(self):
+        # ONLY 84816 (predecessor 8481) traded historically; the 2027 unit is 84617 (current 8461)
+        rows = self._hist("84816")
+        price, prov, conf = _market_price(rows, [], "QX60", "2027", "2027-06-15", 72015.0, "84617")
+        self.assertIsNotNone(price)                                          # unlocked via the approved predecessor
+        self.assertIn("observed used transaction price", prov)              # still the observed-transaction rail
+        self.assertIn("market-lineage predecessor 8481 -> current 8461", prov)   # exact provenance required
+        self.assertNotIn("MSRP", prov)                                      # NOT the MSRP retention fallback
+        self.assertNotEqual(conf, "none")
+
+    def test_current_config_preferred_over_predecessor(self):
+        # when the current config's OWN evidence exists, it wins and the predecessor tier is NOT used
+        rows = self._hist("84816") + self._hist("84617", price0=80000)      # both predecessor and current present
+        price, prov, _c = _market_price(rows, [], "QX60", "2027", "2027-06-15", 72015.0, "84617")
+        self.assertIn("same model code 84617", prov)                        # current config preferred over predecessor
+        self.assertNotIn("market-lineage predecessor", prov)
+        self.assertGreater(price, 55000)                                    # priced off the higher current-config cohort
+
+    def test_unapproved_config_does_not_borrow(self):
+        # QX80 86-gen (8631) has NO approved market-lineage predecessor -> 83-gen (8331) history must NOT be borrowed
+        rows = self._hist("83316", model="QX80")
+        price, _prov, conf = _market_price(rows, [], "QX80", "2026", "2027-03-15", None, "86316")
+        self.assertIsNone(price)                                            # no approved lineage -> gate
+        self.assertEqual(conf, "none")
+
+    def test_predecessor_lookup_is_direct_and_governed(self):
+        from elite.loaner.market_lineage import market_predecessors
+        self.assertEqual(market_predecessors("QX60", "8461"), ("8481",))    # the one approved relationship
+        self.assertEqual(market_predecessors("QX60", "8481"), ())           # no chaining: 8481 has no predecessor
+        self.assertEqual(market_predecessors("QX80", "8631"), ())           # QX80 not approved this pass
+        self.assertEqual(market_predecessors("QX60", "8441"), ())           # a different QX60 config: no relationship
 
 
 if __name__ == "__main__":
