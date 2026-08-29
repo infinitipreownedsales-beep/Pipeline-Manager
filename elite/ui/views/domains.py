@@ -529,6 +529,7 @@ def _best_add_card(app, scope, add_n):
     Never fabricates a unit to reach the target: if only K are fully evaluable it says K READY / (N−K) BLOCKED
     and names the exact missing field for each blocked physical unit."""
     from ...loaner.sl_add import rank_add_candidates, DEFAULT_ADD_TARGET
+    from ...loaner.sl_decision import _recon_assumption
     from ...ordering.cross_domain import committed_vins
     target = add_n or DEFAULT_ADD_TARGET
     try:
@@ -579,12 +580,17 @@ def _best_add_card(app, scope, add_n):
     # ---- per-unit detail ----
     rows = []
     for i, c in enumerate(ready, 1):
+        recon = _recon_assumption(c.model)
+        break_even_recon = max(0.0, float(c.add_net) + float(recon["expected"]))
         econ = kv([("Original invoice (authoritative)", _money(c.invoice)),
                    ("Service-Loaner write-down (once, in basis)", "− " + _money(c.write_down)),
                    ("Adjusted basis", _money(c.adjusted_basis)),
                    ("Expected used selling price at release", _money(c.expected_used_price)),
                    ("  · price basis", safe(f'<span class="muted" style="font-size:12px">{esc(c.price_basis)}</span>')),
-                   ("Expected front-end gross at release", _money(c.front_end_gross)),
+                   ("Expected recon (planning assumption)", _money(recon["expected"])),
+                   ("Recon range low / expected / high", f'{_money(recon["low"])} / {_money(recon["expected"])} / {_money(recon["high"])}'),
+                   ("Break-even recon", _money(break_even_recon)),
+                   ("Expected front-end gross after recon", _money(c.front_end_gross)),
                    ("ICV (earned by placing)", _money(c.icv)),
                    ("Velocity", _money(c.velocity) + ("" if c.velocity_preserved else " (forfeited → $0)")),
                    ("New-Retail opportunity cost", _money(c.retail_opportunity_cost)),

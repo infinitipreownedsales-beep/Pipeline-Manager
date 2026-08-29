@@ -117,7 +117,10 @@ class TestAddRanking(unittest.TestCase):
         # adjusted basis = invoice − write-down (write-down counted ONCE, embedded in the basis)
         self.assertEqual(round(c.adjusted_basis, 2), round(c.invoice - c.write_down, 2))
         # front-end gross = expected used price − adjusted basis (recon 0); NOT price − basis − write-down again
-        self.assertEqual(round(c.front_end_gross, 2), round(c.expected_used_price - c.adjusted_basis, 2))
+        from elite.loaner.sl_decision import _recon_assumption
+        expected_recon = _recon_assumption(c.model)["expected"]
+        self.assertEqual(round(c.front_end_gross, 2),
+                         round(c.expected_used_price - c.adjusted_basis - expected_recon, 2))
         # total net = front gross + ICV + Velocity(preserved) − retail opportunity cost(0)
         vel = c.velocity if c.velocity_preserved else 0
         self.assertEqual(round(c.add_net, 2), round(c.front_end_gross + c.icv + vel - c.retail_opportunity_cost, 2))

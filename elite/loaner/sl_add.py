@@ -42,7 +42,7 @@ from .sell_time import estimate_sell_time, latest_prudent_release
 from .placement import (read_new_retail_units, certified_harm_index, _to_candidate, _authoritative_vin,
                         _eligible, EXCESS, COVERED, SHORTAGE, UNKNOWN)
 from .unit_econ import _invoice_of
-from .sl_decision import (_market_price, _retail_rows, _inventory_rows, _price_num, _code_norm, _iso_today)
+from .sl_decision import (_market_price, _retail_rows, _inventory_rows, _price_num, _code_norm, _iso_today, _recon_assumption)
 
 DEFAULT_ADD_TARGET = 4          # operator default; adjustable at call time without any code change
 TOTAL_TO_RETAIL_DEFAULT = 240   # days from in-service to final retail (the Velocity deadline)
@@ -119,7 +119,7 @@ def _velocity_incentive(vel_e):
     return vel_e.value, cap
 
 
-def _evaluate_unit(app, scope, row, *, pol, pis, today, month, rate, retail_rows, inv):
+def _evaluate_unit(app, scope, row, *, pol, pis, today, month, rate, retail_rows, inv, scenario=None):
     """Run the SETTLED transaction-price economics for placing ONE physical New-Retail surplus `row` into
     Service Loaner today. Returns (AddCandidate, None) when fully evaluable, else (None, missing_field)."""
     vin, vin_ok, serial = _authoritative_vin(row)
@@ -170,7 +170,12 @@ def _evaluate_unit(app, scope, row, *, pol, pis, today, month, rate, retail_rows
     price, price_basis, _pconf = _market_price(retail_rows, inv, model, year, release_by, unit_msrp, model_code)
     if price is None:
         return None, "expected used transaction value at release (governed model-code cohort)"
-    front_end_gross = round(float(price) - adjusted_basis, 2)   # recon governed-absent = 0 (planning)
+    scenario = scenario or {}
+    recon_map = scenario.get("recon") if isinstance(scenario.get("recon"), dict) else {}
+    recon_override = recon_map.get((model or "").upper()) if isinstance(recon_map, dict) else None
+    recon = _recon_assumption(model, recon_override)
+    expected_recon = float(recon["expected"])
+    front_end_gross = round(float(price) - adjusted_basis - expected_recon, 2)
 
     # --- ICV: EARNED by placing (incremental here) ---
     icv_e = pis.applicable("icv", model, month, model_year=year)
@@ -188,13 +193,15 @@ def _evaluate_unit(app, scope, row, *, pol, pis, today, month, rate, retail_rows
     add_net = round(front_end_gross + velocity_val + icv - retail_opportunity_cost, 2)
 
     why = (f"Placing this {_ident(cand)} nets ${add_net:,.0f} to the dealership: expected front-end gross "
-           f"${front_end_gross:,.0f} at release (used price ${price:,.0f} − adjusted basis ${adjusted_basis:,.0f}) "
-           f"+ ICV ${icv:,.0f}"
+
+           f"${front_end_gross:,.0f} at release (used price ${price:,.0f} - adjusted basis ${adjusted_basis:,.0f} "
+
+           f"- expected recon ${expected_recon:,.0f}) + ICV ${icv:,.0f}"
            + (f" + Velocity ${velocity:,.0f}" if velocity_val else "")
            + " with no New-Retail coverage cost (over-stocked combination).")
     retail_impact = ("Over-stocked combination — removing this VIN does NOT create a New-Retail shortage "
                      "(genuine surplus), so the New-Retail opportunity cost is $0.")
-    caveats = []
+    caveats = [f"Recon planning assumption for {model}: low ${recon['low']:,.0f} / expected ${recon['expected']:,.0f} / high ${recon['high']:,.0f}. Break-even recon is ${max(0.0, add_net + expected_recon):,.0f}."]
     if velocity is not None and not velocity_preserved:
         caveats.append("Velocity is forfeited at this projected hold (final sale would exceed the 240-day deadline)"
                        " — counted as $0.")
@@ -261,7 +268,7 @@ def rank_add_candidates(app, scope, *, n=None, today=None, committed_vins=frozen
             continue
         # EXCESS surplus only from here — retail-safe, opportunity cost 0
         ac, missing = _evaluate_unit(app, scope, r, pol=pol, pis=pis, today=today, month=month, rate=rate,
-                                     retail_rows=retail_rows, inv=inv)
+                                     retail_rows=retail_rows, inv=inv, scenario=scenario)
         if ac is not None:
             ready.append(ac)
         else:

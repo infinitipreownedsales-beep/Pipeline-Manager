@@ -270,6 +270,43 @@ _MARKET_PREDECESSOR = {
     "84617": ("84816",),  # 2027 QX60 AUTOGRAPH AWD <- 2026 QX60 AUTOGRAPH AWD
 }
 
+# Planning assumptions only. These are editable starting points, not historical fact.
+SERVICE_LOANER_RECON_DEFAULTS = {
+    "QX60": {"low": 500.0, "expected": 1000.0, "high": 1500.0},
+    "QX65": {"low": 600.0, "expected": 1200.0, "high": 1800.0},
+    "QX80": {"low": 750.0, "expected": 1500.0, "high": 2500.0},
+}
+
+
+def _recon_assumption(model, override=None):
+    m=(model or '').upper().strip()
+    base=dict(SERVICE_LOANER_RECON_DEFAULTS.get(m, {"low": 750.0, "expected": 1250.0, "high": 2000.0}))
+    if isinstance(override, dict):
+        for k in ("low","expected","high"):
+            try:
+                v=float(override.get(k))
+                if v >= 0:
+                    base[k]=v
+            except Exception:
+                pass
+    vals=sorted([base["low"],base["expected"],base["high"]])
+    return {"low": vals[0], "expected": vals[1], "high": vals[2]}
+
+
+def _recon_sensitivity(pre_recon_net, model, override=None):
+    recon=_recon_assumption(model, override)
+    pre=float(pre_recon_net)
+    return {
+        "recon_low": recon["low"],
+        "recon_expected": recon["expected"],
+        "recon_high": recon["high"],
+        "net_low_recon": round(pre-recon["low"],2),
+        "net_expected_recon": round(pre-recon["expected"],2),
+        "net_high_recon": round(pre-recon["high"],2),
+        "break_even_recon": round(max(pre,0.0),2),
+    }
+
+
 
 def _direct_comparable_price_at(observations, target_age, unit_code):
     # Thin direct USED-dollar comparable before broad-model retention.
