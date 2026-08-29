@@ -344,17 +344,11 @@ def _market_price(retail_rows, inv, model, model_year, sale_date, unit_msrp, uni
                 f"(+/-{tw}mo, n={tn}, {tier_label} {code_shown}; thin direct evidence outranks "
                 "broad-model MSRP-normalized retention)", "thin")
 
-    # SECONDARY: MSRP-normalized retention from the broader same-model cohort, applied to this unit's own MSRP.
-    if unit_msrp is not None and unit_msrp > 0:
-        by_code_my, by_code = _msrp_maps(inv)
-        ret_obs = _retention_observations(retail_rows, by_code_my, by_code, model)
-        if len(ret_obs) >= RESALE_WINDOW_GATE:
-            ret, rw, rn, tier, conf = _retention_at(ret_obs, target, unit_code)
-            if ret is not None:
-                return (round(unit_msrp * ret, 2),
-                        f"{model_u} observed retention {ret:.1%} at ~{target}mo age (±{rw}mo, n={rn}, {tier}) × "
-                        f"this unit's authoritative MSRP ${unit_msrp:,.0f} (MSRP-normalized fallback — "
-                        "insufficient same-trim transaction evidence)", conf)
+    # REFERENCE ONLY â€” broad-model MSRP-normalized retention is NOT authoritative enough
+    # to create a physical-unit Service-Loaner recommendation dollar. It can be useful as
+    # contextual evidence, but when exact / governed comparable USED transaction evidence
+    # above is insufficient, this unit must gate rather than manufacture a forecast from
+    # a broader model cohort.
 
     return None, (f"insufficient {model_u} observed used-price evidence within ±6mo of ~{target}mo age "
                   "— gated (not manufactured)"), "none"
