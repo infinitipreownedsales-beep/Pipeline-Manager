@@ -20,8 +20,10 @@ MSRP = 116715.0
 
 
 def _row(price, kind, *, year, sold, code=CODE, model="QX80", msrp=MSRP):
+    # `_orig_msrp` is the VIN-authoritative original NEW MSRP the retention rail now requires (the used row's own
+    # `msrp` field is never used as the denominator).
     return {"model": model, "model_number": code, "year": str(year), "sold_date": sold,
-            "price": float(price), "msrp": str(msrp), "_sale_kind": kind}
+            "price": float(price), "msrp": str(msrp), "_orig_msrp": float(msrp), "_sale_kind": kind}
 
 
 def _used(n=6):

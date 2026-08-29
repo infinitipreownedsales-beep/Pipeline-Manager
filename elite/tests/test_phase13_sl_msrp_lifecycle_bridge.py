@@ -126,9 +126,14 @@ class TestMsrpProvenanceBridges(unittest.TestCase):
         _batch(self.conn, "src_p11_retail_history", "2026-08-26T00:00:00Z", _legacy_retail(), schema=3)
         rows, _as_of = latest_retail_rows(self.conn, SCOPE)
         self.assertTrue(rows)
-        self.assertTrue(all(r.get("msrp") for r in rows))     # every sale now carries its authoritative MSRP
-        obs = _retention_observations(rows, {}, {}, "QX60")   # no inventory anchors needed — sale-own MSRP used
+        self.assertTrue(all(r.get("msrp") for r in rows))     # raw MSRP still surfaced for display
+        # retention denominator uses the governed (model_code, model_year) inventory MSRP anchors — NEVER the
+        # used row's own MSRP field (unreliable in the combined Reynolds ledger).
+        by_code_my = {(CODE, my): float(v) for my, v in {2024: 58000, 2025: 60000, 2026: 62000}.items()}
+        by_code = {CODE: 60000.0}
+        obs = _retention_observations(rows, by_code_my, by_code, "QX60")
         self.assertGreaterEqual(len(obs), 60)
+        self.assertEqual(len(_retention_observations(rows, {}, {}, "QX60")), 0)   # no authoritative MSRP -> drop
 
     # --- Full acceptance proof for TC348756 ---
     def test_tc348756_prices_and_decides_end_to_end(self):

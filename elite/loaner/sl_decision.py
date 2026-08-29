@@ -114,11 +114,17 @@ def _retention_observations(rows, by_code_my, by_code, model):
         my = _my_int(r.get("year"))
         if price is None or price <= 0 or am is None or code is None:
             continue
-        msrp = _price_num(r.get("msrp"))                          # (1) the sale's own authoritative original MSRP
+        # Original MSRP for the retention denominator, in order of AUTHORITY — never the USED row's own MSRP
+        # field (in the combined Reynolds ledger a used row's MSRP is unreliable, often == its Vehicle Price):
+        #   (1) the vehicle's authoritative ORIGINAL NEW MSRP, VIN-matched from its New-sale/lifecycle record
+        #       (stamped as `_orig_msrp` by the identity bridge); else
+        #   (2) the governed same (model_code, model_year) inventory MSRP median; else
+        #   (3) drop the observation (never normalized by an unauthoritative number).
+        msrp = _price_num(r.get("_orig_msrp"))                    # (1) VIN-authoritative original NEW MSRP
         if msrp is None or msrp <= 0:
-            msrp, _b = _msrp_for(by_code_my, by_code, code, my)   # (2) inventory (code, MY) anchor for that sale
+            msrp, _b = _msrp_for(by_code_my, by_code, code, my)   # (2) governed (code, MY) inventory anchor
         if msrp is None or msrp <= 0:
-            continue
+            continue                                              # (3) drop — never the used row's own MSRP field
         out.append((am, price / msrp, code))
     return out
 

@@ -157,6 +157,25 @@ class TestVinIdentityBridge(unittest.TestCase):
         self.assertIn("8461", c4)                                            # 2024/2025 Autograph -> raw 8461
         self.assertIn("8481", c4)                                            # 2026 Autograph -> raw 8481
 
+    def test_retention_denominator_uses_newcar_msrp_not_used_row_msrp(self):
+        # USED row whose OWN MSRP field == its Vehicle Price (the combined-Reynolds garbage that forced 100%);
+        # the exact-VIN NEW sale has the TRUE original MSRP. Retention must use the NEW-row MSRP, not the row's.
+        from elite.loaner.sl_decision import _retention_observations
+        vin = "5N1RETENTIONVIN0001"
+        _batch(self.conn, "src_p11_retail_history", "2023-06-01T00:00:00Z",
+               [_newcar_sale(vin, "84615", "2025", 62000, model="QX60")], schema=3)          # true MSRP 62,000
+        used = {"vin": vin, "model": "QX60", "model_number": "BLANK", "year": "2025",
+                "sold_date": "2025-06-15", "price": 60000.0, "msrp": "60000", "New/Used": "Used"}  # own MSRP == price
+        _batch(self.conn, "src_p11_retail_history", "2026-10-01T00:00:00Z", [(used, used)], schema=3)
+        rows, _ = latest_retail_rows(self.conn, SCOPE)
+        r = next(x for x in rows if x.get("vin") == vin)
+        self.assertEqual(r.get("_orig_msrp"), 62000.0)                       # VIN-authoritative original NEW MSRP
+        self.assertEqual(r.get("model_number"), "84615")                     # identity bridged
+        obs = _retention_observations(rows, {}, {}, "QX60")
+        self.assertEqual(len(obs), 1)
+        self.assertAlmostEqual(obs[0][1], 60000 / 62000, places=4)           # 0.968 via NEW MSRP, not 1.0 via row's
+        self.assertNotEqual(round(obs[0][1], 4), 1.0)
+
     def test_index_exact_full_vin_only(self):
         idx = new_retail_identity_index(self.conn, SCOPE)
         self.assertIn("5N1AL1HU6SC339383", idx)                              # keyed by the exact full VIN

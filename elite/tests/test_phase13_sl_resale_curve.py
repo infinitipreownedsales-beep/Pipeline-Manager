@@ -128,6 +128,12 @@ class TestObservedTransactionRailPrimary(unittest.TestCase):
         self.assertNotEqual(p_aug, p_dec)
 
 
+# Governed (model_code, model_year) MSRP anchors for the 84516 fallback cohort — the authoritative original-MSRP
+# source the retention rail now requires (a used row's own MSRP field is never used as the denominator).
+_INV_8451 = [{"model": "QX60", "model_code": "84516", "model_year": str(my), "msrp": str(v)}
+             for my, v in ((2024, 50000), (2025, 52000), (2026, 54000))]
+
+
 class TestMsrpRetentionFallback(unittest.TestCase):
     # The unit is code 84616 (config 8481). A DIFFERENT QX60 family — 84516 (config 8451) — is the only one that
     # traded, so NEITHER primary tier (exact 84616, nor the year-agnostic 8481 config) matches. Only then does
@@ -150,7 +156,7 @@ class TestMsrpRetentionFallback(unittest.TestCase):
     def test_fallback_used_only_when_same_trim_transaction_evidence_insufficient(self):
         # the current unit's own config has NO transaction history -> secondary rail: broader same-model retention
         # (MSRP-normalized) re-scaled by THIS unit's own authoritative MSRP. Cites itself as the fallback.
-        price, prov, _c = _market_price(self._diff_family_rows(), _inv(), "QX60", "2026", "2026-08-15",
+        price, prov, _c = _market_price(self._diff_family_rows(), _inv() + _INV_8451, "QX60", "2026", "2026-08-15",
                                         62000.0, "84616")
         self.assertIsNotNone(price)
         self.assertIn("observed retention", prov)
@@ -161,8 +167,8 @@ class TestMsrpRetentionFallback(unittest.TestCase):
         # in the fallback, the retention PERCENT is shared but each unit's price applies ITS OWN MSRP, so the two
         # prices scale with their MSRPs and are NOT equal.
         rows = self._diff_family_rows()
-        pa = _market_price(rows, _inv(), "QX60", "2026", "2026-08-15", 62000.0, "84616")
-        pb = _market_price(rows, _inv(), "QX60", "2026", "2026-08-15", 54000.0, "84616")
+        pa = _market_price(rows, _inv() + _INV_8451, "QX60", "2026", "2026-08-15", 62000.0, "84616")
+        pb = _market_price(rows, _inv() + _INV_8451, "QX60", "2026", "2026-08-15", 54000.0, "84616")
         self.assertIn("MSRP-normalized fallback", pa[1])
         self.assertNotEqual(pa[0], pb[0])
         self.assertAlmostEqual(pa[0] / pb[0], 62000.0 / 54000.0, places=4)

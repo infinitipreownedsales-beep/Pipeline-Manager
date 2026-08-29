@@ -449,11 +449,12 @@ def _bridge_identity_by_vin(row, idmap):
     decision), never inferred from trim text / MSRP / price / normalize_code. The used sale date, used
     transaction price, used VIN and used model year are left exactly as the used ledger recorded them. If the
     New-Car source reports a DIFFERENT commercial model than the used row, the conflict is surfaced and NO bridge
-    is applied. Raw import history is never mutated (this is a read-time normalized-evidence bridge)."""
+    is applied. Raw import history is never mutated (this is a read-time normalized-evidence bridge).
+
+    It ALSO stamps the VIN-authoritative ORIGINAL NEW MSRP as `_orig_msrp` — the retention denominator — even when
+    the used row already carries its own MSRP field, because in the combined Reynolds ledger a used row's MSRP is
+    unreliable (often == its Vehicle Price). Only the exact same-VIN New/lifecycle MSRP is authoritative here."""
     have_code = _is_real_code(row.get("model_number")) or _is_real_code(row.get("model_code"))
-    have_msrp = _retail_msrp(row) is not None
-    if have_code and have_msrp:
-        return row                                          # preserve any valid code / MSRP already present
     vin = str(row.get("vin") or "").strip().upper()
     if not vin:
         return row
@@ -465,8 +466,8 @@ def _bridge_identity_by_vin(row, idmap):
     # model/description. A New-Car identity like "QX60 2.0T AWD SEN" is still commercially QX60 and must match a
     # used "QX60" row. The hit's commercial model comes from the governed code prefix (model_from_code); the used
     # side is reduced to its model-line token. This normalization ONLY validates same-model — it never infers a
-    # trim or a model code from that text.
-    if not have_code and code:
+    # trim or a model code from that text. On conflict, NOTHING is bridged (neither identity nor original MSRP).
+    if code:
         from ..newinv.dms_identity import model_from_code
         used_line = _model_line(row.get("model"))
         new_line = (model_from_code(code) or "").upper() or _model_line(hit.get("model"))
@@ -478,12 +479,15 @@ def _bridge_identity_by_vin(row, idmap):
     out = dict(row)
     prov = f"historical used transaction VIN matched to original New sale VIN; model code {code} from " \
            f"authoritative New-Car history."
+    have_msrp = _retail_msrp(row) is not None
+    if hit.get("msrp") is not None:
+        out["_orig_msrp"] = hit["msrp"]                     # VIN-authoritative original NEW MSRP (retention denom)
+        out.setdefault("msrp_source", prov)
     if not have_code and code:
         out["model_number"] = code
         out["model_number_source"] = prov
     if not have_msrp and hit.get("msrp") is not None:
-        out["msrp"] = hit["msrp"]
-        out["msrp_source"] = prov
+        out["msrp"] = hit["msrp"]                           # display MSRP fill only when the used row lacks one
     return out
 
 
