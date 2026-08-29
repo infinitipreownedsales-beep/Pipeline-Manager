@@ -235,7 +235,7 @@ def _fleet_decisions(app, scope, intel):
     swap_net = None
     try:
         from ...loaner.unit_econ import build_placement_econ
-        econ = build_placement_econ(app, scope, today[:7], n=1)
+        econ = build_placement_econ(app, scope, today[:7], n=1, intel=intel)
         if econ.get("have_economics") and econ.get("all_econ"):
             swap_net = econ["all_econ"][0].net()
     except Exception:   # noqa: BLE001
@@ -333,7 +333,7 @@ def _fleet_plan_card(app, scope, intel, add_n=0, decisions=None):
     swap_net = None
     try:
         from ...loaner.unit_econ import build_placement_econ
-        econ = build_placement_econ(app, scope, today[:7], n=max(1, int(add_n or 1)))
+        econ = build_placement_econ(app, scope, today[:7], n=max(1, int(add_n or 1)), intel=intel)
         if econ.get("have_economics") and econ.get("all_econ"):
             swap_net = econ["all_econ"][0].net()
             for pe in econ["all_econ"]:
@@ -716,7 +716,7 @@ def _sequential_placement_card(app, scope, add_n):
     return "".join(body) + '</div>'
 
 
-def _economic_ranking_card(app, scope, add_n):
+def _economic_ranking_card(app, scope, add_n, intel=None):
     """When the authoritative economic inputs exist, this is the REAL answer to 'which N should we place' —
     ranked by total-dealership net (via the certified ideal_mix), with a human Why and a per-term Proof. Units
     whose economics are unknown are listed as excluded (never guessed into the ranking). Returns '' when no
@@ -725,7 +725,7 @@ def _economic_ranking_card(app, scope, add_n):
     from ...clock import to_utc_iso
     month = to_utc_iso(app.stack.clock.now())[:7]
     try:
-        res = build_placement_econ(app, scope, month, n=add_n or 0)
+        res = build_placement_econ(app, scope, month, n=add_n or 0, intel=intel)
     except Exception:   # noqa: BLE001
         return ""
     if not res.get("have_economics"):
@@ -880,7 +880,7 @@ def _loaner_command_body(app, s, intel, placement, add_n):
     parts.append("".join(board))
 
     # ---- ECONOMIC PLACEMENT RANKING (only when authoritative economics exist; else the fallback above) ----
-    parts.append(_economic_ranking_card(app, s.scope, add_n))
+    parts.append(_economic_ranking_card(app, s.scope, add_n, intel=intel))
 
     # ---- FLEET OPERATING PLAN: the consolidated KEEP / PULL / SWAP / ADD / ORDER answer (item 10) ----
     parts.append(_fleet_plan_card(app, s.scope, intel, add_n, decisions=decisions))

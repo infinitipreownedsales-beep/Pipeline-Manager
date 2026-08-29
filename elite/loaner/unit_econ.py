@@ -108,15 +108,16 @@ def _invoice_of(row, vin, pol):
     return pol.invoice_for_vin(vin) if vin else None
 
 
-def _used_gross_by_model(app, scope):
+def _used_gross_by_model(app, scope, intel=None):
     # AUTHORITATIVE PREOWNED PROFIT RULE: expected used gross is FRONT-END only. The recorded gross fed here
     # (retail_history gross_profit) must be the dealership's front-end gross — backend / F&I income is never
     # included and never influences Service-Loaner economics. The KEEP/PULL/SWAP comparator enforces this by
     # construction (price − adjusted basis − recon); this model-level figure relies on the source being front-end.
     out = {}
     try:
-        from .intelligence import build_intelligence
-        intel = build_intelligence(app.stack.db.conn, scope, app.prefs, app.stack.clock)
+        if intel is None:
+            from .intelligence import build_intelligence
+            intel = build_intelligence(app.stack.db.conn, scope, app.prefs, app.stack.clock)
         for mi in intel.models:
             g = getattr(mi, "gross_model", None)
             if g is not None and getattr(g, "gated", False):
@@ -126,7 +127,7 @@ def _used_gross_by_model(app, scope):
     return out
 
 
-def build_placement_econ(app, scope, planning_month, *, n=0, scenario=None):
+def build_placement_econ(app, scope, planning_month, *, n=0, scenario=None, intel=None):
     """Live economic placement ranking for up to `n` additions, computed from authoritative inputs and ranked
     by the certified optimize_ideal_mix. `scenario` (e.g. {"writedown": {"QX80": {"kind": "amount", "value":
     5000}}}) is a what-if write-down spec applied ONLY here and never written to policy. Returns a dict with
@@ -148,7 +149,7 @@ def build_placement_econ(app, scope, planning_month, *, n=0, scenario=None):
     rows = read_new_retail_units(app, scope)
     loaded = bool(rows)
     harm = certified_harm_index(conn, scope)
-    gross_by_model = _used_gross_by_model(app, scope)
+    gross_by_model = _used_gross_by_model(app, scope, intel=intel)
 
     econs, excluded = [], []
     for r in rows:
