@@ -265,6 +265,43 @@ def _observed_price_at(obs, target, want_code, model=""):
     return None, None, 0, None
 
 
+# Market-comparability lineage is intentionally separate from demand/planning lineage.
+_MARKET_PREDECESSOR = {
+    "84617": ("84816",),  # 2027 QX60 AUTOGRAPH AWD <- 2026 QX60 AUTOGRAPH AWD
+}
+
+
+def _direct_comparable_price_at(observations, target_age, unit_code):
+    # Thin direct USED-dollar comparable before broad-model retention.
+    code = _code_norm(unit_code)
+    if not code:
+        return None
+
+    exact = {code}
+    code4 = {c for _am, _p, c in observations if c and code[:4] and str(c).startswith(code[:4])}
+    pred = set(_MARKET_PREDECESSOR.get(code, ()))
+
+    tiers = (
+        ("exact full model code", exact),
+        ("explicit market predecessor", pred),
+        ("same raw code4", code4),
+    )
+    for label, allowed in tiers:
+        if not allowed:
+            continue
+        for w in (2, 3, 4, 6):
+            vals = [p for am, p, c in observations
+                    if c in allowed and abs(am - target_age) <= w and p is not None and p > 0]
+            if vals:
+                vals = sorted(vals)
+                n = len(vals)
+                mid = n // 2
+                med = vals[mid] if n % 2 else (vals[mid - 1] + vals[mid]) / 2.0
+                shown = ",".join(sorted(allowed))
+                return med, w, n, label, shown
+    return None
+
+
 def _market_price(retail_rows, inv, model, model_year, sale_date, unit_msrp, unit_code):
     """Expected used SELLING PRICE for a SPECIFIC physical unit at a specific sale date, on the market/value rail
     only (dealer Vehicle Cost / invoice is never mixed in). Governed evidence hierarchy, most authoritative
@@ -295,6 +332,17 @@ def _market_price(retail_rows, inv, model, model_year, sale_date, unit_msrp, uni
         return (round(dollars, 2),
                 f"{model_u} observed used transaction price median ${dollars:,.0f} at ~{target}mo age "
                 f"(±{w}mo, n={n}, {tier_label} {code_shown})", conf)
+
+    # THIN DIRECT-COMPARABLE FALLBACK: when the normal sample-gated primary rail is thin,
+    # prefer actual observed USED selling dollars from the same governed configuration or explicit
+    # market predecessor over broad-model MSRP-normalized retention.
+    thin_direct = _direct_comparable_price_at(price_obs, target, unit_code)
+    if thin_direct is not None:
+        dollars, tw, tn, tier_label, code_shown = thin_direct
+        return (round(dollars, 2),
+                f"{model_u} direct observed USED comparable median ${dollars:,.0f} at ~{target}mo age "
+                f"(+/-{tw}mo, n={tn}, {tier_label} {code_shown}; thin direct evidence outranks "
+                "broad-model MSRP-normalized retention)", "thin")
 
     # SECONDARY: MSRP-normalized retention from the broader same-model cohort, applied to this unit's own MSRP.
     if unit_msrp is not None and unit_msrp > 0:
