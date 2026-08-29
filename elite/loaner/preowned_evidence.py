@@ -331,6 +331,18 @@ def _is_real_code(v):
     return bool(s) and s not in _CODE_SENTINELS and any(ch.isdigit() for ch in s)
 
 
+def _model_line(s):
+    """The governed COMMERCIAL MODEL LINE token from a free-text model/description (e.g. 'QX60 2.0T AWD SEN' ->
+    'QX60', 'QX60' -> 'QX60'). Used ONLY to validate that two rows are the same commercial model — it never
+    infers a trim or a model code. Falls back to the first token when no model-line token is recognized."""
+    up = str(s or "").upper().replace("-", " ")
+    for tok in up.split():
+        if 3 <= len(tok) <= 4 and tok[0] == "Q" and tok.isalnum() and any(c.isdigit() for c in tok):
+            return tok                                       # QX60, QX80, Q50, ...
+    toks = up.split()
+    return toks[0] if toks else ""
+
+
 def new_retail_identity_index(conn, scope):
     """VIN-keyed authoritative IDENTITY for used-ledger rows that carry no usable model code, recovered from the
     dealership's historical NEW-car records that DO carry it:
@@ -420,14 +432,18 @@ def _bridge_identity_by_vin(row, idmap):
     if hit is None:
         return row
     code = hit.get("model_code")
-    # (8) model cross-check: New-Car model (explicit, else derived from the code) must agree with the used row.
+    # (8) model cross-check: compare the governed COMMERCIAL MODEL LINE (e.g. QX60), NOT the whole free-text
+    # model/description. A New-Car identity like "QX60 2.0T AWD SEN" is still commercially QX60 and must match a
+    # used "QX60" row. The hit's commercial model comes from the governed code prefix (model_from_code); the used
+    # side is reduced to its model-line token. This normalization ONLY validates same-model — it never infers a
+    # trim or a model code from that text.
     if not have_code and code:
         from ..newinv.dms_identity import model_from_code
-        used_model = str(row.get("model") or "").strip().upper()
-        new_model = (str(hit.get("model") or "").strip().upper() or (model_from_code(code) or "").upper())
-        if used_model and new_model and used_model != new_model:
+        used_line = _model_line(row.get("model"))
+        new_line = (model_from_code(code) or "").upper() or _model_line(hit.get("model"))
+        if used_line and new_line and used_line != new_line:
             out = dict(row)
-            out["model_number_conflict"] = (f"used ledger says {used_model} but New-Car history says {new_model} "
+            out["model_number_conflict"] = (f"used ledger says {used_line} but New-Car history says {new_line} "
                                             f"for VIN {vin} (code {code}) — not bridged")
             return out
     out = dict(row)

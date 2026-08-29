@@ -122,6 +122,18 @@ class TestVinIdentityBridge(unittest.TestCase):
         self.assertEqual(orphan.get("model_number"), "BLANK")
         self.assertNotIn("model_number_source", orphan)                      # nothing inferred without a VIN match
 
+    def test_free_text_model_still_bridges_same_commercial_line(self):
+        # New-Car identity carries trim/description text ('QX60 2.0T AWD SEN'); it is still commercially QX60 and
+        # MUST bridge a used 'QX60' row (the false-conflict bug from live acceptance).
+        _batch(self.conn, "src_p11_retail_history", "2023-02-01T00:00:00Z",
+               [_newcar_sale("5N1FREETEXT0000001", "84615", "2025", 70000, model="QX60 2.0T AWD SEN")], schema=3)
+        _batch(self.conn, "src_p11_retail_history", "2026-09-02T00:00:00Z",
+               [_used_row("5N1FREETEXT0000001", "2025", 62000, "BLANK", model="QX60")], schema=3)
+        rows, _ = latest_retail_rows(self.conn, SCOPE)
+        r = next(x for x in rows if x.get("vin") == "5N1FREETEXT0000001")
+        self.assertEqual(r.get("model_number"), "84615")                     # bridged: same commercial model line
+        self.assertNotIn("model_number_conflict", r)
+
     def test_model_conflict_is_surfaced_not_bridged(self):
         # a used QX80 row whose New-Car history VIN is a QX60 code must NOT bridge — conflict surfaced
         _batch(self.conn, "src_p11_retail_history", "2023-01-01T00:00:00Z",
