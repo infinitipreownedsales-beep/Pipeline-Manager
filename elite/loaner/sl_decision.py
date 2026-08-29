@@ -339,7 +339,7 @@ def _direct_comparable_price_at(observations, target_age, unit_code):
     return None
 
 
-def _market_price(retail_rows, inv, model, model_year, sale_date, unit_msrp, unit_code):
+def _market_price(retail_rows, inv, model, model_year, sale_date, unit_msrp, unit_code, market_cache=None):
     """Expected used SELLING PRICE for a SPECIFIC physical unit at a specific sale date, on the market/value rail
     only (dealer Vehicle Cost / invoice is never mixed in). Governed evidence hierarchy, most authoritative
     first:
@@ -361,7 +361,12 @@ def _market_price(retail_rows, inv, model, model_year, sale_date, unit_msrp, uni
 
     # PRIMARY: observed used transaction dollars for the same governed comparable (exact model code first, then
     # the year-agnostic config code so a current-model-year unit matches its own config's older used sales).
-    price_obs = _price_observations(retail_rows, model)
+    market_cache = market_cache if isinstance(market_cache, dict) else {}
+    cache_key = ("price_obs", model_u)
+    price_obs = market_cache.get(cache_key)
+    if price_obs is None:
+        price_obs = _price_observations(retail_rows, model)
+        market_cache[cache_key] = price_obs
     dollars, w, n, tinfo = _observed_price_at(price_obs, target, unit_code, model_u)
     if dollars is not None:
         conf = "moderate" if w <= 3 else "thin"
@@ -437,7 +442,7 @@ def _nearest_maturity_bin(bins, age_years):
     return min(cand)[2] if cand else None
 
 
-def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=None, keep_horizon_days=None):
+def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=None, keep_horizon_days=None, retail_rows=None, inv=None, market_cache=None):
     """Assemble the KEEP/PULL/SWAP decision for one active Service-Loaner `unit` (a UnitIntel) whose model
     evidence is `mi` (a ModelIntel). Reads governed policy + Program Inputs; forecasts the future exit price
     from maturity evidence. Returns {action, nets, components, missing, gated, confidence, why, facts}."""
@@ -466,7 +471,8 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
     total_to_retail = (vel_e.day_cap if (vel_e and vel_e.day_cap is not None) else 240)  # 240 = total-to-retail
 
     # --- learned estimates ---
-    retail_rows = _retail_rows(app, scope)
+    if retail_rows is None:
+        retail_rows = _retail_rows(app, scope)
     sell = estimate_sell_time(retail_rows, model=model, model_year=my, trim=None, drivetrain=None)
     sell_days = sell["days"] if sell else None
     buffer_days = pol.protection_buffer_days()
@@ -499,7 +505,8 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
     # Market/value rail: resolve THIS unit's authoritative MSRP + model code from the already-loaded inventory /
     # pipeline physical-unit source (same governed VIN/Serial/Stock linkage used for MY — never a manual entry),
     # then price from OBSERVED RETENTION (used price / authoritative MSRP) applied to this unit's own MSRP.
-    inv = _inventory_rows(app, scope)
+    if inv is None:
+        inv = _inventory_rows(app, scope)
     unit_msrp, unit_code = _unit_inventory_facts(inv, vin)
     if unit_msrp is None or unit_code is None:
         # VIN-lifecycle fallback: a Service Loaner has moved OUT of today's New-Retail snapshot, but its
@@ -509,9 +516,10 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
         lm, lc = _lifecycle_facts(app, scope, vin)
         unit_msrp = unit_msrp if unit_msrp is not None else lm
         unit_code = unit_code or lc
-    price_now, pn_basis, pn_conf = _market_price(retail_rows, inv, model, my, sale_now, unit_msrp, unit_code)
+    price_now, pn_basis, pn_conf = _market_price(retail_rows, inv, model, my, sale_now, unit_msrp, unit_code,
+                                                    market_cache=market_cache)
     price_future, pf_basis, pf_conf = _market_price(retail_rows, inv, model, my, sale_future, unit_msrp,
-                                                    unit_code)
+                                                    unit_code, market_cache=market_cache)
     if price_now is None:
         gated.append("expected used price now")
     if price_future is None:

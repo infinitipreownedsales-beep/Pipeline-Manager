@@ -228,6 +228,10 @@ def _fleet_decisions(app, scope, intel):
         return out
     mi_by_model = {(mi.model or "").upper(): mi for mi in getattr(intel, "models", ())}
     today = to_utc_iso(app.stack.clock.now())[:10]
+    from ...loaner.sl_decision import _retail_rows, _inventory_rows
+    shared_retail_rows = _retail_rows(app, scope)
+    shared_inv = _inventory_rows(app, scope)
+    market_cache = {}
     swap_net = None
     try:
         from ...loaner.unit_econ import build_placement_econ
@@ -239,7 +243,9 @@ def _fleet_decisions(app, scope, intel):
     for u in units:
         try:
             out[u.id] = build_unit_decision(app, scope, u, mi_by_model.get((u.model or "").upper()),
-                                            today=today, swap_candidate_net=swap_net)
+                                            today=today, swap_candidate_net=swap_net,
+                                            retail_rows=shared_retail_rows, inv=shared_inv,
+                                            market_cache=market_cache)
         except Exception:   # noqa: BLE001 — a single unit must never break the board
             continue
     return out

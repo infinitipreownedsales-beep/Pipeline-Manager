@@ -119,7 +119,7 @@ def _velocity_incentive(vel_e):
     return vel_e.value, cap
 
 
-def _evaluate_unit(app, scope, row, *, pol, pis, today, month, rate, retail_rows, inv, scenario=None):
+def _evaluate_unit(app, scope, row, *, pol, pis, today, month, rate, retail_rows, inv, scenario=None, market_cache=None):
     """Run the SETTLED transaction-price economics for placing ONE physical New-Retail surplus `row` into
     Service Loaner today. Returns (AddCandidate, None) when fully evaluable, else (None, missing_field)."""
     vin, vin_ok, serial = _authoritative_vin(row)
@@ -167,7 +167,8 @@ def _evaluate_unit(app, scope, row, *, pol, pis, today, month, rate, retail_rows
     adjusted_basis = round(float(invoice) - wd_dollars, 2)
 
     # --- expected used SELLING price at the derived release date, on the settled transaction rail (no MSRP sub) ---
-    price, price_basis, _pconf = _market_price(retail_rows, inv, model, year, release_by, unit_msrp, model_code)
+    price, price_basis, _pconf = _market_price(retail_rows, inv, model, year, release_by, unit_msrp, model_code,
+                                                    market_cache=market_cache)
     if price is None:
         return None, "expected used transaction value at release (governed model-code cohort)"
     scenario = scenario or {}
@@ -248,6 +249,7 @@ def rank_add_candidates(app, scope, *, n=None, today=None, committed_vins=frozen
     retail_rows = _retail_rows(app, scope)
     inv = _inventory_rows(app, scope)
 
+    market_cache = {}
     ready, blocked = [], []
     protected = covered_deferred = unresolved_state = eligible = 0
     committed = set(committed_vins or ())
@@ -268,7 +270,8 @@ def rank_add_candidates(app, scope, *, n=None, today=None, committed_vins=frozen
             continue
         # EXCESS surplus only from here — retail-safe, opportunity cost 0
         ac, missing = _evaluate_unit(app, scope, r, pol=pol, pis=pis, today=today, month=month, rate=rate,
-                                     retail_rows=retail_rows, inv=inv, scenario=scenario)
+                                     retail_rows=retail_rows, inv=inv, scenario=scenario,
+                                     market_cache=market_cache)
         if ac is not None:
             ready.append(ac)
         else:

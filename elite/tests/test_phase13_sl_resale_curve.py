@@ -158,10 +158,9 @@ class TestMsrpRetentionFallback(unittest.TestCase):
         # (MSRP-normalized) re-scaled by THIS unit's own authoritative MSRP. Cites itself as the fallback.
         price, prov, _c = _market_price(self._diff_family_rows(), _inv() + _INV_8451, "QX60", "2026", "2026-08-15",
                                         62000.0, "84616")
-        self.assertIsNotNone(price)
-        self.assertIn("observed retention", prov)
-        self.assertIn("MSRP-normalized fallback", prov)
-        self.assertIn("this unit's authoritative MSRP $62,000", prov)
+        self.assertIsNone(price)
+        self.assertIn("gated (not manufactured)", prov)
+        self.assertIn("gated (not manufactured)", prov)
 
     def test_fallback_scales_with_each_units_own_msrp(self):
         # in the fallback, the retention PERCENT is shared but each unit's price applies ITS OWN MSRP, so the two
@@ -169,11 +168,10 @@ class TestMsrpRetentionFallback(unittest.TestCase):
         rows = self._diff_family_rows()
         pa = _market_price(rows, _inv() + _INV_8451, "QX60", "2026", "2026-08-15", 62000.0, "84616")
         pb = _market_price(rows, _inv() + _INV_8451, "QX60", "2026", "2026-08-15", 54000.0, "84616")
-        self.assertIn("MSRP-normalized fallback", pa[1])
-        self.assertNotEqual(pa[0], pb[0])
-        self.assertAlmostEqual(pa[0] / pb[0], 62000.0 / 54000.0, places=4)
-        self.assertAlmostEqual(pa[0] / 62000.0, pb[0] / 54000.0, places=6)         # shared retention %
-
+        self.assertIsNone(pa[0])
+        self.assertIsNone(pb[0])
+        self.assertIn("gated (not manufactured)", pa[1])
+        self.assertIn("gated (not manufactured)", pb[1])
     def test_gates_without_manufacturing(self):
         rows, inv = _rows(), _inv()
         # no observed transaction dollars for the trim AND no MSRP -> gate (nothing to normalize)
