@@ -101,30 +101,49 @@ def _retention_observations(rows, by_code_my, by_code, model):
     failing that, the inventory (model_code, model_year) MSRP median for that same governed identity. NO raw
     dollar price is ever pooled, and retail_history is never mutated. Sales with no resolvable authoritative MSRP
     are dropped honestly (never normalized by an invented number)."""
+    from .preowned_evidence import _is_real_code
     model_u = (model or "").upper()
+    # AUTHORITY (2): historical NEW-sale MSRP median by SAME REAL model code + model year, built from the NEW rows
+    # in this same ledger (a NEW sale's MSRP is authoritative). Gated on _is_real_code, so a blank/special pseudo-
+    # code (e.g. 'BLANK'/'TRUCK') NEVER creates an MSRP anchor. NEW rows are an original-MSRP SOURCE only here —
+    # they never enter the used retention cohort itself.
+    newsale = {}
+    for r in rows or ():
+        if r.get("_sale_kind") != "NEW":
+            continue
+        c = _code_norm(r.get("model_number") or r.get("model_code"))
+        if not _is_real_code(c):
+            continue
+        cmy = _my_int(r.get("year"))
+        m = _price_num(r.get("msrp"))
+        if cmy is not None and m is not None and m > 0:
+            newsale.setdefault((c, cmy), []).append(m)
+    newsale_med = {k: median(v) for k, v in newsale.items()}
     out = []
     for r in rows or ():
         if (r.get("model") or "").upper() != model_u:
             continue
-        if r.get("_sale_kind") == "NEW":                          # retention is a USED-market ratio: exclude NEW sales
+        if r.get("_sale_kind") == "NEW":                          # NEW never enters the used retention cohort
             continue
         price = _price_num(r.get("price"))
         am = _age_months_at(r.get("year"), r.get("sold_date"))
         code = _code_norm(r.get("model_number") or r.get("model_code"))
         my = _my_int(r.get("year"))
-        if price is None or price <= 0 or am is None or code is None:
-            continue
-        # Original MSRP for the retention denominator, in order of AUTHORITY — never the USED row's own MSRP
-        # field (in the combined Reynolds ledger a used row's MSRP is unreliable, often == its Vehicle Price):
-        #   (1) the vehicle's authoritative ORIGINAL NEW MSRP, VIN-matched from its New-sale/lifecycle record
-        #       (stamped as `_orig_msrp` by the identity bridge); else
-        #   (2) the governed same (model_code, model_year) inventory MSRP median; else
-        #   (3) drop the observation (never normalized by an unauthoritative number).
-        msrp = _price_num(r.get("_orig_msrp"))                    # (1) VIN-authoritative original NEW MSRP
+        if price is None or price <= 0 or am is None or not _is_real_code(code):
+            continue                                              # blank/special code never builds a retention obs
+        # Original MSRP for the retention denominator, in order of AUTHORITY — NEVER the USED row's own MSRP field
+        # (in the combined Reynolds ledger a used row's MSRP is unreliable, often == its Vehicle Price):
+        #   (1) exact-VIN historical NEW original MSRP (stamped `_orig_msrp` by the identity bridge); else
+        #   (2) historical NEW-sale MSRP median for the SAME REAL model code + SAME model year; else
+        #   (3) the governed inventory (model_code, model_year) MSRP median; else
+        #   (4) drop the observation (never normalized by an unauthoritative number).
+        msrp = _price_num(r.get("_orig_msrp"))                    # (1) exact-VIN original NEW MSRP
         if msrp is None or msrp <= 0:
-            msrp, _b = _msrp_for(by_code_my, by_code, code, my)   # (2) governed (code, MY) inventory anchor
+            msrp = newsale_med.get((code, my))                    # (2) historical NEW-sale (real code, MY) median
         if msrp is None or msrp <= 0:
-            continue                                              # (3) drop — never the used row's own MSRP field
+            msrp, _b = _msrp_for(by_code_my, by_code, code, my)   # (3) governed inventory (code, MY) anchor
+        if msrp is None or msrp <= 0:
+            continue                                              # (4) drop
         out.append((am, price / msrp, code))
     return out
 
