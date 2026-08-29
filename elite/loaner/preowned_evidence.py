@@ -307,16 +307,45 @@ def latest_retail_rows(conn, scope):
             "SELECT normalized_values, raw_values FROM source_observation "
             "WHERE import_batch_id=? AND acceptance_status='accepted'", (batch[0],)).fetchall():
         row = _json(o[0])
+        raw = _json(o[1])
         # Authoritative ORIGINAL MSRP: the Reynolds retail-history export carries it, but it was omitted from
         # earlier schema profiles, so for already-loaded batches it survives only in the retained RAW row.
         # Surface it (never mutating the raw record) so the market/value rail can normalize each sale into an
         # observed retention ratio. Newer imports carry 'msrp' in normalized_values directly.
         if _retail_msrp(row) is None:
-            rm = _retail_msrp(_json(o[1]))
+            rm = _retail_msrp(raw)
             if rm is not None:
                 row = {**row, "msrp": rm}
+        # The combined Reynolds Retail History carries BOTH new and used deliveries. Surface the New/Used flag from
+        # the raw row (an undeclared extra column, so it is not in normalized_values) so the USED-market pricing
+        # cohorts can exclude NEW sales (which transact at ~MSRP and would fabricate ~100% retention). Absent flag
+        # -> '' (a legacy used-only export), treated as USED downstream; NEW rows stay usable for identity only.
+        row = {**row, "_sale_kind": _sale_kind(raw) or _sale_kind(_json(o[0]))}
         rows.append(_bridge_identity_by_vin(row, idmap))
     return rows, batch[1]
+
+
+# New/Used indicator headers on the combined Reynolds Retail History (undeclared extras kept in raw). The value is
+# the row's condition ('New' / 'Used' / 'N' / 'U' / 'Pre-Owned' / 'Certified'); only an explicit NEW is excluded.
+_NEWUSED_HEADERS = ("_sale_kind", "new_used", "New/Used", "New / Used", "NewUsed", "New Used", "NEW/USED",
+                    "N/U", "NU", "Sale Type", "sale_type", "Deal Type", "Vehicle Type", "Inventory Type",
+                    "Stock Type", "Condition", "New or Used", "New/Used Indicator")
+
+
+def _sale_kind(row):
+    """'NEW' / 'USED' / '' from a retail-history row's New/Used indicator (checked against the tolerant header
+    allowlist). Only an EXPLICIT new indicator returns 'NEW'; anything else (used, pre-owned, certified, blank,
+    absent, or ambiguous) is NOT treated as new — so a legacy used-only export with no indicator stays USED."""
+    for k in _NEWUSED_HEADERS:
+        if k in row:
+            s = str(row.get(k) or "").strip().upper()
+            if not s or s in ("N/A", "NA", "NONE", "NULL"):
+                continue
+            if s in ("NEW",) or s == "N" or s.startswith("NEW"):
+                return "NEW"
+            if s[0] in ("U", "P", "C") or s.startswith("USED") or s.startswith("PRE"):
+                return "USED"
+    return ""
 
 
 # Used-ledger model-number values that are NOT a real DMS model code (the real Reynolds used export writes these

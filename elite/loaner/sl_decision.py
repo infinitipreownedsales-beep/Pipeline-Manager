@@ -106,6 +106,8 @@ def _retention_observations(rows, by_code_my, by_code, model):
     for r in rows or ():
         if (r.get("model") or "").upper() != model_u:
             continue
+        if r.get("_sale_kind") == "NEW":                          # retention is a USED-market ratio: exclude NEW sales
+            continue
         price = _price_num(r.get("price"))
         am = _age_months_at(r.get("year"), r.get("sold_date"))
         code = _code_norm(r.get("model_number") or r.get("model_code"))
@@ -172,6 +174,8 @@ def _price_observations(rows, model):
     out = []
     for r in rows or ():
         if (r.get("model") or "").upper() != model_u:
+            continue
+        if r.get("_sale_kind") == "NEW":                     # USED-market rail: never price off a NEW delivery
             continue
         price = _price_num(r.get("price"))
         am = _age_months_at(r.get("year"), r.get("sold_date"))
