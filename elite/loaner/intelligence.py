@@ -149,6 +149,9 @@ def _dist_of(rows, valuefn):
 
 
 def _cohort(kind, label, rows, valuefn, gate, as_of):
+    # Service Loaner market intelligence is USED-market evidence. Explicit NEW
+    # deliveries remain available upstream for identity only.
+    rows = [r for r in rows if str(r.get("_sale_kind") or "").strip().upper() != "NEW"]
     vals_rows = [(valuefn(r), str(r.get("sold_date") or "")) for r in rows]
     vals_rows = [(v, d) for (v, d) in vals_rows if v is not None]
     if not vals_rows:
@@ -200,6 +203,8 @@ def _maturity(rows):
     buckets = defaultdict(list)
     excluded = 0
     for r in rows:
+        if str(r.get("_sale_kind") or "").strip().upper() == "NEW":
+            continue
         price = _numeric(r.get("price"))
         sy, my = _year_of(r.get("sold_date")), r.get("year")
         if price is None or sy is None or not isinstance(my, int) or isinstance(my, bool):
@@ -234,20 +239,31 @@ def _age_days(in_service, clock):
 
 def build_intelligence(conn, scope, prefs, clock):
     from .loaner_cockpit import MetaPrefs, desired_fleet, current_fleet_count
-    pe = build_preowned_evidence(conn, scope)          # A: composition + DTS + sample depth
+
+    # Load the combined Reynolds lifecycle once. latest_retail_rows restores the
+    # raw New/Used flag and retains NEW rows for exact-VIN identity. Every
+    # analytical market consumer below uses only non-NEW rows.
+    retail_rows, as_of = latest_retail_rows(conn, scope)
+    pe = build_preowned_evidence(
+        conn, scope, retail_rows=retail_rows, retail_received_at=as_of
+    )                                                  # A: USED composition + DTS + sample depth
     vin_model = active_fleet_models(conn, scope)
     from .preowned_evidence import active_fleet_model_years
     vin_my, my_conflicts = active_fleet_model_years(conn, scope)   # authoritative MY (governed, fail-closed)
-    retail_rows, as_of = latest_retail_rows(conn, scope)
     retail_loaded = bool(as_of)
 
-    # by-model retail cohorts (B)
+    used_retail_rows = [
+        r for r in retail_rows
+        if str(r.get("_sale_kind") or "").strip().upper() != "NEW"
+    ]
+
+    # by-model USED retail cohorts (B)
     by_model = defaultdict(list)
-    for r in retail_rows:
+    for r in used_retail_rows:
         m = r.get("model")
         if isinstance(m, str) and m.strip():
             by_model[m.strip().upper()] = by_model[m.strip().upper()]  # touch
-    for r in retail_rows:
+    for r in used_retail_rows:
         m = r.get("model")
         if isinstance(m, str):
             by_model[m.strip().upper()].append(r)

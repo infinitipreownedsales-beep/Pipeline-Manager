@@ -86,15 +86,19 @@ def _json(value):
 
 
 def summarize_model_sales(rows, active_models):
-    """Pure summarizer used by production and regression tests.
+    """Pure USED-market summarizer used by production and regression tests.
 
-    `rows` are normalized retail-history dictionaries.
+    `rows` are normalized/enriched retail-history dictionaries.
     `active_models` maps canonical model name -> active fleet unit count.
+    Explicit NEW deliveries are identity evidence only and never historical preowned
+    sales / turn observations. Legacy rows without a New/Used flag remain eligible.
     """
     sales = Counter()
     dts = defaultdict(list)
 
     for row in rows:
+        if str(row.get("_sale_kind") or "").strip().upper() == "NEW":
+            continue
         model = row.get("model")
         if not isinstance(model, str):
             continue
@@ -123,11 +127,16 @@ def summarize_model_sales(rows, active_models):
 
 
 def summarize_model_year_sales(rows, active_models, *, min_sample=MIN_MODEL_YEAR_DTS):
-    """Historical resale absorption grouped by (model, year), restricted to models present in the active
-    fleet. `defensible` marks a model-year whose usable DTS sample meets the minimum. Read-only; no economics."""
+    """Historical USED resale absorption grouped by (model, year), restricted to active-fleet models.
+
+    `defensible` marks a model-year whose usable USED DTS sample meets the minimum.
+    Explicit NEW deliveries are excluded; legacy rows without a condition flag remain eligible.
+    """
     sales = Counter()
     dts = defaultdict(list)
     for row in rows:
+        if str(row.get("_sale_kind") or "").strip().upper() == "NEW":
+            continue
         model = row.get("model")
         year = row.get("year")
         if not isinstance(model, str):
@@ -513,7 +522,7 @@ def _retail_msrp(row):
     return None
 
 
-def build_preowned_evidence(conn, scope):
+def build_preowned_evidence(conn, scope, *, retail_rows=None, retail_received_at=None):
     """Build model-level historical resale evidence for the active Service Loaner fleet."""
 
     active_vins = {
@@ -566,6 +575,19 @@ def build_preowned_evidence(conn, scope):
             fleet_models_resolved=False,
         )
 
+    # Reuse an already-loaded combined Reynolds lifecycle when supplied by the
+    # intelligence layer. This keeps the New/Used classification and avoids a
+    # second 28k-row history read on the Service Loaner page.
+    if retail_rows is not None:
+        rows = list(retail_rows)
+        return PreownedEvidence(
+            retail_received_at=retail_received_at,
+            models=summarize_model_sales(rows, active_models),
+            retail_history_loaded=(retail_received_at is not None),
+            fleet_models_resolved=True,
+            model_years=summarize_model_year_sales(rows, active_models),
+        )
+
     retail_batch = conn.execute(
         "SELECT id, received_at FROM import_batch "
         "WHERE source_id='src_p11_retail_history' "
@@ -585,11 +607,17 @@ def build_preowned_evidence(conn, scope):
 
     rows = []
     for obs in conn.execute(
-        "SELECT normalized_values FROM source_observation "
+        "SELECT normalized_values, raw_values FROM source_observation "
         "WHERE import_batch_id=? AND acceptance_status='accepted'",
         (retail_batch[0],),
     ).fetchall():
-        rows.append(_json(obs[0]))
+        row = _json(obs[0])
+        raw = _json(obs[1])
+        # New/Used is retained in raw history on older batches. Restore it at
+        # read time so explicit NEW deliveries cannot masquerade as preowned
+        # sales/turn evidence. Raw observations remain immutable.
+        row = {**row, "_sale_kind": _sale_kind(raw) or _sale_kind(row)}
+        rows.append(row)
 
     return PreownedEvidence(
         retail_received_at=retail_batch[1],

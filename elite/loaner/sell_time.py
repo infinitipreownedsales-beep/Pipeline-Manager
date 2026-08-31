@@ -52,7 +52,15 @@ def estimate_sell_time(rows, *, model, model_year=None, trim=None, drivetrain=No
     confidence='thin' (never None while ANY model sample exists), or None when there is no model history at
     all. Never fabricates precision."""
     model = _norm(model)
-    base = [r for r in (rows or []) if _norm(r.get("model")) == model and _dts(r) is not None]
+    # Post-loaner sell time is a USED-market fact. Explicit NEW deliveries in
+    # the combined Reynolds lifecycle are identity history, not preowned turn.
+    # Legacy used-only exports with no flag remain eligible.
+    base = [
+        r for r in (rows or [])
+        if _norm(r.get("_sale_kind")) != "NEW"
+        and _norm(r.get("model")) == model
+        and _dts(r) is not None
+    ]
     if not base:
         return None
     my = str(model_year or "").strip()
