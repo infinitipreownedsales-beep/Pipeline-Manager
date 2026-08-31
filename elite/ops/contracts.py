@@ -127,10 +127,11 @@ SOURCE_CONTRACTS = {
         identity_keys=("vin",), effective_time="in-service date column (verified, not import date)",
         update_time="fleet export date", schema_version=1,
         required_fields=("vin",),
-        optional_fields=("stock_number", "status", "in_service_date", "last_checkout_mileage", "odometer_value"),
+        optional_fields=("stock_number", "status", "in_service_date", "last_checkout_mileage", "odometer_value", "model_year"),
         # Real DMS export headers: `odometer_value` is the last recorded returned-from-loan mileage (Last
         # Checkout semantic, NOT live odometer). Map it onto last_checkout_mileage; explicit 0 is a real value.
-        header_aliases={"odometer_value": "last_checkout_mileage"},
+        # SERVICE LOANER MODEL YEAR CONTRACT: real fleet CSV `year` is canonical vehicle model year.
+        header_aliases={"odometer_value": "last_checkout_mileage", "year": "model_year"},
         units={"last_checkout_mileage": "miles"},
         absence_behavior="Full-Snapshot absence flags membership review; never auto-retires a unit",
         domain="service_loaner", fact_type="loaner_fleet_present", entity_kind="vehicle"),

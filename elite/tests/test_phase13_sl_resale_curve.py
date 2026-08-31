@@ -213,7 +213,7 @@ class TestHoldBenefitReflectsMarketAndBasis(unittest.TestCase):
         c, f = d["components"], d["facts"]
         self.assertLess(f["price_future"], f["price_now"])                       # market value declines over hold
         self.assertLess(c["adjusted_basis_future"], c["adjusted_basis_now"])     # basis also falls (write-down)
-        self.assertAlmostEqual(c["front_end_gross_future"], f["price_future"] - c["adjusted_basis_future"], places=0)
+        self.assertAlmostEqual(c["front_end_gross_future"], f["price_future"] - c["adjusted_basis_future"] - f["recon"], places=0)
         hold_delta = c["front_end_gross_future"] - c["front_end_gross_now"]
         market_change = f["price_future"] - f["price_now"]
         basis_gain = c["adjusted_basis_now"] - c["adjusted_basis_future"]

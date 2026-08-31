@@ -6,6 +6,7 @@ and Economic Call vs Execution Status are visually distinct. One physical unit i
 (the stored count-once results are shown as-is).
 """
 from __future__ import annotations
+import time
 
 import json
 import secrets
@@ -328,19 +329,34 @@ def _fleet_plan_card(app, scope, intel, add_n=0, decisions=None):
         decisions = _fleet_decisions(app, scope, intel)
     today = to_utc_iso(app.stack.clock.now())[:10]
 
-    # strongest eligible New-Retail replacements (physical VIN/stock), grouped by model, for SWAP/ADD naming
+    # Build physical replacement economics only when the operating plan can use them.
     repl_by_model, all_repl = {}, []
     swap_net = None
+    _needs_swap = any((d.get("action") if isinstance(d, dict) else None) == "SWAP"
+                      for d in decisions.values()) if isinstance(decisions, dict) else False
     try:
-        from ...loaner.unit_econ import build_placement_econ
-        econ = build_placement_econ(app, scope, today[:7], n=max(1, int(add_n or 1)), intel=intel)
-        if econ.get("have_economics") and econ.get("all_econ"):
-            swap_net = econ["all_econ"][0].net()
-            for pe in econ["all_econ"]:
-                repl_by_model.setdefault((pe.model or "").upper(), []).append(pe)
-                all_repl.append(pe)
+        from ...loaner.self_balancing import build_requirement
+        _sb_repl = build_requirement(_conn(app), scope, app.prefs)
+        _needs_add = bool(_sb_repl.desired is not None and int(_sb_repl.calculated_need) > 0)
     except Exception:   # noqa: BLE001
-        repl_by_model, all_repl, swap_net = {}, [], None
+        _needs_add = False
+    try:
+        from ...ordering.cross_domain import PlannedRequirementStore
+        _needs_order = bool(PlannedRequirementStore(app.prefs, scope).by_model())
+    except Exception:   # noqa: BLE001
+        _needs_order = False
+
+    if _needs_swap or _needs_add or _needs_order:
+        try:
+            from ...loaner.unit_econ import build_placement_econ
+            econ = build_placement_econ(app, scope, today[:7], n=max(1, int(add_n or 1)), intel=intel)
+            if econ.get("have_economics") and econ.get("all_econ"):
+                swap_net = econ["all_econ"][0].net()
+                for pe in econ["all_econ"]:
+                    repl_by_model.setdefault((pe.model or "").upper(), []).append(pe)
+                    all_repl.append(pe)
+        except Exception:   # noqa: BLE001
+            repl_by_model, all_repl, swap_net = {}, [], None
 
     keep, pull, swap, upcoming = [], [], [], []
     used_repl = set()
@@ -404,13 +420,27 @@ def _fleet_plan_card(app, scope, intel, add_n=0, decisions=None):
                    '<p class="muted" style="font-size:12px">Balance = the physical vehicle that should occupy the '
                    'slot now for the highest total dealership outcome — never mileage/Velocity/model staggering.</p>'
                    + table(["PULL (current SL)", "Vehicle", "REPLACE WITH (New-Retail VIN)", "Why"], srows))
-    # ADD — best physical candidate when the fleet needs another slot
-    if add_n:
-        best = next((pe for pe in all_repl if pe.unit_id not in used_repl), None)
-        seg.append('<h3 style="margin:14px 0 4px">ADD — fill an additional slot</h3>'
-                   + (safe(f'<p>Best physical unit to add: <strong>{esc((best.unit_id or "")[-8:])}</strong> · '
+    # ADD ??? actual self-balancing fleet need controls whether another slot exists.
+    # add_n is candidate-inspection quantity only.
+    try:
+        from ...loaner.self_balancing import build_requirement
+        _sb_add = build_requirement(_conn(app), scope, app.prefs)
+        _fleet_add_need = None if _sb_add.desired is None else max(0, int(_sb_add.calculated_need))
+    except Exception:  # noqa: BLE001
+        _fleet_add_need = None
+
+    if _fleet_add_need and _fleet_add_need > 0:
+        best = next((pe for pe in all_repl if pe.unit_id not in used_repl and pe.net() > 0), None)
+        seg.append('<h3 style="margin:14px 0 4px">ADD - fill an additional slot</h3>'
+                   + (safe(f'<p>Best physical unit to add: <strong>{esc((best.unit_id or "")[-8:])}</strong> - '
                            f'{esc(best.identity)} ({_money(best.net())} net).</p>') if best
-                      else empty(f"No physically-available add candidate remains for {esc(add_n)} after swaps.")))
+                      else empty("Fleet needs another slot, but no positive-net physical candidate is certified.")))
+    elif _fleet_add_need == 0:
+        seg.append('<h3 style="margin:14px 0 4px">ADD</h3>'
+                   + empty("No additional Service-Loaner slot is required by the current fleet target."))
+    else:
+        seg.append('<h3 style="margin:14px 0 4px">ADD</h3>'
+                   + empty("Fleet ADD requirement is unresolved; no ADD command is issued."))
     # ORDER — residual only (governed planned requirement minus physical surplus); never fabricated
     seg.append(_fleet_order_residual(app, scope, all_repl, used_repl))
     # UPCOMING — planned future exits/swaps before they become emergencies
@@ -528,6 +558,84 @@ def _add_id_cell(c):
     return stock
 
 
+def _human_sl_price_basis(raw):
+    """Operator wording for certified pricing provenance; raw trace remains available separately."""
+    s = str(raw or "")
+    low = s.lower()
+    if "exact full model code" in low:
+        return "Observed used sale evidence from the same exact configuration."
+    if "explicit market predecessor" in low:
+        return "Observed used sale evidence from the approved predecessor configuration."
+    if "same raw code4" in low:
+        return "Observed used sale evidence from the same configuration family."
+    if "observed used transaction price" in low:
+        return "Observed used transaction evidence from the governed comparable set."
+    if "insufficient" in low or "gated" in low:
+        return "Used-market evidence is not strong enough yet to issue a price."
+    return "Observed used-market evidence under the certified comparable hierarchy."
+
+
+def _exec_demo_reassignment_card(app, scope):
+    """Visibility only: active Executive Demos may be reassignment candidates, never free supply."""
+    try:
+        demos = _conn(app).execute(
+            "SELECT vin,membership_state,assigned_role,portfolio_role FROM executive_demo_unit "
+            "WHERE store_scope=? AND superseded_by IS NULL AND retirement_event IS NULL "
+            "ORDER BY created_at", (scope,)).fetchall()
+    except Exception:   # noqa: BLE001
+        return ""
+    if not demos:
+        return ""
+    rows = []
+    for d in demos:
+        vin = str(d["vin"] or "")
+        if not vin:
+            continue
+        role = str(d["assigned_role"] or d["portfolio_role"] or "Executive Demo")
+        state = str(d["membership_state"] or "")
+        rows.append([esc(vin[-8:]), esc(role), esc(state),
+                     safe('<strong>REASSIGNMENT REVIEW</strong>'),
+                     safe('<span class="muted">May be evaluated for Executive Demo -> Service Loaner '
+                          'when total-dealership economics justify the move. Demo replacement/opportunity '
+                          'cost must resolve before any command.</span>')])
+    if not rows:
+        return ""
+    return ('<div class="card"><h2>Executive Demo -> Service Loaner opportunities '
+            '<span class="badge">cross-domain review</span></h2>'
+            '<p class="muted" style="font-size:12px">Executive Demo is a current-use state, not a '
+            'permanent exclusion. These units stay count-once and are not treated as free Retail supply.</p>'
+            + table(["VIN", "Current assignment", "Demo state", "Status", "Rule"], rows) + '</div>')
+
+
+_SL_ADD_RUNTIME_CACHE = {}
+
+
+def _cached_sl_add_ranking(app, scope, committed, target):
+    """Compute the full physical ADD ranking once, then slice for operator inspection quantity.
+    Cache is process-local, write-sensitive, and short-lived."""
+    from ...loaner.sl_add import rank_add_candidates
+    conn = _conn(app)
+    changes = getattr(conn, "total_changes", 0)
+    key = (scope, changes, tuple(sorted(committed or ())))
+    now = time.monotonic()
+    hit = _SL_ADD_RUNTIME_CACHE.get(key)
+    if hit and now - hit["at"] <= 120:
+        full = hit["res"]
+    else:
+        full = rank_add_candidates(app, scope, n=20, committed_vins=committed)
+        _SL_ADD_RUNTIME_CACHE.clear()
+        _SL_ADD_RUNTIME_CACHE[key] = {"at": now, "res": full}
+
+    res = dict(full)
+    all_ready = list(full.get("all_ready") or full.get("ready") or ())
+    n = max(0, min(20, int(target or 0)))
+    res["requested"] = n
+    res["ready"] = all_ready[:n]
+    res["backups"] = all_ready[n:n + 4]
+    res["commandable"] = [c for c in all_ready if getattr(c, "add_net", 0) > 0][:n]
+    return res
+
+
 def _best_add_card(app, scope, add_n):
     """BEST UNITS TO ADD TO SERVICE LOANER NOW — the boss's answer. Ranks the physical New-Retail SURPLUS VINs
     by total-dealership net on the SETTLED transaction-price economics (front-end gross at release + ICV +
@@ -538,9 +646,25 @@ def _best_add_card(app, scope, add_n):
     from ...loaner.sl_decision import _recon_assumption
     from ...ordering.cross_domain import committed_vins
     target = add_n or DEFAULT_ADD_TARGET
+    if not add_n:
+        try:
+            from ...loaner.self_balancing import build_requirement
+            _sb_fast = build_requirement(_conn(app), scope, app.prefs)
+            if _sb_fast.desired is not None and int(_sb_fast.calculated_need) == 0:
+                return ('<div class="card" style="border-left:3px solid var(--accent,#2563eb)">'
+                        '<h2>Service Loaner placement</h2>'
+                        '<div class="callout" style="font-size:14px;margin:6px 0"><strong>NO ADD REQUIRED NOW.</strong> '
+                        + esc(f"Fleet is {_sb_fast.current_active} against target {_sb_fast.desired}.") + '</div>'
+                        '<p class="muted">Contingency ranking is available on demand; Elite does not rebuild it '
+                        'when the fleet does not need an ADD. '
+                        '<a href="/service-loaner?add=4">Show 4 candidates</a> | '
+                        '<a href="/service-loaner?add=7">Show 7 candidates</a></p></div>')
+        except Exception:   # noqa: BLE001
+            pass
+
     try:
         committed = frozenset(committed_vins(_conn(app), scope, app.prefs).keys())
-        res = rank_add_candidates(app, scope, n=target, committed_vins=committed)
+        res = _cached_sl_add_ranking(app, scope, committed, target)
     except Exception:   # noqa: BLE001 — the command board must never break
         return ""
     head = ('<div class="card" style="border-left:3px solid var(--accent,#2563eb)">'
@@ -559,12 +683,40 @@ def _best_add_card(app, scope, add_n):
     ready, backups, blocked = res["ready"], res["backups"], res["blocked"]
     k, want = len(ready), res["requested"]
 
+    # Fleet requirement controls HOW MANY may be commanded.
+    # The operator quantity controls candidate inspection only.
+    fleet_need = None
+    fleet_current = fleet_target = None
+    try:
+        from ...loaner.self_balancing import build_requirement
+        sb = build_requirement(_conn(app), scope, app.prefs)
+        fleet_current = sb.current_active
+        fleet_target = sb.desired
+        if sb.desired is not None:
+            fleet_need = max(0, int(sb.calculated_need))
+    except Exception:  # noqa: BLE001
+        fleet_need = None
+
+    commandable = res.get("commandable") or [c for c in ready if c.add_net > 0]
+    command_n = 0 if fleet_need is None else min(len(commandable), want, fleet_need)
+    command_ready = commandable[:command_n]
+
     # ---- TOP COMMAND ANSWER ----
-    if ready:
-        line = " ".join(f'<strong>{i}.</strong> {esc(_add_id_cell(c))}' for i, c in enumerate(ready, 1))
-        verb = f"PUT THESE {k} IN SERVICE LOANER:" if k >= want else f"READY NOW ({k} of {want} requested):"
+    if command_ready:
+        line = " ".join(f'<strong>{i}.</strong> {esc(_add_id_cell(c))}' for i, c in enumerate(command_ready, 1))
+        verb = f"PUT THESE {command_n} IN SERVICE LOANER:"
         body = [head, f'<div class="callout" style="font-size:14px;margin:6px 0">'
                       f'<strong>{esc(verb)}</strong><br>{safe(line)}</div>']
+    elif fleet_need == 0:
+        body = [head, '<div class="callout" style="font-size:14px;margin:6px 0">'
+                      '<strong>NO ADD REQUIRED NOW.</strong> '
+                      + esc(f'Fleet is {fleet_current} against target {fleet_target}. ')
+                      + '<span class="muted">The ranked units below are contingency candidates only; '
+                        'the requested quantity does not create an ADD requirement.</span></div>']
+    elif fleet_need is None:
+        body = [head, '<div class="callout" style="font-size:14px;margin:6px 0">'
+                      '<strong>NO ADD COMMAND - fleet requirement unresolved.</strong> '
+                      '<span class="muted">Candidates below are ranking evidence only.</span></div>']
     else:
         body = [head]
 
@@ -592,7 +744,7 @@ def _best_add_card(app, scope, add_n):
                    ("Service-Loaner write-down (once, in basis)", "− " + _money(c.write_down)),
                    ("Adjusted basis", _money(c.adjusted_basis)),
                    ("Expected used selling price at release", _money(c.expected_used_price)),
-                   ("  · price basis", safe(f'<span class="muted" style="font-size:12px">{esc(c.price_basis)}</span>')),
+                   ("Pricing evidence", _human_sl_price_basis(c.price_basis)),
                    ("Expected recon (planning assumption)", _money(recon["expected"])),
                    ("Recon range low / expected / high", f'{_money(recon["low"])} / {_money(recon["expected"])} / {_money(recon["high"])}'),
                    ("Break-even recon", _money(break_even_recon)),
@@ -606,8 +758,10 @@ def _best_add_card(app, scope, add_n):
                      ("Expected days-to-sell after release",
                       "—" if c.expected_sell_days is None else f"{c.expected_sell_days:g} days"),
                      ("Velocity 240-day rule", "preserved" if c.velocity_preserved else "at risk / forfeited")])
-        proof = (disclosure("Service-Loaner economic advantage (Proof — terms)", econ)
-                 + disclosure("Expected release economics / timing", timing))
+        proof = (disclosure("Why this vehicle ranks here", econ)
+                 + disclosure("Expected timing", timing)
+                 + disclosure("Technical source trace",
+                              f'<p class="muted" style="font-size:12px">{esc(c.price_basis)}</p>'))
         detail = safe(f'<div style="font-size:12.5px"><strong>Why:</strong> {esc(c.why)}<br>'
                       f'<strong>Retail impact:</strong> {esc(c.retail_impact)}'
                       + (f'<br><strong>Caveat:</strong> {esc(c.caveat)}' if c.caveat else "")
@@ -660,6 +814,15 @@ def _sequential_placement_card(app, scope, add_n):
     Retail state left behind, the units that must NOT be pulled, and the remaining quantity to ORDER."""
     if not add_n:
         return ""
+
+    # Requested candidate count is not an ADD requirement.
+    try:
+        from ...loaner.self_balancing import build_requirement
+        _sb_seq = build_requirement(_conn(app), scope, app.prefs)
+        if _sb_seq.desired is not None and max(0, int(_sb_seq.calculated_need)) == 0:
+            return ""
+    except Exception:  # noqa: BLE001
+        pass
     from ...loaner.sl_optimizer import optimize_sl_placement
     from ...ordering.cross_domain import committed_vins
     from ...clock import to_utc_iso
@@ -776,15 +939,42 @@ def _phase4_gates_html(app, scope):
         return ""
 
 
-def _program_coverage(app, scope):
-    """Read-only ICV/Velocity coverage banner + a clean link to the effective-dated Program Inputs page."""
+def _program_coverage(app, scope, intel=None, decisions=None):
+    # Fast operator coverage: reuse already-computed current-fleet decisions.
     try:
+        units = [u for u in getattr(intel, "units", ()) if getattr(u, "vin", None)] if intel is not None else []
+        if units and isinstance(decisions, dict):
+            total = len(units)
+            icv_known = 0
+            vel_known = 0
+            my_known = 0
+            for u in units:
+                d = decisions.get(u.id) or {}
+                f = d.get("facts") or {}
+                if f.get("icv") is not None:
+                    icv_known += 1
+                if f.get("velocity") is not None:
+                    vel_known += 1
+                if f.get("model_year"):
+                    my_known += 1
+
+            tone = "healthy" if icv_known == total and vel_known == total else "attention"
+            note = ""
+            if icv_known < total:
+                note = (' <strong>ICV Unknown here means a physical-unit/model-year resolution gap; '
+                        'it does not mean your monthly ICV table is missing.</strong>')
+            return ('<div class="callout" style="margin:8px 0">'
+                    + badge(tone, f"Current fleet program resolution: ICV {icv_known}/{total} | "
+                                  f"Velocity {vel_known}/{total} | MY {my_known}/{total}")
+                    + f'<span class="muted">{note}</span>'
+                    + '<p style="margin-top:6px"><a href="/program-inputs">Open effective-dated Program Inputs</a></p>'
+                    + '</div>')
+
         from .program_inputs import coverage_summary
         return ('<div class="callout" style="margin:8px 0">' + coverage_summary(app, scope)
-                + '<p style="margin-top:6px"><a href="/program-inputs">Open Program Inputs (effective-dated '
-                'ICV / Velocity) →</a></p></div>')
+                + '<p style="margin-top:6px"><a href="/program-inputs">Open effective-dated Program Inputs</a></p></div>')
     except Exception:   # noqa: BLE001
-        return ''
+        return ""
 
 
 def _loaner_command_body(app, s, intel, placement, add_n):
@@ -801,6 +991,7 @@ def _loaner_command_body(app, s, intel, placement, add_n):
 
     # ---- BEST UNITS TO ADD NOW (the headline operator decision; default 4, operator-adjustable) ----
     parts.append(_best_add_card(app, s.scope, add_n))
+    parts.append(_exec_demo_reassignment_card(app, s.scope))
 
     # ---- FLEET POSITION (reconciled to the per-unit operating plan) ----
     parts.append(_fleet_position_card(app, s.scope, decisions))
@@ -819,7 +1010,7 @@ def _loaner_command_body(app, s, intel, placement, add_n):
                     'Per-unit detail is on each unit.</div>' if blocked else "")
                  + '<p class="muted">Current, Desired and Ideal are distinct. Ideal stays <strong>Undetermined</strong> '
                  'until authoritative Phase-4 economics (ICV / Velocity / write-down) exist — no economics are invented.</p>'
-                 + _program_coverage(app, s.scope)
+                 + _program_coverage(app, s.scope, intel=intel, decisions=decisions)
                  + disclosure("Set desired fleet target",
                               form("/service-loaner/desired-fleet",
                                    '<label for=df>Desired fleet size (optional operational target)</label>'
@@ -827,60 +1018,13 @@ def _loaner_command_body(app, s, intel, placement, add_n):
                                    f'value="{esc(intel.desired_fleet if intel.desired_fleet is not None else "")}">',
                                    csrf=s.csrf_token, submit="Save desired fleet")) + '</div>')
 
-    # ---- WHAT NEEDS ME : ADD / placement ----
-    ask = form("/service-loaner", '<label for=addn>Need to add</label>'
-               f'<input id=addn name=add type=number min=1 max=20 value="{esc(add_n or "")}" '
-               'style="max-width:120px" placeholder="N units">', csrf=s.csrf_token,
-               submit="Show lowest Retail-harm candidates", method="get")
-    board = ['<div class="card"><h2>What needs me — add Service Loaners</h2>'
-             '<p class="muted">This is the <strong>lowest Retail-harm</strong> shortlist — the physical New-Retail '
-             'units that can be pulled with the least damage to certified Retail coverage. It is ranked by '
-             'Retail-harm and aging only. It is <strong>NOT</strong> the total Service-Loaner economic optimum '
-             '(used-value loss / ICV / resale are not yet weighed): the economic Ideal is pending Phase-4 inputs.</p>'
-             + ask]
-    if not placement["loaded"]:
-        board.append(empty("No New-Retail inventory snapshot is loaded yet — load Inventory in Data to build the "
-                           "placement shortlist. No candidates are invented."))
-    elif add_n and placement["candidates"]:
-        rows = [_placement_row(i + 1, c) for i, c in enumerate(placement["candidates"])]
-        board.append('<h3 style="margin:10px 0 4px">Lowest Retail-harm placement candidates '
-                     '<span class="badge">Service-Loaner economics pending</span></h3>'
-                     '<p class="muted" style="font-size:12px">Ranked by Retail-harm + aging, not by total '
-                     'dealership economics. An older/excess unit can rank high here yet be a worse economic '
-                     'placement once used-value loss and resale are weighed.</p>'
-                     + table(["#", "Stock", "VIN", "Year / Model / Trim", "Ext / Int", "New-Retail", "Why (Retail-harm)",
-                              "Economic call"], rows))
-        if placement["next_best"]:
-            nb = [_placement_row("·", c, compact=True) for c in placement["next_best"]]
-            board.append(disclosure(f"Next-best alternatives ({len(placement['next_best'])})",
-                                    table(["#", "Stock", "VIN", "Year / Model / Trim", "Ext / Int", "New-Retail",
-                                           "Why (Retail-harm)", "Economic call"], nb)))
-        notes = []
-        if placement["protected"]:
-            notes.append(f'{placement["protected"]} eligible unit(s) were <strong>protected</strong> (their '
-                         'combination is short on New-Retail coverage — placing them would harm retail).')
-        if placement["unresolved"]:
-            notes.append(f'{placement["unresolved"]} unit(s) have unresolved New-Retail coverage (no issued plan).')
-        if notes:
-            board.append('<p class="muted">' + " ".join(notes) + '</p>')
-    elif add_n:
-        board.append(empty(f'No safe placement candidate is available for {add_n} — '
-                           f'{placement["eligible"]} eligible on-lot unit(s), '
-                           f'{placement["protected"]} protected for retail coverage.'))
-    else:
-        board.append('<p class="muted">Enter how many loaners you need to add to see the safest physical '
-                     'candidates.</p>')
-    board.append('<div class="callout" style="margin-top:10px">'
-                 f'{badge("pending", "Pending Economics")} The total-dealership economic ranking (which vehicles '
-                 'lose least value as loaners, and whether any should be ordered instead of pulled from Retail) is '
-                 'reserved for Phase-4 authoritative economics — not guessed. Missing inputs before it can run:'
-                 + _phase4_gates_html(app, s.scope) + '</div></div>')
-    # ---- WHAT TO DO: the sequential portfolio answer (primary), recomputing Retail coverage per placement ----
-    parts.append(_sequential_placement_card(app, s.scope, add_n))
-    parts.append("".join(board))
-
-    # ---- ECONOMIC PLACEMENT RANKING (only when authoritative economics exist; else the fallback above) ----
-    parts.append(_economic_ranking_card(app, s.scope, add_n, intel=intel))
+    # ---- CONTINGENCY CANDIDATES ----
+    # The certified total-dealership ranking above is the single candidate rail.
+    # Candidate inspection quantity never creates fleet demand.
+    parts.append('<div class="card"><h2>Contingency candidates</h2>'
+                 '<p class="muted">The ranked physical units above are the contingency list. '
+                 'The fleet requirement determines whether any are actually placed. '
+                 'Inspecting more candidates does not create a Service-Loaner need.</p></div>')
 
     # ---- FLEET OPERATING PLAN: the consolidated KEEP / PULL / SWAP / ADD / ORDER answer (item 10) ----
     parts.append(_fleet_plan_card(app, s.scope, intel, add_n, decisions=decisions))
@@ -1025,17 +1169,40 @@ def register(app):
         s = req.session
         app.require(s, "workspace.view")
         from ...loaner.intelligence import build_intelligence
-        from ...loaner.placement import best_available_placement
+        _sl_t0 = time.perf_counter()
         intel = build_intelligence(_conn(app), s.scope, app.prefs, app.stack.clock)
+        _sl_t_intel = time.perf_counter()
         try:
             add_n = max(0, min(20, int(req.q("add") or 0)))
         except (TypeError, ValueError):
             add_n = 0
-        # exclude EVERY physically-committed vehicle (Service Loaner + Demo) — one vehicle, one purpose
-        from ...ordering.cross_domain import committed_vins
-        committed = frozenset(committed_vins(_conn(app), s.scope, app.prefs).keys())
-        placement = best_available_placement(app, _conn(app), s.scope, n=add_n, loaner_vins=committed)
-        body = _loaner_command_body(app, s, intel, placement, add_n)
+        # The certified ADD ranking is the only candidate computation on the default page.
+        _sl_t_body0 = time.perf_counter()
+        import cProfile as _sl_cprofile
+        import pstats as _sl_pstats
+        import io as _sl_io
+        _sl_prof = _sl_cprofile.Profile()
+        _sl_prof.enable()
+        body = _loaner_command_body(app, s, intel, None, add_n)
+        _sl_prof.disable()
+        _sl_t_end = time.perf_counter()
+
+        _sl_buf = _sl_io.StringIO()
+        _sl_stats = _sl_pstats.Stats(_sl_prof, stream=_sl_buf).strip_dirs()
+        _sl_stats.sort_stats("cumulative").print_stats(60)
+        _sl_stats.sort_stats("tottime").print_stats(30)
+        _sl_profile_text = (
+            f"SL_PERF intel={_sl_t_intel-_sl_t0:.3f}s "
+            f"body={_sl_t_end-_sl_t_body0:.3f}s "
+            f"total={_sl_t_end-_sl_t0:.3f}s add_n={add_n}\n\n"
+            + _sl_buf.getvalue()
+        )
+        try:
+            with open(r"C:\Code\Pipeline-Manager\SL_PROFILE.txt", "w", encoding="utf-8") as _sl_f:
+                _sl_f.write(_sl_profile_text)
+        except Exception as _sl_exc:
+            print(f"SL_PROFILE_WRITE_ERROR {_sl_exc!r}")
+        print(_sl_profile_text)
         flash, s.flash = s.flash, None
         return Response(page("Service Loaners", body, ctx=app.ctx(s), active_path="/service-loaner",
                              flash=flash, wide=True, hide_title=True))

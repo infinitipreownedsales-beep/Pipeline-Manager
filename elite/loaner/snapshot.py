@@ -166,6 +166,11 @@ class SnapshotService:
         for u in active:
             if u.vin and u.vin not in present:
                 if snapshot_type == "full":
+                    # Full-snapshot absence removes the unit from CURRENT active-fleet presence
+                    # without declaring retirement, return mileage, disposition, or Used Cars receipt.
+                    # active_fleet_presence=0 on accepted full-snapshot absence
+                    with self.store.conn:
+                        self.store.set_unit_field(self.store.conn, u.id, active_fleet_presence=0)
                     self.store.add_snapshot_recon(batch.id, snapshot_type, self.scope, u.vin, u.id, "ABSENT_REVIEW",
                                                   "present before, absent from this full snapshot")
                     bump("ABSENT_REVIEW")

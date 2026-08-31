@@ -442,6 +442,52 @@ def _nearest_maturity_bin(bins, age_years):
     return min(cand)[2] if cand else None
 
 
+def _authoritative_model_year_for_unit(unit, vin, retail_rows=None, inv=None):
+    """Resolve MY only from explicit authoritative fields tied to the exact physical VIN.
+    No VIN-character decoding and no model-code inference. Conflicts fail closed."""
+    vals = []
+
+    def _year(v):
+        s = str(v or "").strip()
+        if len(s) == 4 and s.isdigit() and 2000 <= int(s) <= 2100:
+            return s
+        return ""
+
+    explicit = _year(getattr(unit, "model_year", "") or "")
+    if explicit:
+        return explicit, "service-loaner unit"
+
+    vin_u = str(vin or "").strip().upper()
+    if not vin_u:
+        return "", "no VIN"
+
+    for r in inv or ():
+        rv = str(r.get("vin") or r.get("VIN") or "").strip().upper()
+        if rv != vin_u:
+            continue
+        y = _year(r.get("year") or r.get("model_year") or r.get("my"))
+        if y:
+            vals.append((y, "exact VIN inventory history"))
+
+    for r in retail_rows or ():
+        rv = str(r.get("vin") or r.get("VIN") or "").strip().upper()
+        if rv != vin_u:
+            continue
+        if str(r.get("_sale_kind") or "").upper() != "NEW":
+            continue
+        y = _year(r.get("year") or r.get("model_year") or r.get("my"))
+        if y:
+            vals.append((y, "exact VIN historical NEW sale"))
+
+    years = sorted({y for y, _src in vals})
+    if len(years) != 1:
+        return "", ("conflicting exact-VIN model-year evidence" if len(years) > 1
+                    else "no exact-VIN model-year evidence")
+    year = years[0]
+    sources = sorted({src for y, src in vals if y == year})
+    return year, " + ".join(sources)
+
+
 def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=None, keep_horizon_days=None, retail_rows=None, inv=None, market_cache=None):
     """Assemble the KEEP/PULL/SWAP decision for one active Service-Loaner `unit` (a UnitIntel) whose model
     evidence is `mi` (a ModelIntel). Reads governed policy + Program Inputs; forecasts the future exit price
@@ -451,10 +497,18 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
     today = today or _iso_today(app.stack.clock)
     vin = unit.vin
     model = (unit.model or "").upper()
-    my = getattr(unit, "model_year", "") or ""
     in_service = unit.in_service_date
     tenure_days_now = unit.age_days
     gated = []
+
+    # Shared physical/history rows are needed before program-value resolution.
+    if retail_rows is None:
+        retail_rows = _retail_rows(app, scope)
+    if inv is None:
+        inv = _inventory_rows(app, scope)
+    my, my_source = _authoritative_model_year_for_unit(unit, vin, retail_rows=retail_rows, inv=inv)
+    if not my:
+        gated.append("authoritative model year")
 
     # --- authoritative facts ---
     invoice = pol.invoice_for_vin(vin)
@@ -471,8 +525,6 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
     total_to_retail = (vel_e.day_cap if (vel_e and vel_e.day_cap is not None) else 240)  # 240 = total-to-retail
 
     # --- learned estimates ---
-    if retail_rows is None:
-        retail_rows = _retail_rows(app, scope)
     sell = estimate_sell_time(retail_rows, model=model, model_year=my, trim=None, drivetrain=None)
     sell_days = sell["days"] if sell else None
     buffer_days = pol.protection_buffer_days()
@@ -505,8 +557,6 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
     # Market/value rail: resolve THIS unit's authoritative MSRP + model code from the already-loaded inventory /
     # pipeline physical-unit source (same governed VIN/Serial/Stock linkage used for MY — never a manual entry),
     # then price from OBSERVED RETENTION (used price / authoritative MSRP) applied to this unit's own MSRP.
-    if inv is None:
-        inv = _inventory_rows(app, scope)
     unit_msrp, unit_code = _unit_inventory_facts(inv, vin)
     if unit_msrp is None or unit_code is None:
         # VIN-lifecycle fallback: a Service Loaner has moved OUT of today's New-Retail snapshot, but its
@@ -533,7 +583,8 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
     vel_now = _within_deadline(0)
     vel_future = _within_deadline(keep_horizon_days)
 
-    recon = 0                                               # governed recon not modelled yet -> 0 (planning), flagged
+    recon_assumption = _recon_assumption(model)
+    recon = float(recon_assumption["expected"])              # same governed planning rail as ADD
 
     res = compare_actions(invoice=invoice, monthly_rate=rate, tenure_days_now=tenure_days_now,
                           keep_extra_days=keep_horizon_days, used_price_now=price_now,
@@ -544,7 +595,8 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
     action = res["best"] or "UNRESOLVED"
     confidence = _confidence(pn_conf, pf_conf, gated)
     why = _why(action, res, vel_now, vel_future, keep_horizon_days, model, sell, gated)
-    facts = {"vin": vin, "model": model, "model_year": my, "in_service": in_service,
+    facts = {"vin": vin, "model": model, "model_year": my, "model_year_source": my_source,
+             "in_service": in_service,
              "tenure_days": tenure_days_now, "mileage": (unit.mileage if unit.mileage_available else None),
              "invoice": invoice, "rate": rate, "rate_src": rate_src, "icv": icv, "velocity": velocity,
              "total_to_retail_days": total_to_retail, "sell_time": sell, "release": release,

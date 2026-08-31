@@ -282,6 +282,8 @@ def rank_add_candidates(app, scope, *, n=None, today=None, committed_vins=frozen
                 model=(cand.model or "").upper(), new_retail_state=EXCESS, missing=missing))
 
     ready.sort(key=lambda c: (-c.add_net, c.stock))
+    commandable = [c for c in ready if c.add_net > 0]
     return {"loaded": loaded, "requested": n, "ready": ready[:n], "backups": ready[n:n + 4],
+            "commandable": commandable[:n],
             "blocked": blocked, "protected": protected, "covered_deferred": covered_deferred,
             "unresolved_state": unresolved_state, "eligible": eligible, "all_ready": ready}
