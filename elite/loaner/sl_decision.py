@@ -488,6 +488,164 @@ def _authoritative_model_year_for_unit(unit, vin, retail_rows=None, inv=None):
     return year, " + ".join(sources)
 
 
+
+ACTIVE_LOANER_BROAD_MARKET_GATE = 8
+ACTIVE_LOANER_BROAD_MARKET_MAX_SPREAD = 0.15
+
+
+def _percentile(values, p):
+    """Linear percentile without a third-party dependency."""
+    vals = sorted(float(v) for v in values)
+    if not vals:
+        return None
+    if len(vals) == 1:
+        return vals[0]
+    pos = (len(vals) - 1) * float(p)
+    lo = int(pos)
+    hi = min(lo + 1, len(vals) - 1)
+    frac = pos - lo
+    return vals[lo] + (vals[hi] - vals[lo]) * frac
+
+
+def _same_my_used_market_band(retail_rows, model, model_year, sale_date, market_cache=None):
+    """Bounded broad-market evidence for an active loaner with unknown configuration.
+
+    This is intentionally narrower than a generic model fallback:
+      * explicit NEW deliveries are never eligible;
+      * model AND model-year must match;
+      * price must be an observed USED selling price;
+      * the first age window with at least 8 observations is used;
+      * broad-market spread must stay <= 15% IQR/median.
+
+    The result is an uncertainty band, not a claim that the physical unit is the
+    median configuration. The decision layer must prove the same action at P25,
+    P50 and P75 before it may use this fallback.
+    """
+    target = _age_months_at(model_year, sale_date)
+    if target is None:
+        return None
+    model_u = str(model or "").strip().upper()
+    my_s = str(model_year or "").strip()
+    if not model_u or not my_s:
+        return None
+
+    cache = market_cache if isinstance(market_cache, dict) else {}
+    key = ("active_loaner_broad_same_my_used", model_u, my_s)
+    obs = cache.get(key)
+    if obs is None:
+        obs = []
+        for r in retail_rows or ():
+            if str(r.get("_sale_kind") or "").strip().upper() == "NEW":
+                continue
+            if str(r.get("model") or "").strip().upper() != model_u:
+                continue
+            ry = str(r.get("year") or r.get("model_year") or r.get("my") or "").strip()
+            if ry != my_s:
+                continue
+            sold = str(r.get("sold_date") or r.get("sale_date") or "")[:10]
+            age = _age_months_at(my_s, sold)
+            price = _price_num(r.get("price"))
+            if age is None or price is None or float(price) <= 0:
+                continue
+            obs.append((float(age), float(price), sold))
+        cache[key] = obs
+
+    for window in (2, 3, 4, 6):
+        matched = [(p, sold) for age, p, sold in obs if abs(age - target) <= window]
+        if len(matched) < ACTIVE_LOANER_BROAD_MARKET_GATE:
+            continue
+        prices = [p for p, _sold in matched]
+        p25 = _percentile(prices, 0.25)
+        p50 = _percentile(prices, 0.50)
+        p75 = _percentile(prices, 0.75)
+        if p50 is None or p50 <= 0:
+            return None
+        spread = (p75 - p25) / p50
+        if spread > ACTIVE_LOANER_BROAD_MARKET_MAX_SPREAD:
+            return None
+        dates = sorted(sold for _p, sold in matched if sold)
+        return {
+            "target_age_months": int(target),
+            "window_months": window,
+            "n": len(matched),
+            "p25": round(p25, 2),
+            "p50": round(p50, 2),
+            "p75": round(p75, 2),
+            "iqr_to_median": round(spread, 4),
+            "oldest_sale": dates[0] if dates else None,
+            "latest_sale": dates[-1] if dates else None,
+        }
+    return None
+
+
+def _paired_bounded_market(now_band, future_band):
+    """P25->P25, P50->P50, P75->P75 with no unearned appreciation credit."""
+    if not now_band or not future_band:
+        return None
+    out = {}
+    for q in ("p25", "p50", "p75"):
+        now_v = float(now_band[q])
+        observed_future = float(future_band[q])
+        out[q] = {
+            "now": round(now_v, 2),
+            "future_observed": round(observed_future, 2),
+            "future_decision": round(min(now_v, observed_future), 2),
+        }
+    return out
+
+
+
+def _velocity_mileage_constraint(last_checkout_mileage, mile_cap):
+    """Resolve only what authoritative Last Checkout Mileage can prove."""
+    if mile_cap is None:
+        return {
+            "status": "not_applicable",
+            "mile_cap": None,
+            "last_checkout_mileage": last_checkout_mileage,
+            "release_due_now": False,
+        }
+    try:
+        cap = int(mile_cap)
+    except (TypeError, ValueError):
+        return {
+            "status": "unknown",
+            "mile_cap": None,
+            "last_checkout_mileage": last_checkout_mileage,
+            "release_due_now": False,
+        }
+    if last_checkout_mileage is None:
+        return {
+            "status": "unknown",
+            "mile_cap": cap,
+            "last_checkout_mileage": None,
+            "release_due_now": False,
+        }
+    try:
+        miles = int(last_checkout_mileage)
+    except (TypeError, ValueError):
+        return {
+            "status": "unknown",
+            "mile_cap": cap,
+            "last_checkout_mileage": None,
+            "release_due_now": False,
+        }
+    if miles > cap:
+        status = "breached"
+        due = True
+    elif miles == cap:
+        status = "at_cap"
+        due = True
+    else:
+        status = "within_cap"
+        due = False
+    return {
+        "status": status,
+        "mile_cap": cap,
+        "last_checkout_mileage": miles,
+        "release_due_now": due,
+    }
+
+
 def _market_horizon_dates(in_service, tenure_days_now, keep_horizon_days):
     """Market-value dates for PULL-now vs KEEP-until-release.
 
@@ -540,6 +698,10 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
     vel_e = pis.applicable("velocity", model, in_month, model_year=my) if in_month else None
     icv = icv_e.value if icv_e else None
     velocity = vel_e.value if vel_e else None
+    velocity_mile_cap = (vel_e.mile_cap if (vel_e and vel_e.mile_cap is not None) else None)
+    observed_mileage = (unit.mileage if unit.mileage_available else None)
+    velocity_mileage = _velocity_mileage_constraint(observed_mileage, velocity_mile_cap)
+    mileage_release_due_now = bool(velocity_mileage["release_due_now"])
     total_to_retail = (vel_e.day_cap if (vel_e and vel_e.day_cap is not None) else 240)  # 240 = total-to-retail
 
     # --- learned estimates ---
@@ -586,12 +748,84 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
         gated.append("expected future used price (KEEP)")
 
     # --- Velocity contingency: is the projected FINAL SALE within the 240-day deadline? ---
+
+    # Active-loaner fallback for physical units whose exact configuration identity
+    # cannot be recovered. Never changes the ADD rail: this is only inside the
+    # current-fleet KEEP/PULL/SWAP decision.
+    market_uncertainty = None
+    bounded_pairs = None
+    release_by = release.get("release_by") if isinstance(release, dict) else None
+    release_due_now = bool(release_by and str(release_by) <= str(today))
+
+    # Do not mix one direct comparable with one broad estimate. The bounded rail
+    # is eligible only when BOTH direct prices are unresolved and this physical
+    # unit has neither governed model-code nor governed MSRP identity.
+    if (price_now is None and price_future is None
+            and not unit_code and unit_msrp is None):
+        now_band = _same_my_used_market_band(
+            retail_rows, model, my, sale_now, market_cache=market_cache
+        )
+        future_band = _same_my_used_market_band(
+            retail_rows, model, my, sale_future, market_cache=market_cache
+        )
+        bounded_pairs = _paired_bounded_market(now_band, future_band)
+        if bounded_pairs:
+            price_now = bounded_pairs["p50"]["now"]
+            price_future = bounded_pairs["p50"]["future_decision"]
+            pn_conf = pf_conf = "moderate"
+            pn_basis = (
+                f"{model} MY{my} broad same-MY USED market median ${price_now:,.0f} "
+                f"at ~{now_band['target_age_months']}mo (±{now_band['window_months']}mo, "
+                f"n={now_band['n']}, IQR/median={now_band['iqr_to_median']:.2f}); "
+                "configuration unknown — action must survive P25/P50/P75"
+            )
+            observed_future = bounded_pairs["p50"]["future_observed"]
+            cap_note = (
+                "future cohort appreciation not credited"
+                if observed_future > price_future else
+                "observed future cohort used directly"
+            )
+            pf_basis = (
+                f"{model} MY{my} broad same-MY USED future median observed "
+                f"${observed_future:,.0f}; decision value ${price_future:,.0f} "
+                f"at ~{future_band['target_age_months']}mo "
+                f"(±{future_band['window_months']}mo, n={future_band['n']}); {cap_note}"
+            )
+            market_uncertainty = {
+                "method": "paired same-model + same-MY USED P25/P50/P75",
+                "now": now_band,
+                "future": future_band,
+                "paired": bounded_pairs,
+                "future_appreciation_credit": False,
+            }
+
+    # The direct configuration-specific rail gated before this bounded fallback
+    # was attempted. Once the bounded rail has supplied BOTH prices, those two
+    # price-gate labels are stale and must be removed. Preserve every other gate.
+    if bounded_pairs:
+        gated = [
+            g for g in gated
+            if g not in (
+                "expected used price now",
+                "expected future used price (KEEP)",
+            )
+        ]
+
     def _within_deadline(extra_hold_days):
         if not in_service or sell_days is None or total_to_retail is None:
             return True                                     # unknown -> do not fabricate a forfeit
         return (tenure_days_now or 0) + extra_hold_days + sell_days <= total_to_retail
     vel_now = _within_deadline(0)
     vel_future = _within_deadline(keep_horizon_days)
+
+    # Constraint-first Velocity eligibility. A known observed breach means the
+    # bonus is already not protectable. At the exact cap, PULL may still preserve
+    # eligibility now, but KEEP cannot consume another Service-Loaner mile.
+    if velocity_mileage["status"] == "breached":
+        vel_now = False
+        vel_future = False
+    elif velocity_mileage["status"] == "at_cap":
+        vel_future = False
 
     recon_assumption = _recon_assumption(model)
     recon = float(recon_assumption["expected"])              # same governed planning rail as ADD
@@ -602,17 +836,102 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
                           velocity_preserved_now=vel_now, velocity_preserved_future=vel_future,
                           icv_earned=icv or 0, swap_candidate_net=swap_candidate_net)
 
-    action = res["best"] or "UNRESOLVED"
+
+    # If the broad bounded rail was used, the median is not allowed to decide
+    # alone. Re-run the exact same economics at persistent P25/P50/P75 ranks.
+    robust_actions = None
+    robust_results = None
+    if bounded_pairs:
+        robust_results = {}
+        for q in ("p25", "p50", "p75"):
+            pair = bounded_pairs[q]
+            robust_results[q] = compare_actions(
+                invoice=invoice, monthly_rate=rate, tenure_days_now=tenure_days_now,
+                keep_extra_days=keep_horizon_days,
+                used_price_now=pair["now"],
+                used_price_future=pair["future_decision"],
+                recon=recon,
+                velocity_contingent=velocity or 0,
+                velocity_preserved_now=vel_now,
+                velocity_preserved_future=vel_future,
+                icv_earned=icv or 0,
+                swap_candidate_net=swap_candidate_net,
+            )
+        robust_actions = [robust_results[q]["best"] for q in ("p25", "p50", "p75")]
+        res = robust_results["p50"]
+
+    if mileage_release_due_now:
+        action = "PULL"
+    elif bounded_pairs and release_due_now:
+        action = "PULL"
+    elif bounded_pairs:
+        stable = {a for a in robust_actions if a}
+        if len(stable) == 1 and len(robust_actions) == 3 and all(robust_actions):
+            action = next(iter(stable))
+        else:
+            action = "UNRESOLVED"
+            gated.append(
+                "unknown configuration changes KEEP/PULL outcome across observed "
+                "same-model/model-year USED market range"
+            )
+    else:
+        action = res["best"] or "UNRESOLVED"
+
     confidence = _confidence(pn_conf, pf_conf, gated)
     why = _why(action, res, vel_now, vel_future, keep_horizon_days, model, sell, gated)
+    if mileage_release_due_now:
+        miles = velocity_mileage["last_checkout_mileage"]
+        cap = velocity_mileage["mile_cap"]
+        mileage_word = "breached" if velocity_mileage["status"] == "breached" else "reached"
+        timing_note = (
+            f" Latest prudent release was also {release_by}."
+            if release_due_now and release_by else ""
+        )
+        why = (
+            f"PULL / RETIRE now — governed Velocity mileage cap {cap:,} has been "
+            f"{mileage_word}; Last Checkout Mileage is {miles:,}. "
+            "Because Last Checkout Mileage is not a live odometer, current actual "
+            "mileage can only be equal or higher, never safely lower."
+            f"{timing_note}"
+        )
+    elif bounded_pairs and release_due_now:
+        why = (
+            f"PULL / RETIRE now — latest prudent release was {release_by}. "
+            "The remaining Service-Loaner hold is zero; timing control governs. "
+            "Current used value is bounded by same-model/model-year USED evidence."
+        )
+    elif bounded_pairs and action != "UNRESOLVED":
+        margins = {}
+        for q, qr in robust_results.items():
+            pull = qr["nets"].get("PULL")
+            keep = qr["nets"].get("KEEP")
+            margins[q] = (
+                round(float(keep) - float(pull), 2)
+                if pull is not None and keep is not None else None
+            )
+        why = (
+            f"{action} is robust despite unknown configuration: the same action wins "
+            f"at P25/P50/P75 of the observed same-MY USED market. "
+            f"KEEP−PULL sensitivity {margins}."
+        )
+    elif bounded_pairs:
+        why = (
+            "Cannot recommend KEEP/PULL yet — unknown configuration changes the "
+            "decision across P25/P50/P75 of the observed same-MY USED market."
+        )
     facts = {"vin": vin, "model": model, "model_year": my, "model_year_source": my_source,
              "in_service": in_service,
              "tenure_days": tenure_days_now, "mileage": (unit.mileage if unit.mileage_available else None),
              "invoice": invoice, "rate": rate, "rate_src": rate_src, "icv": icv, "velocity": velocity,
+             "velocity_mile_cap": velocity_mile_cap, "velocity_mileage": velocity_mileage,
              "total_to_retail_days": total_to_retail, "sell_time": sell, "release": release,
              "unit_msrp": unit_msrp, "unit_model_code": unit_code,
              "price_now": price_now, "price_now_basis": pn_basis, "price_future": price_future,
              "price_future_basis": pf_basis, "recon": recon}
+
+    facts["market_uncertainty"] = market_uncertainty
+    facts["release_due_now"] = release_due_now
+    facts["robust_actions"] = robust_actions
     return {"action": action, "nets": res["nets"], "components": res["components"],
             "missing": res["missing"], "gated": gated, "confidence": confidence, "why": why, "facts": facts}
 

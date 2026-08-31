@@ -270,38 +270,59 @@ def _fleet_unit_row(u, icv_cell, decision=None):
 
 
 def _fleet_position_card(app, scope, decisions=None):
-    """Fleet Position band. 'Releasing now' and 'Expected to remain' reconcile to the ECONOMIC OPERATING PLAN
-    (the per-unit PULL/SWAP exits), not a separate rail: releasing = count of current PULL/SWAP calls; remaining
-    = in-service − releasing; and the calculated Add cannot contradict that remaining."""
-    from ...loaner.self_balancing import build_requirement, human_why, source_label
+
+    from ...loaner.self_balancing import build_requirement, source_label
+
     sb = build_requirement(_conn(app), scope, app.prefs)
-    tone = {"no_target": "attention", "resolved_zero": "healthy", "resolved_need": "pending"}.get(sb.resolution, "pending")
-    if decisions:
-        releasing = sum(1 for d in decisions.values() if d.get("action") in _RELEASE_ACTIONS)
-        remaining = max(0, int(sb.current_active) - releasing)
-        if sb.desired is not None:
-            need_val = max(0, int(sb.desired) - remaining)
-            need_txt = str(need_val)
-            need_attn = need_val > 0
-        else:
-            need_txt, need_attn = "— set target", False
+    tone = {"no_target": "attention", "resolved_zero": "healthy", "resolved_need": "pending"}.get(
+        sb.resolution, "pending"
+    )
+
+    releasing = (
+        sum(1 for d in decisions.values() if d.get("action") in _RELEASE_ACTIONS)
+        if decisions else int(sb.releasing_now or 0)
+    )
+    remaining = max(0, int(sb.current_active) - releasing)
+
+    if sb.desired is None:
+        need_txt = "— set target"
+        need_attn = False
+        why = f"{releasing} unit(s) are being pulled under the current operating plan; {remaining} are expected to remain."
     else:
-        releasing, remaining = sb.releasing_now, sb.remaining
-        need_txt = ("— set target" if sb.resolution == "no_target"
-                    else str(sb.calculated_need) + (" (lower bound)" if sb.is_lower_bound and sb.calculated_need else ""))
-        need_attn = sb.resolution == "resolved_need"
-    band = stat_row([metric(sb.current_active, "In service"),
-                     metric(sb.desired if sb.desired is not None else "not set", "Target"),
-                     metric(releasing, "Releasing now"),
-                     metric(remaining, "Expected to remain"),
-                     metric(need_txt, "Add (calculated)", attn=need_attn)])
-    return ('<div class="card"><h2 style="margin-top:4px">Fleet position — self-balancing</h2>' + band
-            + f'<p style="margin:6px 0 2px">{badge(tone, source_label(sb))}</p>'
-            + f'<p style="margin:4px 0"><strong>Why:</strong> {esc(human_why(sb))}</p>'
-            + '<p class="muted" style="font-size:12px">Releasing now / Expected to remain reflect the current '
-            'per-unit economic operating plan (PULL / SWAP exits). Retirement/release timing detail stays Pending '
-            'until authoritative lifecycle economics exist — never guessed.</p>'
-            + '<p style="margin-top:6px"><a href="/ordering/sl-requirements">Open planning &amp; directives →</a></p></div>')
+        need_val = max(0, int(sb.desired) - remaining)
+        need_txt = str(need_val)
+        need_attn = need_val > 0
+        if remaining == int(sb.desired):
+            why = (
+                f"{releasing} unit(s) are being pulled under the current operating plan, leaving {remaining} — "
+                f"exactly the target of {int(sb.desired)}. No add is required."
+            )
+        elif remaining > int(sb.desired):
+            why = (
+                f"{releasing} unit(s) are being pulled under the current operating plan, leaving {remaining} — "
+                f"{remaining - int(sb.desired)} above target. No add is required."
+            )
+        else:
+            why = (
+                f"{releasing} unit(s) are being pulled under the current operating plan, leaving {remaining} — "
+                f"{int(sb.desired) - remaining} below target."
+            )
+
+    band = stat_row([
+        metric(sb.current_active, "In service"),
+        metric(sb.desired if sb.desired is not None else "not set", "Target"),
+        metric(releasing, "Pulling"),
+        metric(remaining, "Expected to remain"),
+        metric(need_txt, "Add (calculated)", attn=need_attn),
+    ])
+
+    return (
+        '<div class="card"><h2 style="margin-top:4px">Fleet position</h2>' + band
+        + f'<p style="margin:6px 0 2px">{badge(tone, source_label(sb))}</p>'
+        + f'<p style="margin:4px 0"><strong>Why:</strong> {esc(why)}</p>'
+        + '<p style="margin-top:6px"><a href="/ordering/sl-requirements">Open planning &amp; directives →</a></p>'
+        + '</div>'
+    )
 
 
 _OUTCOME_BADGE = {
@@ -637,175 +658,136 @@ def _cached_sl_add_ranking(app, scope, committed, target):
 
 
 def _best_add_card(app, scope, add_n):
-    """BEST UNITS TO ADD TO SERVICE LOANER NOW — the boss's answer. Ranks the physical New-Retail SURPLUS VINs
-    by total-dealership net on the SETTLED transaction-price economics (front-end gross at release + ICV +
-    Velocity − Retail opportunity cost), fail-closed. Default 4, operator-adjustable via the same ?add= field.
-    Never fabricates a unit to reach the target: if only K are fully evaluable it says K READY / (N−K) BLOCKED
-    and names the exact missing field for each blocked physical unit."""
-    from ...loaner.sl_add import rank_add_candidates, DEFAULT_ADD_TARGET
-    from ...loaner.sl_decision import _recon_assumption
-    from ...ordering.cross_domain import committed_vins
-    target = add_n or DEFAULT_ADD_TARGET
-    if not add_n:
-        try:
-            from ...loaner.self_balancing import build_requirement
-            _sb_fast = build_requirement(_conn(app), scope, app.prefs)
-            if _sb_fast.desired is not None and int(_sb_fast.calculated_need) == 0:
-                return ('<div class="card" style="border-left:3px solid var(--accent,#2563eb)">'
-                        '<h2>Service Loaner placement</h2>'
-                        '<div class="callout" style="font-size:14px;margin:6px 0"><strong>NO ADD REQUIRED NOW.</strong> '
-                        + esc(f"Fleet is {_sb_fast.current_active} against target {_sb_fast.desired}.") + '</div>'
-                        '<p class="muted">Contingency ranking is available on demand; Elite does not rebuild it '
-                        'when the fleet does not need an ADD. '
-                        '<a href="/service-loaner?add=4">Show 4 candidates</a> | '
-                        '<a href="/service-loaner?add=7">Show 7 candidates</a></p></div>')
-        except Exception:   # noqa: BLE001
-            pass
 
-    try:
-        committed = frozenset(committed_vins(_conn(app), scope, app.prefs).keys())
-        res = _cached_sl_add_ranking(app, scope, committed, target)
-    except Exception:   # noqa: BLE001 — the command board must never break
-        return ""
-    head = ('<div class="card" style="border-left:3px solid var(--accent,#2563eb)">'
-            '<h2>Best units to add to Service Loaner now '
-            '<span class="badge">total-dealership decision</span></h2>'
-            '<p class="muted" style="font-size:12px">Physical dealer-owned surplus VINs ranked by the settled '
-            'economics of placing each into Service Loaner instead of leaving it New Retail: expected front-end '
-            'gross at release (used selling price − adjusted basis, write-down counted once) + ICV + Velocity '
-            '(contingent on the 240-day rule) − New-Retail opportunity cost ($0 for a genuine surplus unit). '
-            'Only over-stocked (EXCESS) units are offered; short combinations are protected. No unit is invented '
-            'to reach the requested count.</p>')
-    if not res.get("loaded"):
-        return head + empty("No New-Retail inventory snapshot is loaded yet — load Inventory in Data. No "
-                            "candidates are invented.") + '</div>'
 
-    ready, backups, blocked = res["ready"], res["backups"], res["blocked"]
-    k, want = len(ready), res["requested"]
 
-    # Fleet requirement controls HOW MANY may be commanded.
-    # The operator quantity controls candidate inspection only.
-    fleet_need = None
-    fleet_current = fleet_target = None
-    try:
-        from ...loaner.self_balancing import build_requirement
-        sb = build_requirement(_conn(app), scope, app.prefs)
-        fleet_current = sb.current_active
-        fleet_target = sb.desired
-        if sb.desired is not None:
-            fleet_need = max(0, int(sb.calculated_need))
-    except Exception:  # noqa: BLE001
-        fleet_need = None
+    from ...loaner.intelligence import build_intelligence
+    from ...loaner.preowned_evidence import latest_retail_rows
+    from ...loaner.sl_add import rank_add_candidates, _iso_today
+    from ...loaner.self_balancing import build_requirement
+    from ...loaner import sl_decision as _sd
+    import re as _re
 
-    commandable = res.get("commandable") or [c for c in ready if c.add_net > 0]
-    command_n = 0 if fleet_need is None else min(len(commandable), want, fleet_need)
-    command_ready = commandable[:command_n]
+    _today = _iso_today(app.stack.clock)
+    _intel = build_intelligence(app.stack.db.conn, scope, app.prefs, app.stack.clock)
+    _retail_rows, _ = latest_retail_rows(app.stack.db.conn, scope)
+    _inv = _sd._inventory_rows(app, scope)
+    _mi = {(m.model or "").upper(): m for m in _intel.models}
+    _market_cache = {}
 
-    # ---- TOP COMMAND ANSWER ----
-    if command_ready:
-        line = " ".join(f'<strong>{i}.</strong> {esc(_add_id_cell(c))}' for i, c in enumerate(command_ready, 1))
-        verb = f"PUT THESE {command_n} IN SERVICE LOANER:"
-        body = [head, f'<div class="callout" style="font-size:14px;margin:6px 0">'
-                      f'<strong>{esc(verb)}</strong><br>{safe(line)}</div>']
-    elif fleet_need == 0:
-        body = [head, '<div class="callout" style="font-size:14px;margin:6px 0">'
-                      '<strong>NO ADD REQUIRED NOW.</strong> '
-                      + esc(f'Fleet is {fleet_current} against target {fleet_target}. ')
-                      + '<span class="muted">The ranked units below are contingency candidates only; '
-                        'the requested quantity does not create an ADD requirement.</span></div>']
-    elif fleet_need is None:
-        body = [head, '<div class="callout" style="font-size:14px;margin:6px 0">'
-                      '<strong>NO ADD COMMAND - fleet requirement unresolved.</strong> '
-                      '<span class="muted">Candidates below are ranking evidence only.</span></div>']
-    else:
-        body = [head]
+    _pulls = []
+    for _u in _intel.units:
+        _d = _sd.build_unit_decision(
+            app, scope, _u, _mi.get((_u.model or "").upper()),
+            today=_today, swap_candidate_net=None,
+            retail_rows=_retail_rows, inv=_inv, market_cache=_market_cache,
+        )
+        if str(_d.get("action") or "").upper() != "PULL":
+            continue
 
-    # ---- fail-closed readiness banner (never fabricate a unit to reach the requested count) ----
-    if k < want:
-        n_blocked = len(blocked)
-        short_supply = max(0, (want - k) - n_blocked)      # requested beyond what any eligible surplus can fill
-        pieces = [safe(badge("healthy" if k else "attention", f"{k} READY"))]
-        if n_blocked:
-            pieces.append(safe(badge("attention", f"{n_blocked} BLOCKED"))
-                          + ' <span class="muted">— surplus VIN(s) missing an authoritative field (shown below); '
-                          'no guess is substituted.</span>')
-        if short_supply:
-            pieces.append('<span class="muted">' + esc(str(short_supply)) + ' of the '
-                          + esc(str(want)) + ' requested cannot be met — no further eligible over-stocked surplus '
-                          'unit exists to place (Retail coverage is not harmed to reach the number).</span>')
-        body.append('<p style="margin:4px 0">' + " / ".join(pieces) + '</p>')
+        _facts = _d.get("facts") or {}
+        _vm = _facts.get("velocity_mileage") or {}
 
-    # ---- per-unit detail ----
-    rows = []
-    for i, c in enumerate(ready, 1):
-        recon = _recon_assumption(c.model)
-        break_even_recon = max(0.0, float(c.add_net) + float(recon["expected"]))
-        econ = kv([("Original invoice (authoritative)", _money(c.invoice)),
-                   ("Service-Loaner write-down (once, in basis)", "− " + _money(c.write_down)),
-                   ("Adjusted basis", _money(c.adjusted_basis)),
-                   ("Expected used selling price at release", _money(c.expected_used_price)),
-                   ("Pricing evidence", _human_sl_price_basis(c.price_basis)),
-                   ("Expected recon (planning assumption)", _money(recon["expected"])),
-                   ("Recon range low / expected / high", f'{_money(recon["low"])} / {_money(recon["expected"])} / {_money(recon["high"])}'),
-                   ("Break-even recon", _money(break_even_recon)),
-                   ("Expected front-end gross after recon", _money(c.front_end_gross)),
-                   ("ICV (earned by placing)", _money(c.icv)),
-                   ("Velocity", _money(c.velocity) + ("" if c.velocity_preserved else " (forfeited → $0)")),
-                   ("New-Retail opportunity cost", _money(c.retail_opportunity_cost)),
-                   ("TOTAL DEALERSHIP NET of placing", safe(f'<strong>{esc(_money(c.add_net))}</strong>'))])
-        timing = kv([("Expected hold in service", f"{c.hold_days} days"),
-                     ("Expected release by", esc(c.release_by)),
-                     ("Expected days-to-sell after release",
-                      "—" if c.expected_sell_days is None else f"{c.expected_sell_days:g} days"),
-                     ("Velocity 240-day rule", "preserved" if c.velocity_preserved else "at risk / forfeited")])
-        proof = (disclosure("Why this vehicle ranks here", econ)
-                 + disclosure("Expected timing", timing)
-                 + disclosure("Technical source trace",
-                              f'<p class="muted" style="font-size:12px">{esc(c.price_basis)}</p>'))
-        detail = safe(f'<div style="font-size:12.5px"><strong>Why:</strong> {esc(c.why)}<br>'
-                      f'<strong>Retail impact:</strong> {esc(c.retail_impact)}'
-                      + (f'<br><strong>Caveat:</strong> {esc(c.caveat)}' if c.caveat else "")
-                      + "</div>" + proof)
-        rows.append([esc(str(i)), esc(c.stock or "—"),
-                     esc(c.vin[-8:]) if c.vin_authoritative and c.vin else safe(badge("pending", "no VIN")),
-                     esc(c.describe() + (f" · {c.exterior}/{c.interior}" if c.exterior or c.interior else "")),
-                     safe(f'<strong>{esc(_money(c.add_net))}</strong>'), detail])
-    if rows:
-        body.append(table(["#", "Stock", "VIN", "Vehicle", "Net", "Why / Retail impact / Proof"], rows))
+        _unit_id = str(
+            getattr(_u, "serial", "") or
+            getattr(_u, "stock_number", "") or
+            getattr(_u, "stock", "") or
+            ""
+        ).strip()
+        if not _unit_id:
+            _vin = str(getattr(_u, "vin", "") or "").strip()
+            _m = _re.search(r"([0-9]{6})$", _vin)
+            if _m:
+                _unit_id = _m.group(1)
+        if not _unit_id:
+            raise RuntimeError("PULL unit lacks a short operational identifier.")
 
-    # ---- backups ----
-    if backups:
-        brows = [[esc(str(i)), esc(c.stock or "—"),
-                  esc(c.vin[-8:]) if c.vin_authoritative and c.vin else safe(badge("pending", "no VIN")),
-                  esc(c.describe()), safe(f'<strong>{esc(_money(c.add_net))}</strong>'),
-                  safe(f'<span class="muted" style="font-size:12px">{esc(c.retail_impact)}</span>')]
-                 for i, c in enumerate(backups, len(ready) + 1)]
-        body.append(disclosure(f"Backups ({len(backups)}) — next-best fully-evaluable surplus VINs",
-                               table(["#", "Stock", "VIN", "Vehicle", "Net", "Retail impact"], brows)))
+        _reason = "Over mileage cap" if _vm.get("status") in ("breached", "at_cap") else "Release due"
+        _pulls.append((_unit_id, _reason))
 
-    # ---- BLOCKED physical surplus units (fail-closed; exact missing field) ----
-    if blocked:
-        blk = [[esc(b.stock or "—"),
-                esc(b.vin[-8:]) if b.vin_authoritative and b.vin else (esc(b.serial) if b.serial else "—"),
-                esc(b.identity), safe(f'<span class="muted">{esc(b.missing)}</span>')] for b in blocked]
-        body.append(disclosure(f"Blocked surplus units ({len(blocked)}) — exact missing authoritative field",
-                               table(["Stock", "VIN/Serial", "Vehicle", "Missing to decide"], blk)))
+    _current = len(_intel.units)
+    _remaining = max(0, _current - len(_pulls))
 
-    # ---- coverage notes ----
-    notes = []
-    if res["protected"]:
-        notes.append(f'{res["protected"]} eligible unit(s) protected (short New-Retail combination — placing them '
-                     'would harm certified retail coverage).')
-    if res["covered_deferred"]:
-        notes.append(f'{res["covered_deferred"]} covered-coverage unit(s) deferred — their New-Retail opportunity '
-                     'cost is not yet authoritatively valued, so they are not guessed into the ranking.')
-    if res["unresolved_state"]:
-        notes.append(f'{res["unresolved_state"]} unit(s) have unresolved New-Retail coverage (no issued plan).')
-    if not ready and not blocked:
-        notes.append("No over-stocked (EXCESS) surplus unit is currently eligible to place.")
-    if notes:
-        body.append('<p class="muted" style="font-size:12px">' + " ".join(esc(x) for x in notes) + '</p>')
-    return "".join(body) + '</div>'
+    _sb = build_requirement(_conn(app), scope, app.prefs)
+    if _sb.desired is None:
+        raise RuntimeError("Governed Service Loaner target is unresolved.")
+    _target = int(_sb.desired)
+    _add_required = max(0, _target - _remaining)
+
+    # Economics govern ranking internally but are intentionally not rendered.
+    _ranked = rank_add_candidates(
+        app, scope, n=max(7, int(add_n or 0)),
+        today=_today,
+    )
+    _candidates = list(_ranked.get("commandable") or [])[:7]
+
+    _pull_rows = ''.join(
+        '<tr>'
+        '<td style="font-weight:800;font-size:16px">' + esc(_unit_id) + '</td>'
+        '<td>' + esc(_reason) + '</td>'
+        '</tr>'
+        for _unit_id, _reason in _pulls
+    )
+
+    _candidate_rows = []
+    for _rank, _c in enumerate(_candidates, 1):
+        # Positive economics still govern inclusion; value stays private.
+        if float(getattr(_c, "add_net", 0) or 0) <= 0:
+            continue
+
+        _unit = str(getattr(_c, "stock", "") or "").strip()
+        if not _unit:
+            _unit = str(getattr(_c, "serial", "") or "").strip()
+        if not _unit:
+            continue
+
+        _trim = str(getattr(_c, "trim", "") or "").strip()
+        _model = str(getattr(_c, "model", "") or "").strip()
+        if _trim.upper().startswith((_model + " ").upper()):
+            _trim = _trim[len(_model) + 1:]
+
+        _vehicle = " ".join(
+            str(x or "").strip() for x in (
+                getattr(_c, "year", ""),
+                _model,
+                _trim,
+            ) if str(x or "").strip()
+        )
+
+        _candidate_rows.append(
+            '<tr>'
+            f'<td style="font-weight:800">#{_rank}</td>'
+            f'<td style="font-weight:800">{esc(_unit)}</td>'
+            f'<td>{esc(_vehicle)}</td>'
+            '</tr>'
+        )
+
+    _status = (
+        f"{_current} current | {len(_pulls)} pull now | {_remaining} remain | "
+        f"Target {_target} | Add required {_add_required}"
+    )
+
+    return (
+        '<div class="card" style="border:2px solid var(--line);padding:18px">'
+        '<h2 style="margin:0 0 6px">Service Loaner - Manager Action</h2>'
+        '<div style="font-size:19px;font-weight:900;margin:4px 0 16px">'
+        + esc(_status) +
+        '</div>'
+        '<div style="display:grid;grid-template-columns:1fr 1.2fr;gap:18px;align-items:start">'
+        '<div>'
+        '<h3 style="margin:0 0 6px">PULL NOW - ' + str(len(_pulls)) + '</h3>'
+        '<table><thead><tr><th>Unit</th><th>Why</th></tr></thead>'
+        '<tbody>' + _pull_rows + '</tbody></table>'
+        '</div>'
+        '<div>'
+        '<h3 style="margin:0 0 3px">NEXT PLACEMENT - IF NEEDED</h3>'
+        '<div class="muted" style="font-size:12px;margin-bottom:6px">Retail-safe priority order</div>'
+        '<table><thead><tr><th>#</th><th>Unit</th><th>Vehicle</th></tr></thead>'
+        '<tbody>' + ''.join(_candidate_rows) + '</tbody></table>'
+        '</div>'
+        '</div>'
+        '</div>'
+    )
 
 
 def _sequential_placement_card(app, scope, add_n):
@@ -978,94 +960,32 @@ def _program_coverage(app, scope, intel=None, decisions=None):
 
 
 def _loaner_command_body(app, s, intel, placement, add_n):
-    """Service Loaner Command Board — a premium program command surface, not an evidence report. It answers in
-    seconds: how many are active, what is my approved target, do I need to act, exactly which physical vehicles
-    to place first, why they are safer, and what remains unavailable while economics are pending."""
-    asof = (f'inventory + fleet evidence · as of {esc(intel.retail_as_of)}' if intel.retail_as_of
-            else 'inventory + fleet evidence')
+
+    """Service Loaner execution board. Economics drive the recommendation internally; the default board shows
+    only the actions needed to operate the fleet."""
+    asof = (
+        f'inventory + fleet evidence · as of {esc(intel.retail_as_of)}'
+        if intel.retail_as_of else 'inventory + fleet evidence'
+    )
     parts = [workspace_header("Service Loaner Command Board", safe(f'<span class="muted">{asof}</span>'))]
 
-    # ONE decision engine, computed once and shared by every surface below (Command Board / operating plan /
-    # per-unit table / Current Fleet) so they can never disagree.
+    # One shared decision engine. A rented unit can still be a PULL NOW because PULL initiates
+    # the retirement process; rental state does not suppress the economic/operating call.
     decisions = _fleet_decisions(app, s.scope, intel)
 
-    # ---- BEST UNITS TO ADD NOW (the headline operator decision; default 4, operator-adjustable) ----
     parts.append(_best_add_card(app, s.scope, add_n))
-    parts.append(_exec_demo_reassignment_card(app, s.scope))
-
-    # ---- FLEET POSITION (reconciled to the per-unit operating plan) ----
     parts.append(_fleet_position_card(app, s.scope, decisions))
 
-    # ---- PROGRAM STATE ----
-    blocked = sum(1 for u in intel.units if not u.in_service_date or not u.mileage_available)
-    dh_metric = metric(f"{blocked} blocked" if blocked else "OK", "Data Health", attn=bool(blocked))
-    parts.append('<div class="card"><h2>Program state</h2>'
-                 + stat_row([metric(intel.current_fleet, "Current fleet"),
-                             metric(intel.desired_fleet if intel.desired_fleet is not None else "not set", "Desired fleet"),
-                             metric("Undetermined", "Ideal (Pending Economics)"), dh_metric])
-                 + (bars([(m, n, f"{n}") for m, n in intel.composition], caption="active fleet by model")
-                    if intel.composition else "")
-                 + (f'<div class="callout" style="margin-top:8px">{blocked} unit(s) lack an authoritative '
-                    'in-service date and/or latest mileage — lifecycle timing is blocked until that data loads. '
-                    'Per-unit detail is on each unit.</div>' if blocked else "")
-                 + '<p class="muted">Current, Desired and Ideal are distinct. Ideal stays <strong>Undetermined</strong> '
-                 'until authoritative Phase-4 economics (ICV / Velocity / write-down) exist — no economics are invented.</p>'
-                 + _program_coverage(app, s.scope, intel=intel, decisions=decisions)
-                 + disclosure("Set desired fleet target",
-                              form("/service-loaner/desired-fleet",
-                                   '<label for=df>Desired fleet size (optional operational target)</label>'
-                                   f'<input id=df name=desired type=number min=0 style="max-width:160px" '
-                                   f'value="{esc(intel.desired_fleet if intel.desired_fleet is not None else "")}">',
-                                   csrf=s.csrf_token, submit="Save desired fleet")) + '</div>')
+    parts.append(
+        '<div class="card">'
+        '<h3 style="margin:0 0 4px">Program maintenance</h3>'
+        '<p class="muted" style="margin:0">Program terms, write-down assumptions and economic proof are kept '
+        'off the normal execution board. Use the governed maintenance views when those inputs need review.</p>'
+        '<p style="margin-top:8px"><a href="/program-inputs">Program Inputs</a> · '
+        '<a href="/ordering/sl-requirements">Planning &amp; directives</a></p>'
+        '</div>'
+    )
 
-    # ---- CONTINGENCY CANDIDATES ----
-    # The certified total-dealership ranking above is the single candidate rail.
-    # Candidate inspection quantity never creates fleet demand.
-    parts.append('<div class="card"><h2>Contingency candidates</h2>'
-                 '<p class="muted">The ranked physical units above are the contingency list. '
-                 'The fleet requirement determines whether any are actually placed. '
-                 'Inspecting more candidates does not create a Service-Loaner need.</p></div>')
-
-    # ---- FLEET OPERATING PLAN: the consolidated KEEP / PULL / SWAP / ADD / ORDER answer (item 10) ----
-    parts.append(_fleet_plan_card(app, s.scope, intel, add_n, decisions=decisions))
-
-    # ---- PER-UNIT ACTION: KEEP / PULL / SWAP (incremental-from-now; gates cleanly when inputs are missing) ----
-    parts.append(_unit_actions_card(app, s.scope, intel, decisions=decisions))
-
-    # ---- CURRENT FLEET (cascade) — same per-unit decision as everywhere else ----
-    from .program_inputs import ProgramInputsStore
-    icv_store = ProgramInputsStore(app.prefs, s.scope)
-    _evaluable = sum(1 for u in intel.units if (decisions.get(u.id) or {}).get("action") in ("KEEP", "PULL", "SWAP"))
-    _gated = len(intel.units) - _evaluable
-    fleet_summary = ""
-    if intel.units:
-        _tone = "healthy" if _gated == 0 else "attention"
-        _label = f"{_evaluable} of {len(intel.units)} unit(s) evaluable"
-        _gated_note = (f' <span class="muted">· {_gated} gated (economics not yet resolvable for those units)</span>'
-                       if _gated else '')
-        fleet_summary = ('<p style="margin:4px 0">' + safe(badge(_tone, _label)) + _gated_note + '</p>'
-                         '<p class="muted" style="font-size:12px">Program-level ICV/Velocity coverage being complete '
-                         'does not mean every unit resolves — a unit whose authoritative model year is unresolved (or '
-                         'whose program value is model-year-ambiguous) stays Unknown and its call gates, honestly.</p>')
-    parts.append('<div class="card"><h2>Current fleet</h2>' + fleet_summary
-                 + (table(["Stock", "VIN", "Model / trim", "Source state", "In service", "Age", "Last checkout mi",
-                           "Applicable ICV", "Economic call"],
-                          [_fleet_unit_row(u, _unit_icv_cell(icv_store, u), decisions.get(u.id)) for u in intel.units])
-                    if intel.units else empty("No active Service-Loaner units."))
-                 + '<p class="muted" style="font-size:12px">One row per physical unit. Applicable ICV is resolved '
-                 'from each unit\'s authoritative in-service month; Unknown is shown as Unknown, never $0. '
-                 'Release timing / retail window stay Pending until authoritative economics exist.</p></div>')
-
-    # ---- WHY (A+B intelligence, behind the command surface) ----
-    why = []
-    if intel.retail_loaded and intel.models:
-        why.append("".join(_model_intel_card(m) for m in intel.models))
-    elif not intel.retail_loaded:
-        why.append(empty("No completed preowned-history v3 import is available yet — no resale evidence invented."))
-    parts.append(disclosure("Why — historical DTS / resale / gross / maturity (empirical evidence)",
-                            safe("".join(why)) if why else empty("No evidence yet.")))
-    parts.append('<p class="muted" style="margin-top:8px">Proof — cohorts, n, recency and provenance are on '
-                 'each model and unit page (open a model or unit above).</p>')
     return "".join(parts)
 
 
