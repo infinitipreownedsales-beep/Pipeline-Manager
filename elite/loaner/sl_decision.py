@@ -488,6 +488,24 @@ def _authoritative_model_year_for_unit(unit, vin, retail_rows=None, inv=None):
     return year, " + ".join(sources)
 
 
+def _market_horizon_dates(in_service, tenure_days_now, keep_horizon_days):
+    """Market-value dates for PULL-now vs KEEP-until-release.
+
+    Used-inventory sell time is intentionally NOT part of this clock. It is a
+    separate empirical clock used to backsolve the latest prudent loaner release
+    from the total-to-retail deadline. With zero remaining KEEP horizon, both
+    actions must reference the same market date.
+    """
+    if not in_service or tenure_days_now is None:
+        return None, None
+    try:
+        now = _dt.date.fromisoformat(str(in_service)[:10]) + _dt.timedelta(days=int(tenure_days_now))
+        extra = max(0, int(keep_horizon_days or 0))
+    except (ValueError, TypeError):
+        return None, None
+    return now.isoformat(), (now + _dt.timedelta(days=extra)).isoformat()
+
+
 def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=None, keep_horizon_days=None, retail_rows=None, inv=None, market_cache=None):
     """Assemble the KEEP/PULL/SWAP decision for one active Service-Loaner `unit` (a UnitIntel) whose model
     evidence is `mi` (a ModelIntel). Reads governed policy + Program Inputs; forecasts the future exit price
@@ -540,20 +558,12 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
             except (ValueError, TypeError):
                 keep_horizon_days = 0
 
-    # --- forward exit prices (front-end) from the TIME-SENSITIVE observed resale curve ---
-    # price is a function of the actual SALE DATE (continuous age-in-months), so holding to a later date yields a
-    # different empirical price even when both dates fall in the same integer model-year-age bucket. This prevents
-    # KEEP looking superior merely because write-down lowers basis while a flat resale price stays constant.
-    def _exit_date(days_from_in_service):
-        if not in_service:
-            return None
-        try:
-            return (_dt.date.fromisoformat(in_service[:10])
-                    + _dt.timedelta(days=int(days_from_in_service))).isoformat()
-        except (ValueError, TypeError):
-            return None
-    sale_now = _exit_date(tenure_days_now or 0)
-    sale_future = _exit_date((tenure_days_now or 0) + keep_horizon_days + (sell_days or 0))
+    # --- time-sensitive market-value horizons ---
+    # PULL is valued at the release-now market; KEEP is valued at the future
+    # Service-Loaner release market. Historical used sell-time remains a separate
+    # clock used only to protect the total-to-retail deadline. Never add sell-time
+    # to the KEEP market horizon: with zero remaining hold, both dates must match.
+    sale_now, sale_future = _market_horizon_dates(in_service, tenure_days_now, keep_horizon_days)
     # Market/value rail: resolve THIS unit's authoritative MSRP + model code from the already-loaded inventory /
     # pipeline physical-unit source (same governed VIN/Serial/Stock linkage used for MY — never a manual entry),
     # then price from OBSERVED RETENTION (used price / authoritative MSRP) applied to this unit's own MSRP.
