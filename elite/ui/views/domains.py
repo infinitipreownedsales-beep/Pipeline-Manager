@@ -708,9 +708,34 @@ def _best_add_card(app, scope, add_n):
     _current = len(_intel.units)
     _remaining = max(0, _current - len(_pulls))
 
+    _pull_rows = ''.join(
+        '<tr>'
+        '<td style="font-weight:800;font-size:16px">' + esc(_unit_id) + '</td>'
+        '<td>' + esc(_reason) + '</td>'
+        '</tr>'
+        for _unit_id, _reason in _pulls
+    )
+
     _sb = build_requirement(_conn(app), scope, app.prefs)
     if _sb.desired is None:
-        raise RuntimeError("Governed Service Loaner target is unresolved.")
+        # Fail closed VISIBLY — never raise, and never fabricate a target, ADD requirement, candidates, or
+        # economics. The PULL calls stand on their own governed evidence and are still shown; the ADD command is
+        # withheld until the governed Service Loaner target is set.
+        return (
+            '<div class="card" style="border:2px solid var(--line);padding:18px">'
+            '<h2 style="margin:0 0 6px">Service Loaner - Manager Action</h2>'
+            '<div style="font-size:19px;font-weight:900;margin:4px 0 10px">'
+            + esc(f"{_current} current | {len(_pulls)} pull now | {_remaining} remain | Target not set")
+            + '</div>'
+            + safe(badge("attention", "Target unresolved"))
+            + '<p class="muted" style="margin:8px 0 16px">The governed Service Loaner target is not set, so no '
+            'ADD command can be issued. Set the desired fleet target to enable placement — no target, ADD '
+            'requirement, candidates, or economics are assumed.</p>'
+            '<h3 style="margin:0 0 6px">PULL NOW - ' + str(len(_pulls)) + '</h3>'
+            '<table><thead><tr><th>Unit</th><th>Why</th></tr></thead>'
+            '<tbody>' + _pull_rows + '</tbody></table>'
+            '</div>'
+        )
     _target = int(_sb.desired)
     _add_required = max(0, _target - _remaining)
 
@@ -720,14 +745,6 @@ def _best_add_card(app, scope, add_n):
         today=_today,
     )
     _candidates = list(_ranked.get("commandable") or [])[:7]
-
-    _pull_rows = ''.join(
-        '<tr>'
-        '<td style="font-weight:800;font-size:16px">' + esc(_unit_id) + '</td>'
-        '<td>' + esc(_reason) + '</td>'
-        '</tr>'
-        for _unit_id, _reason in _pulls
-    )
 
     _candidate_rows = []
     for _rank, _c in enumerate(_candidates, 1):
@@ -1089,40 +1106,13 @@ def register(app):
         s = req.session
         app.require(s, "workspace.view")
         from ...loaner.intelligence import build_intelligence
-        _sl_t0 = time.perf_counter()
         intel = build_intelligence(_conn(app), s.scope, app.prefs, app.stack.clock)
-        _sl_t_intel = time.perf_counter()
         try:
             add_n = max(0, min(20, int(req.q("add") or 0)))
         except (TypeError, ValueError):
             add_n = 0
         # The certified ADD ranking is the only candidate computation on the default page.
-        _sl_t_body0 = time.perf_counter()
-        import cProfile as _sl_cprofile
-        import pstats as _sl_pstats
-        import io as _sl_io
-        _sl_prof = _sl_cprofile.Profile()
-        _sl_prof.enable()
         body = _loaner_command_body(app, s, intel, None, add_n)
-        _sl_prof.disable()
-        _sl_t_end = time.perf_counter()
-
-        _sl_buf = _sl_io.StringIO()
-        _sl_stats = _sl_pstats.Stats(_sl_prof, stream=_sl_buf).strip_dirs()
-        _sl_stats.sort_stats("cumulative").print_stats(60)
-        _sl_stats.sort_stats("tottime").print_stats(30)
-        _sl_profile_text = (
-            f"SL_PERF intel={_sl_t_intel-_sl_t0:.3f}s "
-            f"body={_sl_t_end-_sl_t_body0:.3f}s "
-            f"total={_sl_t_end-_sl_t0:.3f}s add_n={add_n}\n\n"
-            + _sl_buf.getvalue()
-        )
-        try:
-            with open(r"C:\Code\Pipeline-Manager\SL_PROFILE.txt", "w", encoding="utf-8") as _sl_f:
-                _sl_f.write(_sl_profile_text)
-        except Exception as _sl_exc:
-            print(f"SL_PROFILE_WRITE_ERROR {_sl_exc!r}")
-        print(_sl_profile_text)
         flash, s.flash = s.flash, None
         return Response(page("Service Loaners", body, ctx=app.ctx(s), active_path="/service-loaner",
                              flash=flash, wide=True, hide_title=True))
