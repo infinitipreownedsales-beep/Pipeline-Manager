@@ -548,7 +548,7 @@ def _unit_actions_card(app, scope, intel, decisions=None):
                     ("Nets (PULL / KEEP / SWAP)", esc(" / ".join(f"{k} ${v:,.0f}" for k, v in nets.items()) or "—")),
                     ("Source", "invoice+write-down basis · front-end gross only (no backend) · maturity evidence")])
         rows.append([
-            esc((f.get("vin") or "")[-8:]),
+            safe(f'<a href="/service-loaner/unit/{esc(u.id)}">{esc((f.get("vin") or "")[-8:])}</a>'),  # drill to Proof
             esc(" ".join(x for x in (f.get("model_year"), f.get("model")) if x)),
             safe(badge(_ACTION_TONE.get(d["action"], "pending"), d["action"])),
             esc(adv), _money(c["adjusted_basis_now"]), _money(c["front_end_gross_now"]), esc(vel), esc(rel),
@@ -976,6 +976,32 @@ def _program_coverage(app, scope, intel=None, decisions=None):
         return ""
 
 
+# Strategy/Proof is the Kyle/GSM decision-and-economics layer. Authorization reuses the EXISTING governed
+# definition of store-operating authority — a principal holding ANY of these capabilities is the manager/admin
+# operating authority (identity.provision.PILOT_OPERATOR_ANCHORS; provision.py documents Kyle's live GSM/admin
+# principal as holding authority.grant). A pure view-only user (workspace.view only) holds none, so restricted
+# economics stay hidden by real authorization, not merely by an unlinked URL.
+from ...identity.provision import PILOT_OPERATOR_ANCHORS as _SL_STRATEGY_CAPS
+
+
+def _can_strategy(app, s):
+    """True when the signed-in principal holds a store-operating-authority capability at the active scope (the
+    Kyle/GSM operating authority). Non-raising — used to decide whether to render the Strategy link."""
+    try:
+        return any(app.stack.authz.decide(s.principal_id, cap, s.scope).allowed for cap in _SL_STRATEGY_CAPS)
+    except Exception:   # noqa: BLE001 — an authz hiccup must never expose the link or break the board
+        return False
+
+
+def _require_strategy(app, s):
+    """Enforce Strategy/Proof access (safe 403 for a view-only operator). Uses the same AuthorizationError path
+    as app.require, so an unauthorized request is denied — not merely unlinked."""
+    if not _can_strategy(app, s):
+        from ...errors import AuthorizationError
+        raise AuthorizationError(message="You do not have access to Service Loaner strategy.",
+                                 technical_detail="requires a store-operating-authority capability")
+
+
 def _loaner_command_body(app, s, intel, placement, add_n):
 
     """Service Loaner execution board. Economics drive the recommendation internally; the default board shows
@@ -985,6 +1011,12 @@ def _loaner_command_body(app, s, intel, placement, add_n):
         if intel.retail_as_of else 'inventory + fleet evidence'
     )
     parts = [workspace_header("Service Loaner Command Board", safe(f'<span class="muted">{asof}</span>'))]
+
+    # Authorized decision-makers (Kyle/GSM) get a normal navigable path to the deeper Strategy/Proof layer —
+    # never a secret URL. A view-only operator sees no link and is denied at the route.
+    if _can_strategy(app, s):
+        parts.append('<p style="margin:2px 0 12px"><a href="/service-loaner/strategy">'
+                     'Strategy &amp; Proof — deeper decision &amp; economic analysis →</a></p>')
 
     # One shared decision engine. A rented unit can still be a PULL NOW because PULL initiates
     # the retirement process; rental state does not suppress the economic/operating call.
@@ -996,13 +1028,47 @@ def _loaner_command_body(app, s, intel, placement, add_n):
     parts.append(
         '<div class="card">'
         '<h3 style="margin:0 0 4px">Program maintenance</h3>'
-        '<p class="muted" style="margin:0">Program terms, write-down assumptions and economic proof are kept '
-        'off the normal execution board. Use the governed maintenance views when those inputs need review.</p>'
+        '<p class="muted" style="margin:0">Program terms and economic proof are kept off the normal execution '
+        'board. Use the governed maintenance views when those inputs need review.</p>'
         '<p style="margin-top:8px"><a href="/program-inputs">Program Inputs</a> · '
         '<a href="/ordering/sl-requirements">Planning &amp; directives</a></p>'
         '</div>'
     )
 
+    return "".join(parts)
+
+
+def _loaner_strategy_body(app, s, intel, add_n):
+    """Kyle/GSM STRATEGY & PROOF surface — the smallest useful deeper view. Three sections, all consuming the
+    SAME shared decision map / certified economic engines as the execution board (never a second recomputed
+    rail): (1) Fleet decisions — per-unit KEEP/PULL/SWAP with the concise reason, advantage vs next-best, and a
+    drill-down into per-unit Proof; (2) Placement ranking — the economic candidate ranking (why #1 outranks #2,
+    Retail impact, anticipated economics); (3) Proof — collapsed by default: per-term basis / write-down / recon
+    / ICV / Velocity inside each card, plus the used-market cohort evidence and gated inputs. Reachable only for
+    store-operating authority; the manager execution board renders none of it."""
+    parts = [workspace_header(
+        "Service Loaner — Strategy & Proof",
+        safe('<span class="muted">why each call · governing constraint · anticipated economics · assumptions · '
+             'evidence &amp; confidence · what would change it</span>'))]
+    parts.append('<p style="margin:2px 0 12px"><a href="/service-loaner">← Back to execution board</a></p>')
+
+    decisions = _fleet_decisions(app, s.scope, intel)          # SAME engine as the execution board — one map
+
+    # (1) Fleet decisions — per-unit KEEP/PULL/SWAP + advantage + Why + per-unit Proof drill-down.
+    parts.append(_unit_actions_card(app, s.scope, intel, decisions=decisions))
+    # (2) Placement ranking — economic optimum (why #1 > #2, Retail impact, anticipated economics).
+    parts.append(_economic_ranking_card(app, s.scope, add_n or 4, intel=intel))
+    # (3) Proof — used-market cohort / maturity / gross evidence, collapsed by default (per-unit and per-term
+    # Proof are inside the cards above and on each unit page).
+    if intel.retail_loaded and intel.models:
+        why = "".join(_model_intel_card(m) for m in intel.models)
+    elif not intel.retail_loaded:
+        why = empty("No completed preowned-history v3 import is available yet — no resale evidence invented.")
+    else:
+        why = empty("No evidence yet.")
+    parts.append(disclosure(
+        "Proof — used-market cohort / maturity / gross · basis · write-down · recon · ICV / Velocity · gated inputs",
+        safe(why)))
     return "".join(parts)
 
 
@@ -1117,10 +1183,27 @@ def register(app):
         return Response(page("Service Loaners", body, ctx=app.ctx(s), active_path="/service-loaner",
                              flash=flash, wide=True, hide_title=True))
 
+    @app.get("/service-loaner/strategy")
+    def service_loaner_strategy(app, req):
+        s = req.session
+        app.require(s, "workspace.view")            # base read access…
+        _require_strategy(app, s)                   # …plus store-operating authority for restricted economics
+        from ...loaner.intelligence import build_intelligence
+        intel = build_intelligence(_conn(app), s.scope, app.prefs, app.stack.clock)
+        try:
+            add_n = max(0, min(20, int(req.q("add") or 0)))
+        except (TypeError, ValueError):
+            add_n = 0
+        body = _loaner_strategy_body(app, s, intel, add_n)
+        flash, s.flash = s.flash, None
+        return Response(page("Service Loaner — Strategy & Proof", body, ctx=app.ctx(s),
+                             active_path="/service-loaner", flash=flash, wide=True, hide_title=True))
+
     @app.get("/service-loaner/unit/{unit_id}")
     def service_loaner_unit(app, req):
         s = req.session
         app.require(s, "workspace.view")
+        _require_strategy(app, s)                   # per-unit Proof (economics) is Strategy depth, not execution
         from ...loaner.intelligence import build_intelligence
         intel = build_intelligence(_conn(app), s.scope, app.prefs, app.stack.clock)
         u = next((x for x in intel.units if x.id == req.params["unit_id"]), None)
