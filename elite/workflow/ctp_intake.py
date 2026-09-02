@@ -527,6 +527,9 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
                    "canonical": b.get("canonical", cid), "line": b.get("line", ""), "colors": b.get("colors", ""),
                    "model": (b.get("model") or _model_of(b.get("line", ""))).upper(),
                    "trim": _norm_trim(b.get("trim", "")),    # AUTHORITATIVE governed trim supplied by the caller
+                   # supply-only: real supply, NO accepted demand basis (Need/Excess not asserted). The order's
+                   # own unit is redirectable to a real governed shortage, but its build is never called "needed".
+                   "supply_only": bool(b.get("supply_only")),
                    "color_complete": bool(b.get("color_complete", True))}   # both colour dims resolved (or gate)
              for cid, b in (board or {}).items()}            # (model-code family / translation) — never line-sliced
 
@@ -658,7 +661,11 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
                         proof={"same_trim_only": True, "current_combination": pos["canonical"],
                                "source_trim": ""}, **base))
             continue
-        all_targets = short_targets(model) if pos["excess"] > 0 else []
+        # A CHANGE redirects one redirectable unit from the source to a genuinely certified-short target. The
+        # source is redirectable when it has certified excess OR when it is a SUPPLY-ONLY build (real supply, no
+        # demand basis): that order's unit can be re-specified toward a real, demand-backed governed shortage.
+        supply_only = bool(pos.get("supply_only"))
+        all_targets = short_targets(model) if (pos["excess"] > 0 or supply_only) else []
 
         # Two INDEPENDENT session restrictions, applied together:
         #   (1) exact-configuration exclusion — the governed build was OEM-rejected (session_banned);
@@ -677,9 +684,14 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
         eligible = [(tcid, st) for tcid, st in all_targets if _eligible_target(tcid, st)]
         cross_trim_blocked = bool(same_trim_only and source_trim and all_targets and not eligible
                                   and any(st.get("trim", "") != source_trim for _t, st in all_targets))
-        if pos["excess"] <= 0 or not eligible:
+        if (pos["excess"] <= 0 and not supply_only) or not eligible:
             exhausted = bool(all_targets and not eligible)   # had superior targets, but all restricted away
-            if pos["excess"] <= 0:
+            if supply_only:
+                # Never call a no-demand-basis build "needed"; keep it only because nothing better is governed-short.
+                reason = ("Keep it — this build has no established demand basis, but no eligible alternative has a "
+                          "stronger governed Need position. Leave the existing order unchanged rather than "
+                          "inventing demand.")
+            elif pos["excess"] <= 0:
                 reason = ("Keep it. By arrival this build is still at or below its needed supply, and no eligible "
                           "alternative improves the future position.")
             elif cross_trim_blocked:
@@ -700,16 +712,23 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
                         rejected_targets=rejected, **base))
             continue
 
-        # proven superior replacement: re-specify one unit excess→short; re-run the horizon (mutate state)
+        # proven superior replacement: re-specify one unit → a certified-short target; re-run the horizon.
         tcid, tgt = eligible[0]
         before = {"source_excess": pos["excess"], "target_short": tgt["short"]}
-        pos["excess"] -= 1
-        tgt["short"] -= 1
+        if not supply_only:
+            pos["excess"] -= 1                            # a demand-certified excess source loses one surplus unit
+        tgt["short"] -= 1                                 # the certified shortage is consumed (both source kinds)
+        if supply_only:
+            change_reason = (f"Change it to {tgt['colors'] or tgt['line']}. This build has no established demand "
+                             f"basis; {tgt['colors'] or tgt['line']} has a governed shortage supported by "
+                             f"accepted demand evidence.")
+        else:
+            change_reason = (f"Change it to {tgt['colors'] or tgt['line']}. Elite projects enough "
+                             f"{colors or line} supply by arrival, while {tgt['colors'] or tgt['line']} "
+                             f"remains short.")
         recs.append(Recommendation(decision_state=CHANGE, proposed_line=tgt["line"], proposed_colors=tgt["colors"],
                     proposed_combination_id=tcid,
-                    reason_plain=(f"Change it to {tgt['colors'] or tgt['line']}. Elite projects enough "
-                                  f"{colors or line} supply by arrival, while {tgt['colors'] or tgt['line']} "
-                                  f"remains short."),
+                    reason_plain=change_reason,
                     operator_action_plain=(f"In the Infiniti CTP portal, change {c.order_number or c.vin} to "
                                            f"{tgt['line']} {tgt['colors']}".strip()),
                     proof={"source_combination": pos["canonical"], "target_combination": tgt["canonical"],

@@ -16,6 +16,9 @@ def _call(plan):
     dec = (plan.evidence or {}).get("decision") or {}
     if plan.planning_state == "unresolved":
         return "REVIEW — required coverage policy unresolved; no target set."
+    if plan.planning_state == "supply_only" or dec.get("supply_only"):
+        return ("SUPPLY ONLY — real supply is present, but there is no accepted demand basis for this build, "
+                "so no Need or Excess is asserted (demand unknown, not zero).")
     if dec:
         acquire = int(dec.get("acquire_units", 0) or 0)
         arr_ex = int(dec.get("arrived_excess", 0) or 0)

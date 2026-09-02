@@ -2363,6 +2363,8 @@ def _certified_positions(app, scope):
                       "acquire_units": int(dec.get("acquire_units", 0) or 0),
                       "arrived_excess": int(dec.get("arrived_excess", 0) or 0),
                       "incoming_excess": int(dec.get("incoming_excess", 0) or 0),
+                      # supply-only: real supply, no accepted demand basis -> Need/Excess NOT asserted (0 above)
+                      "supply_only": bool(dec.get("supply_only")) or r["planning_state"] == "supply_only",
                       "future_gap": len(dec.get("monitor_months") or [])})
         label_to_key[human] = cid
         label_to_key[_readable(canonical)] = cid       # older offers stored the compact code label
@@ -2565,6 +2567,9 @@ def _ctp_board(app, scope, descriptions=None):
                       "trim": (getattr(d, "trim", "") or "").strip() if d else "",
                       "exterior_code": ext_code, "interior_code": int_code,
                       "color_complete": bool(ext_code and int_code),
+                      # supply-only: the position is authoritative but asserts no Need/Excess (0/0); the flag lets
+                      # the CTP evaluator use honest no-demand-basis language instead of "at/below needed supply".
+                      "supply_only": bool(c.get("supply_only")),
                       "excess": int(c["arrived_excess"]) + int(c["incoming_excess"]), "short": int(c["acquire_units"])}
     return board
 

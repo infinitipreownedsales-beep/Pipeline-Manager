@@ -82,6 +82,7 @@ class CohortPlanOutcome:
     evidence_tier: str = None
     legacy_prate: float = None
     refused_reason: str = None
+    supply_only: bool = False          # real supply, no accepted demand basis: an honest supply-only position
     coverage_evidence: dict = field(default_factory=dict)
     # decision transparency
     target_level: float = None
@@ -202,6 +203,27 @@ def run_planning(ctx, supply_by_key, demand_by_key, exceptions, *, target_days_s
             if ctx.lineage is not None and sup is not None:
                 predecessors, note = ctx.lineage.resolve(key, demand_by_key)
             if not predecessors:
+                # SUPPLY-ONLY: a valid cohort with real current/incoming SUPPLY but no accepted demand basis (and
+                # no approved lineage) must not become permanently unevaluable. Issue an HONEST supply-only
+                # position so the one authoritative plan represents known supply + UNKNOWN demand — Need/Excess
+                # are NOT asserted, demand is NOT fabricated to zero, and NO demand lineage is created.
+                if sup is not None and (cur > 0 or fut > 0):
+                    decision = {"acquire_units": 0, "arrived_excess": 0, "incoming_excess": 0,
+                                "represented": False, "supply_only": True,
+                                "demand_basis": "no_accepted_demand_history", "monitor_months": []}
+                    plan = ctx.planning.issue_supply_only_position(
+                        scope=ctx.scope, combination_id=comb.id,
+                        counts={"current": cur, "future": fut, "committed": 0},
+                        qualifying=list(sup.qualifying), calculation_version=ctx.plan_cv, decision=decision,
+                        evaluated_start=(horizon[0] if horizon else None),
+                        evaluated_end=(horizon[-1] if horizon else None))
+                    outcomes.append(CohortPlanOutcome(
+                        key=key, identity=sup.identity, issued=True, plan_id=plan.id,
+                        planning_state="supply_only", supply_only=True, need=None, excess=None,
+                        current_supply=cur, future_supply=fut, represented=False,
+                        acquire_units=0, arrived_excess=0, incoming_excess=0,
+                        legacy_prate=(dem.legacy_prate if dem else None), coverage_evidence=decision))
+                    continue
                 outcomes.append(CohortPlanOutcome(
                     key=key, identity=(dem.identity if dem else sup.identity), issued=False,
                     current_supply=cur, future_supply=fut, refused_reason="no_accepted_demand_history",

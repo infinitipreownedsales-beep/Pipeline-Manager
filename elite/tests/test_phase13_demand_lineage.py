@@ -142,11 +142,19 @@ class TestLineageEndToEnd(unittest.TestCase):
             "WHERE r.store_scope=? AND r.status='issued' AND c.canonical_identity LIKE '%model_code=8631%'",
             (SCOPE,)).fetchone()
 
-    def test_not_approved_still_refused_no_position(self):
+    def test_not_approved_supply_present_issues_supply_only(self):
+        # NEW CONTRACT: with the lineage relationship pending (NOT approved) there is still no ACCEPTED demand
+        # basis, but this cohort has real current/incoming supply — so it is no longer refused into invisibility.
+        # It receives an HONEST supply-only position (no demand borrowed, Need/Excess NOT asserted). Approving
+        # the lineage later upgrades it to a demand-backed position (test_approved_... below).
         o = self._plan_outcome()
-        self.assertFalse(o.issued)
-        self.assertEqual(o.refused_reason, "no_accepted_demand_history")
-        self.assertEqual(o.coverage_evidence["missing_lineage_review"]["status"], "not_approved")
+        self.assertTrue(o.issued)
+        self.assertTrue(o.supply_only)
+        self.assertEqual(o.planning_state, "supply_only")
+        self.assertIsNone(o.refused_reason)
+        self.assertIsNone(o.need)                                    # Need NOT asserted (unknown, not zero)
+        self.assertIsNone(o.excess)                                  # Excess NOT asserted
+        self.assertNotEqual(o.evidence_tier, "lineage")             # nothing borrowed while pending
 
     def test_approved_issues_lineage_tier_and_persists_current_identity(self):
         self._approve_luxe2wd()
@@ -175,14 +183,22 @@ class TestLineageEndToEnd(unittest.TestCase):
         BR.recompute_board(self.p.app, SCOPE)
         self.assertEqual(self.tx.observations(), before)             # borrowing reads; never rewrites history
 
-    def test_reject_restores_refusal(self):
+    def test_reject_restores_supply_only_not_borrowed_demand(self):
         self._approve_luxe2wd()
-        self.assertTrue(self._plan_outcome().issued)                      # borrowing works while approved
+        approved = self._plan_outcome()
+        self.assertTrue(approved.issued)                                  # borrowing works while approved …
+        self.assertEqual(approved.evidence_tier, "lineage")              # … as a demand-backed lineage position
         prop = self.ln.latest_for(LUXE2WD_ROOT, "SAME_FAMILY_CROSS_GEN")
         self.ln.reject(prop.id, actor="kyle", at="2026-08-27", reason="hold generations separate")
         o = self._plan_outcome()
-        self.assertFalse(o.issued)                                   # revoking restores the honest refusal
-        self.assertEqual(o.refused_reason, "no_accepted_demand_history")
+        # revoking the lineage removes the BORROWED demand: the cohort falls back to an honest supply-only
+        # position (supply present, demand unknown) — never a fabricated demand-backed Need/Excess.
+        self.assertTrue(o.issued)
+        self.assertTrue(o.supply_only)
+        self.assertEqual(o.planning_state, "supply_only")
+        self.assertNotEqual(o.evidence_tier, "lineage")                 # the borrow is gone
+        self.assertIsNone(o.need)
+        self.assertIsNone(o.excess)
 
     def test_codes_stay_distinct_and_exact_still_exact(self):
         # add REAL exact 86317 history -> that cohort issues EXACT (not lineage), proving 86xx keeps its own code

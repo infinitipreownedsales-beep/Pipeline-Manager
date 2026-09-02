@@ -247,14 +247,23 @@ class TestPlanningRunner(unittest.TestCase):
                                  "AND status='issued'", (SCOPE,)).fetchone()[0]
         self.assertEqual(rows, 1)
 
-    def test_25_insufficient_demand_refuses(self):
-        # cohort with supply but NO demand history -> refuse, never fabricate need/excess
+    def test_25_supply_present_no_demand_issues_supply_only(self):
+        # NEW CONTRACT (supply-only coverage): a valid cohort with real supply but NO accepted demand history is
+        # no longer refused into invisibility — it receives an HONEST supply-only position so the one
+        # authoritative plan represents known supply + UNKNOWN demand. Need/Excess are NOT asserted (never
+        # fabricated to zero) and no demand is issued.
         sup = SB.build_supply([S("DLR-INV", "83316", "QBE", "P", dis=10)], current_month="2026-08")
         res = run_planning(self.ctx, sup, {}, [], target_days_supply=60, current_month="2026-08")
-        self.assertEqual(res["issued_count"], 0)
-        self.assertEqual(res["refused_count"], 1)
-        self.assertEqual(res["outcomes"][0].refused_reason, "no_accepted_demand_history")
-        self.assertEqual(res["total_need"], 0.0)                   # no fabricated need
+        self.assertEqual(res["issued_count"], 1)                   # issued as supply-only, not refused
+        self.assertEqual(res["refused_count"], 0)
+        o = res["outcomes"][0]
+        self.assertTrue(o.supply_only)
+        self.assertEqual(o.planning_state, "supply_only")
+        self.assertIsNone(o.refused_reason)
+        self.assertIsNone(o.need)                                 # Need NOT asserted (unknown, not zero)
+        self.assertIsNone(o.excess)                               # Excess NOT asserted (unknown, not zero)
+        self.assertEqual(res["total_need"], 0.0)                  # still no fabricated need aggregate
+        self.assertEqual(res["total_excess"], 0.0)
 
     def test_24_legacy_prate_cannot_override(self):
         built = self._demand()

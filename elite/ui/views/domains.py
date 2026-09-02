@@ -1202,15 +1202,19 @@ def register(app):
                          "Pending ETA", "Monitor", "DTS burden", "Evidence"], [b[1] for b in board]))
 
         # legacy portfolio view (retained; also serves plans issued without a discrete decision) --------------
-        total_need = sum(r["need"] for r in rows)
-        total_excess = sum(r["excess"] for r in rows)
+        # Need/Excess/expected demand are NULL for a supply-only position (demand UNKNOWN, not asserted) — sum
+        # them as 0 contribution and render "—", never a fabricated zero.
+        total_need = sum((r["need"] or 0) for r in rows)
+        total_excess = sum((r["excess"] or 0) for r in rows)
         trows = []
         for r in rows:
             st = r["planning_state"]
-            trows.append([esc(r["combination_id"]), esc(round(r["expected_demand"], 2)),
+            _cell = lambda v: "—" if v is None else esc(round(v, 2))
+            tone = "healthy" if st == "balanced" else "unresolved" if st == "supply_only" else "attention"
+            trows.append([esc(r["combination_id"]), _cell(r["expected_demand"]),
                           esc(r["current_supply"]), esc(r["future_supply"]), esc(r["committed_supply"]),
-                          esc(round(r["need"], 2)), esc(round(r["excess"], 2)),
-                          safe(badge("healthy" if st == "balanced" else "attention", st))])
+                          _cell(r["need"]), _cell(r["excess"]),
+                          safe(badge(tone, st))])
         parts.append(
             f'<div class="card"><h2>Portfolio</h2>{kv([("Combinations planned", len(rows)), ("Total Need", round(total_need,2)), ("Total Excess", round(total_excess,2))])}'
             '<p class="muted">Analytical totals and Need/Excess are read from the issued Phase 4 plan — not '

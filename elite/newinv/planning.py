@@ -163,6 +163,45 @@ class PlanningService:
                                        seq=m["seq"]) for m in res["months"]])
         return self.store.add_plan(p)
 
+    def issue_supply_only_position(self, *, scope, combination_id, counts, qualifying, calculation_version,
+                                   decision=None, evaluated_start=None, evaluated_end=None, scenario_id=None):
+        """Issue an honest SUPPLY-ONLY position for a cohort with real current/incoming SUPPLY but NO accepted
+        demand basis (and no approved demand lineage). Need, Excess and expected demand are UNKNOWN / NOT
+        ASSERTED (stored NULL — never fabricated to zero); there is NO demand_result (no fabricated demand, no
+        lineage). The combination stays authoritative and its supply is recorded normally. planning_state is the
+        distinct 'supply_only' marker so no consumer reads this as demand-certified Need/Excess."""
+        qkeys = [u["key"] for u in qualifying]
+        inputs = {"combination_id": combination_id, "supply": dict(counts), "qualifying": qkeys,
+                  "demand_basis": "no_accepted_demand_history"}
+        pkg = self.policy.add_reproducibility(ReproducibilityPackage(
+            id=new_id("rep"), refs={"kind": "plan_supply_only", "calculation_version": calculation_version,
+                                    "inputs": inputs, "demand_result": None, "result": {"state": "supply_only"}},
+            calculation_timestamp=self.store._now(), implementation_revision="phase4-plan-supply-only",
+            output_reference=output_checksum({"state": "supply_only", "combination_id": combination_id,
+                                              "supply": dict(counts)})))
+        dec = dict(decision or {})
+        dec.setdefault("acquire_units", 0)
+        dec.setdefault("arrived_excess", 0)
+        dec.setdefault("incoming_excess", 0)
+        dec.setdefault("represented", False)
+        dec["supply_only"] = True
+        dec.setdefault("demand_basis", "no_accepted_demand_history")
+        dec.setdefault("monitor_months", [])
+        p = InventoryPlanResult(
+            id=new_id("plan"), store_scope=scope, planning_state="supply_only",
+            combination_id=combination_id, evaluated_start=evaluated_start, evaluated_end=evaluated_end,
+            expected_demand=None,                        # demand UNKNOWN — never fabricated to zero
+            current_supply=counts.get("current", 0), future_supply=counts.get("future", 0),
+            committed_supply=counts.get("committed", 0), qualifying_supply=len(qkeys),
+            desired_ending_coverage={"model": "supply_only", "demand_basis": "no_accepted_demand_history"},
+            need=None, excess=None,                      # Need / Excess NOT asserted
+            confidence="low",
+            evidence={"model": "supply_only", "demand_basis": "no_accepted_demand_history",
+                      "decision": dec, "qualifying_keys": qkeys},
+            policy_versions=[], calculation_version=calculation_version,
+            reproducibility_package=pkg.id, demand_result_id=None, scenario_id=scenario_id, months=[])
+        return self.store.add_plan(p)
+
     def issue(self, demand_result, *, horizon, qualifying, coverage_target, counts,
               calculation_version, coverage_resolution=None, scenario_id=None, confidence=None):
         inputs = {"horizon": list(horizon), "demand_monthly": dict(demand_result.monthly_expected),
@@ -220,8 +259,8 @@ class PlanningService:
                 supply_by_state[k] += getattr(p, {"current": "current_supply", "future": "future_supply",
                                                    "committed": "committed_supply",
                                                    "qualifying": "qualifying_supply"}[k])
-            need += p.need
-            excess += p.excess
+            need += p.need or 0.0                 # supply-only positions assert no Need/Excess (NULL) -> 0 contribution
+            excess += p.excess or 0.0
             if p.planning_state == "unresolved":
                 unresolved += 1
         confidences = {p.confidence for p in plans}

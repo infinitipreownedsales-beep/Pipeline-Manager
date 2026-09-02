@@ -17,7 +17,10 @@ AVAILABILITY_STATES = ("available_unsold", "available_sold", "unavailable", "con
 EVIDENCE_TIERS = ("exact", "lineage", "family", "attribute", "estimate")
 DIRECT_TIERS = {"exact"}
 # Planning states (Need/Excess resolution outcomes).
-PLANNING_STATES = ("need", "excess", "balanced", "unresolved", "conflicting")
+# "supply_only": the cohort has real current/incoming SUPPLY but NO accepted demand basis (and no approved
+# demand lineage), so Need and Excess are UNKNOWN / NOT ASSERTED — never fabricated to zero. The combination is
+# still authoritative; demand basis is honestly unresolved. Distinct from "balanced" (which asserts demand==supply).
+PLANNING_STATES = ("need", "excess", "balanced", "unresolved", "conflicting", "supply_only")
 # Commitment lifecycle.
 COMMITMENT_STATES = ("proposed", "committed", "superseded", "cancelled", "fulfilled")
 
