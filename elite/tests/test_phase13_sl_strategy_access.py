@@ -92,12 +92,12 @@ class TestStrategyAccessBoundary(unittest.TestCase):
 
     def test_strategy_shows_both_fleet_decisions_and_placement_ranking(self):
         # presentation contract: the Strategy page visibly carries BOTH the Fleet decisions section and the
-        # Placement ranking section (the placement ranking is always present — its heading renders even when no
-        # inventory snapshot is loaded, so Kyle is never left without it).
+        # (contingency) Placement ranking section (its heading renders even when no inventory snapshot is
+        # loaded, so Kyle is never left without it).
         with patch("elite.loaner.intelligence.build_intelligence", return_value=INTEL._fake_intel()):
             b = self.op_full.get("/service-loaner/strategy").body
         self.assertIn("Recommended action per unit", b)      # Fleet decisions
-        self.assertIn("Placement ranking", b)                # Placement ranking
+        self.assertIn("Contingency placement ranking", b)    # Placement ranking (ADD 0 -> contingency)
 
     def test_strategy_fleet_decisions_are_compact_not_a_wide_table(self):
         # the per-unit decisions render as compact rows with the economics folded into an expandable

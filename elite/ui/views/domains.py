@@ -660,6 +660,16 @@ def _cached_sl_add_ranking(app, scope, committed, target):
     return res
 
 
+def _governed_add_ranking(app, scope, add_n, *, today=None):
+    """The ONE governed ADD placement ranking consumed by BOTH the execution board and the Strategy page — the
+    settled-economics rank_add_candidates result, ordered by total-dealership net (then stock). Given the same
+    state it returns the IDENTICAL ordered candidate set on Execution, Strategy and Proof; there is never a
+    second optimizer. Presentation surfaces may explain each candidate, but must not re-rank or re-select."""
+    from ...loaner.sl_add import rank_add_candidates, _iso_today
+    today = today or _iso_today(app.stack.clock)
+    return rank_add_candidates(app, scope, n=max(7, int(add_n or 0)), today=today)
+
+
 def _best_add_card(app, scope, add_n):
 
 
@@ -742,11 +752,9 @@ def _best_add_card(app, scope, add_n):
     _target = int(_sb.desired)
     _add_required = max(0, _target - _remaining)
 
-    # Economics govern ranking internally but are intentionally not rendered.
-    _ranked = rank_add_candidates(
-        app, scope, n=max(7, int(add_n or 0)),
-        today=_today,
-    )
+    # Economics govern ranking internally but are intentionally not rendered. The SAME governed ranking is
+    # consumed by the Strategy page (_governed_add_ranking) — one rail, one ordered candidate set.
+    _ranked = _governed_add_ranking(app, scope, add_n, today=_today)
     _candidates = list(_ranked.get("commandable") or [])[:7]
 
     _candidate_rows = []
@@ -1046,57 +1054,58 @@ def _loaner_command_body(app, s, intel, placement, add_n):
 
 
 def _strategy_placement_card(app, scope, add_n):
-    """Placement ranking (Strategy) — the governed Retail-safe order in which the next Service Loaners should be
-    placed, straight from the SAME optimize_sl_placement engine and ranked candidate results the board uses (no
-    second calculation rail). Kyle sees, per ranked candidate: the unit (rank · stock) and vehicle, why it
-    outranks the next (the per-step Why), the Retail impact it leaves behind, the anticipated (provisional)
-    economics, and an expandable per-term Proof. Presentation only — the order and economics are the engine's."""
-    from ...loaner.sl_optimizer import optimize_sl_placement
-    from ...ordering.cross_domain import committed_vins
-    from ...clock import to_utc_iso
-    n = max(1, int(add_n or 0) or 5)          # a sensible default depth so the ranking is always visible
-    head = ('<div class="card"><h2>Placement ranking <span class="badge">Retail-safe order</span></h2>'
-            '<p class="muted" style="font-size:12px">The governed order in which the next Service Loaners should '
-            'be placed: each pick is chosen, then Retail coverage is recomputed before the next — so a unit that '
-            'would push its group into a Retail shortage is not placed. Economics are provisional until the '
-            'write-down treatment is governed.</p>')
-    month = to_utc_iso(app.stack.clock.now())[:7]
-    try:
-        committed = frozenset(committed_vins(_conn(app), scope, app.prefs).keys())
-        res = optimize_sl_placement(app, scope, month, n, loaner_vins=committed)
-    except Exception:   # noqa: BLE001 — the Strategy placement view must never break the page
-        return head + empty("Placement ranking is temporarily unavailable.") + '</div>'
-    if not res.get("loaded"):
+    """Contingency placement ranking (Strategy) — the EXACT SAME governed ADD ranking the execution board
+    consumes (_governed_add_ranking → rank_add_candidates, ordered by total-dealership net), explained. ONE
+    rail: identical candidate membership and order on Execution, Strategy and Proof. Strategy only ADDS, per
+    shared candidate: why it ranks here, why it is ahead of the next, the Retail impact, the anticipated
+    economics, the assumptions, and an expandable per-term Proof — it never changes the set or the order.
+
+    The current requirement is ADD 0, so this is a CONTINGENCY ranking (what would be placed IF a slot opens),
+    not a directive to place these units now."""
+    ranked = _governed_add_ranking(app, scope, add_n)
+    cands = list(ranked.get("commandable") or [])
+    head = ('<div class="card"><h2>Contingency placement ranking '
+            '<span class="badge">if a slot is needed</span></h2>'
+            '<p class="muted" style="font-size:12px">The current requirement is ADD 0 — Elite is not ordering '
+            'these units to be placed now. This is the governed order in which the next Service Loaners would be '
+            'placed if a slot opens, ranked by total-dealership net on settled transaction-price economics — the '
+            'exact same ranking, membership and order the execution board shows.</p>')
+    if not ranked.get("loaded"):
         return head + empty("No New-Retail inventory snapshot is loaded yet — no candidates are invented.") + '</div>'
+    if not cands:
+        return head + empty("No surplus New-Retail unit is currently a positive-net placement candidate.") + '</div>'
     rows = []
-    for st in res["steps"]:
-        tone, label = _OUTCOME_BADGE.get(st.outcome, ("pending", st.outcome))
-        proof = kv([(f"{t.label} ({t.role})",
-                     safe(("Unknown" if t.value is None else f"${int(t.value):,}")
-                          + (f' <span class="muted" style="font-size:12px">{esc(t.source)}</span>'
-                             if t.source and any(ch in t.source for ch in "×%") else '')))
-                    for t in st.econ_terms]
-                   + ([("Provisional net", f"${st.net:,.0f}")] if st.net is not None else []))
-        vehicle = (st.model_year + " " if st.model_year else "") + st.identity
+    for i, c in enumerate(cands, 1):
+        nxt = cands[i] if i < len(cands) else None
+        adv = f"${c.add_net - nxt.add_net:,.0f}" if nxt is not None else "—"
+        vin_tail = c.vin[-8:] if (c.vin_authoritative and c.vin) else None
+        ident = ('#' + str(i) + ' · ' + esc(c.stock or '—')
+                 + (f' · VIN {esc(vin_tail)}' if vin_tail else
+                    (f' · serial {esc(c.serial)} (no VIN)' if c.serial else '')))
+        vel_txt = (_money(c.velocity) + (' · preserved' if c.velocity_preserved else ' · at risk')
+                   if c.velocity is not None else 'Unknown')
+        proof = kv([("Total-dealership net (rank key)", _money(c.add_net)),
+                    ("Front-end gross at release", _money(c.front_end_gross)),
+                    ("ICV", _money(c.icv)),
+                    ("Velocity (contingent)", vel_txt),
+                    ("Adjusted basis", _money(c.adjusted_basis)),
+                    ("Invoice / write-down", f"{_money(c.invoice)} / {_money(c.write_down)}"),
+                    ("Expected used price", _money(c.expected_used_price)),
+                    ("Retail opportunity cost", _money(c.retail_opportunity_cost)),
+                    ("Latest prudent release", esc(c.release_by or "—")),
+                    ("Price basis", esc(c.price_basis or "—")),
+                    ("Assumptions", esc(c.caveat or "—"))])
         head_line = (
             '<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px">'
-            f'<strong style="font-size:15px">#{esc(str(st.rank))} · {esc(st.stock or "—")}</strong>'
-            f'<span class="muted">{esc(vehicle)}</span>'
-            f'<span style="margin-left:auto">{badge(tone, label)}</span>'
-            f'<span class="muted" style="font-size:12px">Retail after: {esc(st.retail_after.title())}</span>'
+            f'<strong style="font-size:15px">{ident}</strong>'
+            f'<span class="muted">{esc(c.describe())}</span>'
+            f'<span class="muted" style="margin-left:auto;font-size:12px">Advantage over next: {esc(adv)}</span>'
+            f'<span class="muted" style="font-size:12px">Retail impact: {esc(c.retail_impact or "—")}</span>'
             '</div>')
-        why = f'<div style="margin:4px 0 0;font-size:13px">{esc(st.why)}</div>'
-        econ = (disclosure("Economics / Proof", proof) if st.econ_terms
-                else '<p class="muted" style="font-size:12px">Economics not computable — required inputs missing.</p>')
+        why = f'<div style="margin:4px 0 0;font-size:13px">{esc(c.why)}</div>'
         rows.append('<div style="padding:10px 0;border-top:1px solid var(--line)">'
-                    + head_line + why + econ + '</div>')
-    body = head + "".join(rows)
-    if res.get("remaining_to_order"):
-        body += ('<div class="callout" style="margin-top:8px"><strong>Order '
-                 + esc(str(res["remaining_to_order"])) + ' specifically for Service Loaner.</strong> Only '
-                 + esc(str(res["placed"])) + ' of ' + esc(str(res["requested"])) + ' can be safely placed from '
-                 'existing Retail surplus. <a href="/ordering/sl-requirements">Record it</a>.</div>')
-    return body + '</div>'
+                    + head_line + why + disclosure("Anticipated economics / Proof", proof) + '</div>')
+    return head + "".join(rows) + '</div>'
 
 
 def _loaner_strategy_body(app, s, intel, add_n):
