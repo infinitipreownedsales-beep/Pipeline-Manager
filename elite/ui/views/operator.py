@@ -18,7 +18,6 @@ from ..render import (ADMIN_NAV, badge, esc, page, safe, table, kv, empty, form,
                       horizon_strip)
 from ..http import Response
 from .domains import _readable, _readable_h, _resp, _conn
-from ...operatorstd import ppo_engine as _PPO_ENGINE
 
 
 def _model_of(readable):
@@ -357,6 +356,71 @@ def _read_production_orders(app, scope):
         return list(read_latest_snapshot_rows(reader, ops.source_id("production_orders"), scope) or [])
     except Exception:   # noqa: BLE001
         return []
+
+
+def _ppo_supply(app):
+    """The EXISTING governed New-Inventory committed-supply rail (shared with CPO/planning) — NOT a PPO-only
+    ledger. A PPO FIRM enters Committed Supply here and is counted once by `supply.qualifying_supply`."""
+    from ...newinv.store import NewInvStore
+    from ...newinv.supply import SupplyService
+    store = NewInvStore(_conn(app), app.stack.clock)
+    return store, SupplyService(store, app.stack.clock)
+
+
+def _ppo_sync_commitments(app, scope, offer, combination_key):
+    """Make the governed Committed Supply for ONE offer match Kyle's recorded decision — idempotently, by unit
+    identity. A FIRM/PARTIAL of N units yields N committed SupplyCommitments (commitment_type='ppo'); DENY /
+    unworked yields zero; re-recording never double-commits the same identity. Returns the current id map.
+
+    This reuses the EXISTING SupplyCommitment rail (proposed -> committed), so the commitment affects subsequent
+    PPO evaluation, CPO/ordering Need and every other consumer of qualifying committed Supply. It never creates
+    an authoritative Vehicle Unit / Production Order and never invents a VIN/order number."""
+    from ...ordering.ppo_commitments import commitment_units_for_offer
+    from ...clock import to_utc_iso
+    _store, supply = _ppo_supply(app)
+    act = (offer.get("operator_action") or "").upper()
+    qty = 0
+    if act in ("FIRM", "PARTIAL"):
+        try:
+            qty = max(0, int(offer.get("operator_qty") or 0))
+        except (TypeError, ValueError):
+            qty = 0
+    targets = {u["unit_or_order_id"]: u for u in commitment_units_for_offer(offer, combination_key, qty)}
+    existing = dict(offer.get("commitments", {}) or {})       # {unit_or_order_id: commitment_id}
+    at = to_utc_iso(app.stack.clock.now())
+    # create any target identity not yet committed
+    for uid, u in targets.items():
+        if uid not in existing:
+            c = supply.propose_commitment(combination_key, scope, commitment_type="ppo", unit_or_order_id=uid,
+                                          unit_identity_kind=u["unit_identity_kind"],
+                                          arrival_month=offer.get("production_month"), source="ppo_firm")
+            supply.approve_commitment(c.id, decision_ref=f"ppo:{offer.get('id')}", approval_time=at)
+            existing[uid] = c.id
+    # cancel (explicit governed reversal) any prior commitment no longer wanted
+    for uid in list(existing.keys()):
+        if uid not in targets:
+            try:
+                supply.cancel_commitment(existing[uid], reason="ppo_decision_change")
+            except Exception:   # noqa: BLE001
+                pass
+            existing.pop(uid, None)
+    offer["commitments"] = existing
+    return existing
+
+
+def _ppo_release_commitments(app, scope, offer, *, reason):
+    """Explicit governed reversal of an offer's committed Supply (used by Clear window). Cancels each governed
+    commitment — never a silent delete of committed Supply."""
+    _store, supply = _ppo_supply(app)
+    released = 0
+    for uid, cid in (offer.get("commitments", {}) or {}).items():
+        try:
+            supply.cancel_commitment(cid, reason=reason)
+            released += 1
+        except Exception:   # noqa: BLE001
+            pass
+    offer["commitments"] = {}
+    return released
 
 
 def _cpo_commitments_card(app, scope, month, board, lines, qty):
@@ -993,14 +1057,15 @@ def register(app):
         parts = [f'<div class="card"><h2>PPO — portfolio decision</h2>{pick}{create}'
                  '<p class="muted">Enter each manufacturer-<strong>offered</strong> unit (this is the offer, not '
                  'your decision). Elite evaluates the whole offered set against the certified position and '
-                 'recommends <strong>FIRM / DENY</strong> for each — accepting one offer recomputes the rest. You '
-                 'then confirm or override. Firming is a simulated shadow commitment; it never changes '
-                 'authoritative inventory or the database.</p></div>']
+                 'recommends <strong>FIRM / DENY / REVIEW</strong> for each — firming one recomputes the rest. You '
+                 'then confirm or override. A confirmed <strong>FIRM becomes committed Supply</strong> that the '
+                 'rest of Elite counts (once); it does not create an authoritative vehicle or invent a VIN.</p></div>']
         if window:
+            from ...ordering.ppo_commitments import evaluate_window
             certs, label_to_key = _certified_positions(app, s.scope)
-            result = _PPO_ENGINE.evaluate(offers, certs,
-                                          key_for_offer=lambda o: label_to_key.get(o.get("combo", ""), o.get("combo", "")))
-            verdicts = {v.offer_id: v for v in result.verdicts}
+            key_for = lambda o: label_to_key.get(o.get("combo", ""), o.get("combo", ""))
+            res = evaluate_window(offers, certs, key_for_offer=key_for)
+            verdicts, worked = res["verdicts"], res["worked"]
             combos = [lbl for _cid, lbl in _known_combos(app, s.scope)]
             entry = form("/ordering/ppo/offer",
                          f'<input type=hidden name=window value="{esc(window)}">'
@@ -1015,32 +1080,48 @@ def register(app):
                          '(orderability unknown → REVIEW)</label>',
                          csrf=s.csrf_token, submit="Add offer (Elite will evaluate)")
 
-            # summary + executable queue
+            # top summary: Offered N · Firmed N · Denied N · Review N · Unworked N
             parts.append(f'<div class="card"><h3>{esc(window)}</h3>'
-                         f'<p><strong>{esc(result.summary)}</strong></p>' + entry + '</div>')
+                         f'<p><strong>{esc(res["summary"])}</strong></p>'
+                         '<p class="muted">Firmed decisions are already reflected in the remaining '
+                         'recommendations.</p>' + entry + '</div>')
 
             # recommendation-first offer table: answer first, then physical/qty/timing/why, then operator action
             orows = []
             for o in offers:
-                v = verdicts.get(str(o.get("id") or o.get("combo")))
+                oid = str(o.get("id") or o.get("combo"))
+                w = worked.get(oid)
+                if w is not None:
+                    # LOCKED worked decision — the machine recommendation is the PRESERVED audit, not a live recompute
+                    if w["override"]:
+                        decided = badge("stale", f'OVERRIDE: Elite said {w["recommendation"] or "—"} → Kyle '
+                                        f'{w["action"]} {w["qty"]}')
+                    elif w["action"] in ("FIRM", "PARTIAL"):
+                        decided = badge("completed", f'FIRMED {w["qty"]} — counted in committed supply')
+                    else:
+                        decided = badge("skip", 'DENIED — contributes 0 supply')
+                    phys = (f'{esc(o.get("vin"))}' if o.get("vin") else (f'stk {esc(o.get("stock"))}' if o.get("stock")
+                            else '<span class="muted">combination-level (no VIN)</span>'))
+                    rec_lbl = f'{w["recommendation"]}' + (f' {w["recommended_qty"]}' if w["recommendation"] == "FIRM" else '')
+                    orows.append([esc(o.get("combo", "")), safe(phys), esc(w["qty"] or "—"), esc("—"),
+                                  safe(badge("pending", rec_lbl or "—")), esc("recorded " + (w["at"] or "")),
+                                  safe(decided)])
+                    continue
+                v = verdicts.get(oid)
                 if v is None:
                     continue
                 tone = {"FIRM": "completed", "DENY": "skip", "REVIEW": "pending"}.get(v.recommendation, "pending")
                 phys = (f'{esc(v.vin)}' if v.vin else (f'stk {esc(v.stock)}' if v.stock else
                         '<span class="muted">combination-level (no VIN)</span>'))
-                op = o.get("operator_action")
-                override = bool(op) and (op != v.recommendation or int(o.get("operator_qty", v.recommended_qty)) != v.recommended_qty)
-                action_cell = (safe(badge("stale", f'override → {op} {o.get("operator_qty","")}') if override
-                                    else badge("completed", f'confirmed {op}')) if op
-                               else safe(_ppo_action_form(s, window, o, v)))
-                orows.append([esc(o.get("combo", "")), safe(phys), esc(v.recommended_qty if v.recommendation == "FIRM" else "—"),
-                              esc(v.availability or "—"),
-                              safe(badge(tone, v.recommendation)), esc(v.why), action_cell])
+                orows.append([esc(o.get("combo", "")), safe(phys),
+                              esc(v.recommended_qty if v.recommendation == "FIRM" else "—"),
+                              esc(v.availability or "—"), safe(badge(tone, v.recommendation)), esc(v.why),
+                              safe(_ppo_action_form(s, window, o, v))])
             parts.append('<div class="card"><h3>Offers — Elite recommendation first</h3>'
                          + (table(["Offered", "Physical unit", "Firm qty", "Timing", "Recommendation", "Why",
                                    "Your action"], orows) if orows else '<p class="muted">No offers entered yet.</p>')
                          + form("/ordering/ppo/revert", f'<input type=hidden name=window value="{esc(window)}">',
-                                csrf=s.csrf_token, submit="Clear window") + '</div>')
+                                csrf=s.csrf_token, submit="Clear window (cancels committed units)") + '</div>')
         return _resp(app, s, "PPO Ordering", "".join(parts), "/ordering")
 
     @app.post("/ordering/ppo/new")
@@ -1085,9 +1166,12 @@ def register(app):
 
     @app.post("/ordering/ppo/record")
     def ppo_record(app, req):
-        """Record the operator's ACTUAL execution against Elite's preserved machine recommendation. The machine
-        recommendation is recomputed live from the evaluator; this only stores what the operator did, so an
-        override is always explicitly identifiable (item 7/13)."""
+        """Record Kyle's ACTUAL execution. This (a) PRESERVES the machine recommendation at the moment he acted
+        — computed against the disposable state of every other already-worked offer, so a later recomputation
+        can never rewrite whether he followed or overrode Elite — and (b) makes a confirmed FIRM/PARTIAL enter
+        the governed Committed Supply rail once (DENY / override-to-deny reverses it)."""
+        from ...ordering.ppo_commitments import machine_recommendation_at
+        from ...clock import to_utc_iso
         s = req.session
         app.require(s, "workspace.view")
         window = req.form.get("window") or ""
@@ -1098,21 +1182,42 @@ def register(app):
         except (TypeError, ValueError):
             aqty = 0
         offers = _ws_get(app, s.scope, f"ppo_offers::{window}", []) or []
+        certs, label_to_key = _certified_positions(app, s.scope)
+        key_for = lambda o: label_to_key.get(o.get("combo", ""), o.get("combo", ""))
+        # preserve the machine recommendation AT THIS MOMENT (against the other worked offers' disposable state)
+        rec = machine_recommendation_at(offers, certs, oid, key_for_offer=key_for) or {}
         for o in offers:
             if str(o.get("id")) == oid:
-                o["operator_action"] = "FIRM" if action == "PARTIAL" else action
-                o["operator_qty"] = aqty if action in ("FIRM", "PARTIAL") else 0
+                act = "FIRM" if action == "PARTIAL" else action
+                qty = aqty if action in ("FIRM", "PARTIAL") else 0
+                o["operator_action"] = act
+                o["operator_qty"] = qty
+                # persisted audit — never rewritten by a later recomputation (item 3/5, acceptance 10)
+                o["recommended_action"] = rec.get("recommendation", "")
+                o["recommended_qty"] = rec.get("recommended_qty", 0)
+                o["actual_action"] = act
+                o["actual_qty"] = qty
+                o["override"] = bool(rec.get("recommendation")) and (
+                    rec.get("recommendation") != act or int(rec.get("recommended_qty") or 0) != qty)
+                o["recorded_at"] = to_utc_iso(app.stack.clock.now())
+                # governed Committed Supply — created once for a FIRM/PARTIAL, reversed for a DENY (idempotent)
+                _ppo_sync_commitments(app, s.scope, o, key_for(o))
                 break
         _ws_put(app, s.scope, f"ppo_offers::{window}", offers)
         return Response.redirect(f"/ordering/ppo?window={window}")
 
     @app.post("/ordering/ppo/revert")
     def ppo_revert(app, req):
+        """Clear the window. Committed Supply is NOT silently destroyed: each firmed offer's governed commitment
+        is explicitly cancelled (a reversal), and Kyle is told how many committed units were released."""
         s = req.session
         app.require(s, "workspace.view")
         window = req.form.get("window") or ""
+        offers = _ws_get(app, s.scope, f"ppo_offers::{window}", []) or []
+        released = sum(_ppo_release_commitments(app, s.scope, o, reason="ppo_window_cleared") for o in offers)
         _ws_put(app, s.scope, f"ppo_offers::{window}", [])
-        s.flash = "PPO window cleared."
+        s.flash = (f"PPO window cleared — {released} committed unit(s) cancelled." if released
+                   else "PPO window cleared.")
         return Response.redirect(f"/ordering/ppo?window={window}")
 
     # ---- Wholesale — ranked disposition-readiness + dealer-safe copy list -----------------------------

@@ -107,7 +107,7 @@ class TestCpoPpo(unittest.TestCase):
                                                "quantity": "1"})
         b = self.full.get("/ordering/ppo", window="August PPO").body
         self.assertIn("QX60 LUXE QBE/G", b)             # the offered combination is shown
-        self.assertIn("OFFERED", b)                     # summary "N OFFERED · FIRM x · DENY y"
+        self.assertIn("Offered", b)                     # summary "Offered N · Firmed N · Denied N · ..."
         self.assertTrue(any(w in b for w in ("FIRM", "DENY", "REVIEW")))   # Elite recommends, operator doesn't
         after = self.conn.execute("SELECT COUNT(*) FROM vehicle_unit").fetchone()[0]
         self.assertEqual(before, after)                 # simulated only; no authoritative mutation
@@ -116,7 +116,7 @@ class TestCpoPpo(unittest.TestCase):
     def test_ppo_revert(self):
         self.full.post("/ordering/ppo/offer", {"window": "W", "combo": "X", "quantity": "1"})
         self.full.post("/ordering/ppo/revert", {"window": "W"})
-        self.assertIn("0 OFFERED", self.full.get("/ordering/ppo", window="W").body)
+        self.assertIn("Offered 0", self.full.get("/ordering/ppo", window="W").body)
 
 
 if __name__ == "__main__":
