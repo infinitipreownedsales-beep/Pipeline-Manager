@@ -90,6 +90,25 @@ class TestStrategyAccessBoundary(unittest.TestCase):
         for term in RESTRICTED_ON_EXECUTION:
             self.assertNotIn(term, b)
 
+    def test_strategy_shows_both_fleet_decisions_and_placement_ranking(self):
+        # presentation contract: the Strategy page visibly carries BOTH the Fleet decisions section and the
+        # Placement ranking section (the placement ranking is always present — its heading renders even when no
+        # inventory snapshot is loaded, so Kyle is never left without it).
+        with patch("elite.loaner.intelligence.build_intelligence", return_value=INTEL._fake_intel()):
+            b = self.op_full.get("/service-loaner/strategy").body
+        self.assertIn("Recommended action per unit", b)      # Fleet decisions
+        self.assertIn("Placement ranking", b)                # Placement ranking
+
+    def test_strategy_fleet_decisions_are_compact_not_a_wide_table(self):
+        # the per-unit decisions render as compact rows with the economics folded into an expandable
+        # "Economics / Proof", NOT the old ten-column table that clipped the Why/Proof column.
+        with patch("elite.loaner.intelligence.build_intelligence", return_value=INTEL._fake_intel()):
+            b = self.op_full.get("/service-loaner/strategy").body
+        flat = b.replace(" ", "")
+        self.assertIn("Economics/Proof", flat)               # economics folded into an expandable disclosure
+        for wide_header in ("<th>Adj.basis</th>", "<th>Frontgross</th>", "<th>Releaseby</th>", "<th>Conf.</th>"):
+            self.assertNotIn(wide_header, flat)              # the wide clipping table is gone
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

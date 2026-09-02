@@ -509,9 +509,10 @@ def _fleet_order_residual(app, scope, all_repl, used_repl):
 
 
 def _unit_actions_card(app, scope, intel, decisions=None):
-    """Concise per-active-unit KEEP / PULL / SWAP / UNRESOLVED recommendation. The economic detail lives in
-    Proof; the operator sees the call, the advantage vs next-best, key facts, and one human Why. Uses the SHARED
-    decision map (one engine) when provided."""
+    """Fleet decisions — one COMPACT decision row per active unit: Unit / Vehicle, Action, Advantage vs
+    next-best, Confidence and a concise Why read at a glance, with the full economics folded into an expandable
+    Economics / Proof below (never a ten-column table that clips the Why). Uses the SHARED decision map (one
+    engine) when provided; economics are shown, never recomputed."""
     units = [u for u in getattr(intel, "units", ()) if u.vin]
     if not units:
         return ""
@@ -529,10 +530,8 @@ def _unit_actions_card(app, scope, intel, decisions=None):
             second = max((v for k, v in nets.items() if k != d["action"]), default=None)
             if second is not None:
                 adv = f"${nets[d['action']] - second:,.0f}"
-        vel = ("unknown" if f.get("velocity") is None
-               else "preserved" if c["velocity_now"] or c["velocity_future"] else "at risk / forfeited")
         rel = (f.get("release") or {}).get("release_by", "—") if f.get("release") else "—"
-        # unknown program values render as "—" (never a misleading $0); real computed zeros show $0
+        # unknown program values render as "Unknown"/"—" (never a misleading $0); real computed zeros show $0
         vel_cell = ("Unknown" if f.get("velocity") is None
                     else f"{_money(c['velocity_now'])} / {_money(c['velocity_future'])}")
         icv_cell = "Unknown" if f.get("icv") is None else _money(c["icv_earned_sunk"])
@@ -547,21 +546,25 @@ def _unit_actions_card(app, scope, intel, decisions=None):
                     ("Missing / gated", esc(", ".join(d["gated"]) or "none")),
                     ("Nets (PULL / KEEP / SWAP)", esc(" / ".join(f"{k} ${v:,.0f}" for k, v in nets.items()) or "—")),
                     ("Source", "invoice+write-down basis · front-end gross only (no backend) · maturity evidence")])
-        rows.append([
-            safe(f'<a href="/service-loaner/unit/{esc(u.id)}">{esc((f.get("vin") or "")[-8:])}</a>'),  # drill to Proof
-            esc(" ".join(x for x in (f.get("model_year"), f.get("model")) if x)),
-            safe(badge(_ACTION_TONE.get(d["action"], "pending"), d["action"])),
-            esc(adv), _money(c["adjusted_basis_now"]), _money(c["front_end_gross_now"]), esc(vel), esc(rel),
-            esc(d["confidence"]),
-            safe(f'<span class="muted">{esc(d["why"])}</span> ' + disclosure("Proof", proof))])
+        vehicle = " ".join(x for x in (f.get("model_year"), f.get("model")) if x) or (u.model or "—")
+        vin_tail = (f.get("vin") or "")[-8:]
+        head = (
+            '<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px">'
+            f'<strong style="font-size:15px"><a href="/service-loaner/unit/{esc(u.id)}">{esc(vin_tail)}</a></strong>'
+            f'<span class="muted">{esc(vehicle)}</span>'
+            f'<span style="margin-left:auto">{badge(_ACTION_TONE.get(d["action"], "pending"), d["action"])}</span>'
+            f'<span class="muted" style="font-size:12px">Advantage {esc(adv)}</span>'
+            f'<span class="muted" style="font-size:12px">Confidence {esc(d["confidence"])}</span>'
+            '</div>')
+        why = f'<div style="margin:4px 0 0;font-size:13px">{esc(d["why"])}</div>'
+        rows.append('<div style="padding:10px 0;border-top:1px solid var(--line)">'
+                    + head + why + disclosure("Economics / Proof", proof) + '</div>')
     return ('<div class="card"><h2>Recommended action per unit '
             '<span class="badge">KEEP / PULL / SWAP</span></h2>'
             '<p class="muted" style="font-size:12px">Incremental from now: already-earned ICV is sunk (shown in '
             'Proof, not in the delta); Velocity is contingent on the 240-day deadline; write-down counts once in '
             'the adjusted basis; gross is front-end only. A unit gates to UNRESOLVED when an authoritative input '
-            'is missing.</p>'
-            + table(["VIN", "Vehicle", "Action", "Advantage", "Adj. basis", "Front gross", "Velocity",
-                     "Release by", "Conf.", "Why / Proof"], rows) + '</div>')
+            'is missing.</p>' + "".join(rows) + '</div>')
 
 
 def _money(v):
@@ -1042,6 +1045,60 @@ def _loaner_command_body(app, s, intel, placement, add_n):
     return "".join(parts)
 
 
+def _strategy_placement_card(app, scope, add_n):
+    """Placement ranking (Strategy) — the governed Retail-safe order in which the next Service Loaners should be
+    placed, straight from the SAME optimize_sl_placement engine and ranked candidate results the board uses (no
+    second calculation rail). Kyle sees, per ranked candidate: the unit (rank · stock) and vehicle, why it
+    outranks the next (the per-step Why), the Retail impact it leaves behind, the anticipated (provisional)
+    economics, and an expandable per-term Proof. Presentation only — the order and economics are the engine's."""
+    from ...loaner.sl_optimizer import optimize_sl_placement
+    from ...ordering.cross_domain import committed_vins
+    from ...clock import to_utc_iso
+    n = max(1, int(add_n or 0) or 5)          # a sensible default depth so the ranking is always visible
+    head = ('<div class="card"><h2>Placement ranking <span class="badge">Retail-safe order</span></h2>'
+            '<p class="muted" style="font-size:12px">The governed order in which the next Service Loaners should '
+            'be placed: each pick is chosen, then Retail coverage is recomputed before the next — so a unit that '
+            'would push its group into a Retail shortage is not placed. Economics are provisional until the '
+            'write-down treatment is governed.</p>')
+    month = to_utc_iso(app.stack.clock.now())[:7]
+    try:
+        committed = frozenset(committed_vins(_conn(app), scope, app.prefs).keys())
+        res = optimize_sl_placement(app, scope, month, n, loaner_vins=committed)
+    except Exception:   # noqa: BLE001 — the Strategy placement view must never break the page
+        return head + empty("Placement ranking is temporarily unavailable.") + '</div>'
+    if not res.get("loaded"):
+        return head + empty("No New-Retail inventory snapshot is loaded yet — no candidates are invented.") + '</div>'
+    rows = []
+    for st in res["steps"]:
+        tone, label = _OUTCOME_BADGE.get(st.outcome, ("pending", st.outcome))
+        proof = kv([(f"{t.label} ({t.role})",
+                     safe(("Unknown" if t.value is None else f"${int(t.value):,}")
+                          + (f' <span class="muted" style="font-size:12px">{esc(t.source)}</span>'
+                             if t.source and any(ch in t.source for ch in "×%") else '')))
+                    for t in st.econ_terms]
+                   + ([("Provisional net", f"${st.net:,.0f}")] if st.net is not None else []))
+        vehicle = (st.model_year + " " if st.model_year else "") + st.identity
+        head_line = (
+            '<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px">'
+            f'<strong style="font-size:15px">#{esc(str(st.rank))} · {esc(st.stock or "—")}</strong>'
+            f'<span class="muted">{esc(vehicle)}</span>'
+            f'<span style="margin-left:auto">{badge(tone, label)}</span>'
+            f'<span class="muted" style="font-size:12px">Retail after: {esc(st.retail_after.title())}</span>'
+            '</div>')
+        why = f'<div style="margin:4px 0 0;font-size:13px">{esc(st.why)}</div>'
+        econ = (disclosure("Economics / Proof", proof) if st.econ_terms
+                else '<p class="muted" style="font-size:12px">Economics not computable — required inputs missing.</p>')
+        rows.append('<div style="padding:10px 0;border-top:1px solid var(--line)">'
+                    + head_line + why + econ + '</div>')
+    body = head + "".join(rows)
+    if res.get("remaining_to_order"):
+        body += ('<div class="callout" style="margin-top:8px"><strong>Order '
+                 + esc(str(res["remaining_to_order"])) + ' specifically for Service Loaner.</strong> Only '
+                 + esc(str(res["placed"])) + ' of ' + esc(str(res["requested"])) + ' can be safely placed from '
+                 'existing Retail surplus. <a href="/ordering/sl-requirements">Record it</a>.</div>')
+    return body + '</div>'
+
+
 def _loaner_strategy_body(app, s, intel, add_n):
     """Kyle/GSM STRATEGY & PROOF surface — the smallest useful deeper view. Three sections, all consuming the
     SAME shared decision map / certified economic engines as the execution board (never a second recomputed
@@ -1060,7 +1117,10 @@ def _loaner_strategy_body(app, s, intel, add_n):
 
     # (1) Fleet decisions — per-unit KEEP/PULL/SWAP + advantage + Why + per-unit Proof drill-down.
     parts.append(_unit_actions_card(app, s.scope, intel, decisions=decisions))
-    # (2) Placement ranking — economic optimum (why #1 > #2, Retail impact, anticipated economics).
+    # (2) Placement ranking — the governed Retail-safe placement order (ranked candidate, vehicle, why it
+    # outranks the next, Retail impact, anticipated economics + Proof), reusing the placement engine directly.
+    parts.append(_strategy_placement_card(app, s.scope, add_n))
+    # …and, when the full economic inputs are present, the total-dealership-net economic ranking alongside it.
     parts.append(_economic_ranking_card(app, s.scope, add_n or 4, intel=intel))
     # (3) Proof — used-market cohort / maturity / gross evidence, collapsed by default (per-unit and per-term
     # Proof are inside the cards above and on each unit page).
