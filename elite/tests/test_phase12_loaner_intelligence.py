@@ -84,30 +84,29 @@ class TestIntelligencePage(unittest.TestCase):
     def tearDown(self):
         self.p.close()
 
-    def test_page_sections_and_boundary(self):
+    def test_execution_board_no_economics_boundary(self):
+        # A (execution invariant preserved) + C (surface): the pre-V8 "Program state / What needs me / Current
+        # fleet / Why / Fleet operating plan" page sections were retired with the V8 manager execution board.
+        # The load-bearing surviving invariant is the ECONOMICS BOUNDARY — no fabricated economic call and no
+        # depreciation framing ever reaches the manager execution surface.
         with patch("elite.loaner.intelligence.build_intelligence", return_value=_fake_intel()):
             b = self.full.get("/service-loaner").body
-        # command-board architecture (program state -> what needs me -> current fleet -> why)
-        for tok in ("Service Loaner Command Board", "Program state", "What needs me", "Current fleet", "Why —",
-                    "Fleet operating plan"):   # item 10: consolidated KEEP/PULL/SWAP/ADD/ORDER operating plan
-            self.assertIn(tok, b)
-        # Current / Desired / Ideal distinct, Ideal Undetermined (Pending Economics)
-        self.assertIn("Ideal (Pending Economics)", b)
-        self.assertIn("Undetermined", b)
-        # A+B evidence moves behind Why but still exposes cohort / n / as-of and quality label
-        self.assertIn("model-year 2023", b)
-        self.assertIn("as-of 2026-08-15", b)
-        self.assertIn("Evidence: Strong", b)
-        self.assertIn("Model-year age at resale (maturity)", b)   # NOT "depreciation" / time-in-service
-        self.assertNotIn("depreciation", b.lower())
-        # in-service age shown compactly in the fleet row; per-unit missing state moves to the unit page
-        self.assertIn("533d", b)
-        # 54 repeated alerts are consolidated into ONE data-health condition
-        self.assertIn("lack an authoritative in-service date", b)
-        self.assertNotIn("Operational attention (", b)
-        # boundary: no economics leaked
+        self.assertIn("Service Loaner Command Board", b)
         for banned in ("RETIRE NOW", "release-by", "ICV $", "Ideal Mix", "HOLD "):
-            self.assertNotIn(banned, b)
+            self.assertNotIn(banned, b)                       # no economics leaked onto the execution board
+        self.assertNotIn("depreciation", b.lower())           # maturity framing, never "depreciation"
+
+    def test_strategy_surface_exposes_cohort_maturity_evidence(self):
+        # B (migrated): the recorded-resale cohort identity, model-year maturity evidence, and evidence-quality
+        # label are Proof depth — they live on the Kyle/GSM Strategy & Proof surface (behind the per-term Proof),
+        # never on the manager execution board. Cohort / as-of are always exposed (never a timeless number).
+        with patch("elite.loaner.intelligence.build_intelligence", return_value=_fake_intel()):
+            b = self.full.get("/service-loaner/strategy").body
+        self.assertIn("model-year 2023", b)                   # cohort identity
+        self.assertIn("as-of 2026-08-15", b)                  # recency exposed
+        self.assertIn("Evidence: Strong", b)                  # quality label
+        self.assertIn("Model-year age at resale (maturity)", b)   # maturity framing, NOT "depreciation"
+        self.assertNotIn("depreciation", b.lower())
 
     def test_unit_page(self):
         with patch("elite.loaner.intelligence.build_intelligence", return_value=_fake_intel()):

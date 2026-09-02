@@ -92,9 +92,14 @@ class TestRealFleetIngestion(unittest.TestCase):
         from elite.ui.prefs import PrefsService
         return PrefsService(self.p.store.conn, self.p.clock)
 
-    def test_scoped_icv_needs_model_year_to_resolve(self):
-        # The load-bearing fix: an MY-scoped ICV record resolves ONLY when the unit's model year is supplied.
-        # Coverage sees the record at model/month level, but the unit resolver must carry the MY.
+    def test_scoped_icv_resolves_by_in_service_month_gates_only_on_ambiguity(self):
+        # V8 contract (commit 6b0c155 "resolve ICV by in-service month"): ICV/Velocity are keyed by the
+        # authoritative IN-SERVICE MONTH. A known model year selects the MY-specific term; when the unit's MY
+        # is UNKNOWN the term STILL resolves by (model, month) alone — but ONLY when unambiguous. The surviving
+        # honest-gate invariant is that DISAGREEING MY variants stay Unknown (never a guess).
+        #   This replaces the earlier "MY-scoped ICV resolves only when MY is supplied" assertion, which the
+        # V8 in-service-month resolution deliberately superseded: it fixed the live contradiction where
+        # coverage read 'complete' at (model, month) yet every unit with an unknown MY gated to Unknown.
         from elite.loaner.program_inputs import ProgramInputsStore, resolve_for_unit
         pis = ProgramInputsStore(self._prefs(), SCOPE)
         pis.add("icv", effective_month="2026-02", model="QX60", model_year="2026", value=6500,
@@ -102,8 +107,19 @@ class TestRealFleetIngestion(unittest.TestCase):
         with_my = resolve_for_unit(pis, "icv", model="QX60", in_service_date="2026-02-10", model_year="2026")
         self.assertEqual(with_my["status"], "resolved")
         self.assertEqual(with_my["entry"].value, 6500)
+        # unknown MY + a single unambiguous term in force -> resolves by in-service month (not a fabricated guess)
         blank = resolve_for_unit(pis, "icv", model="QX60", in_service_date="2026-02-10", model_year="")
-        self.assertEqual(blank["status"], "unresolved")      # the exact live bug when MY is missing
+        self.assertEqual(blank["status"], "resolved")
+        self.assertEqual(blank["entry"].value, 6500)
+        # add a CONFLICTING MY variant in the same month -> ambiguity -> honest gate (Unknown), never a guess
+        pis.add("icv", effective_month="2026-02", model="QX60", model_year="2025", value=5000,
+                actor="kyle", recorded_at="t2")
+        ambiguous = resolve_for_unit(pis, "icv", model="QX60", in_service_date="2026-02-10", model_year="")
+        self.assertEqual(ambiguous["status"], "unresolved")   # disagreeing MY variants stay Unknown
+        # a unit WITH a known MY still selects its own variant even amid the conflict
+        self.assertEqual(
+            resolve_for_unit(pis, "icv", model="QX60", in_service_date="2026-02-10", model_year="2026")["entry"].value,
+            6500)
 
 
 if __name__ == "__main__":

@@ -131,43 +131,28 @@ class TestCommandBoardPage(unittest.TestCase):
         self.p.close()
 
     def test_command_board_sections_and_boundary(self):
+        # A (execution invariant preserved) + C (surface): the pre-V8 "Program state / What needs me / Current
+        # fleet / Ideal (Pending Economics)" sections were retired with the V8 manager execution board. The
+        # surviving invariant is the economics boundary — no fabricated economic call reaches the execution board.
         with patch("elite.loaner.intelligence.build_intelligence", return_value=INTEL._fake_intel()):
             b = self.full.get("/service-loaner").body
-        for tok in ("Service Loaner Command Board", "Program state", "What needs me", "Current fleet",
-                    "Ideal (Pending Economics)", "Undetermined"):
-            self.assertIn(tok, b)
-        # consolidated data-health condition, NOT dozens of repeated alerts
-        self.assertIn("lack an authoritative in-service date", b)
-        self.assertNotIn("Operational attention (", b)
-        # boundary preserved: no fabricated economic call
+        self.assertIn("Service Loaner Command Board", b)
         for banned in ("RETIRE NOW", "release-by", "ICV $", "Economic Ideal"):
             self.assertNotIn(banned, b)
-        self.assertIn("Pending Economics", b)
 
-    def test_add_shows_physical_candidates(self):
-        from elite.loaner.placement import PlacementCandidate
-        cand = PlacementCandidate("Q26043", "5N1AZ2CS9PC900001", True, "", "2026", "QX80", "LUXE 2WD", "",
-                                  "QBE", "G", 40, "EXCESS", "over-stocked — safest to place",
-                                  "over-stocked — safest to place · 40d in stock", True)
-        serial_only = PlacementCandidate("N15111", "", False, "TC348756", "2026", "QX80", "SPORT 4WD", "",
-                                         "KCN", "D", 154, "EXCESS", "over-stocked — safest to place",
-                                         "over-stocked — safest to place · 154d in stock", True)
-        fake = {"candidates": [cand, serial_only], "next_best": [], "protected": 1, "unresolved": 0,
-                "eligible": 3, "loaded": True}
-        with patch("elite.loaner.intelligence.build_intelligence", return_value=INTEL._fake_intel()), \
-             patch("elite.loaner.placement.best_available_placement", return_value=fake):
+    def test_placement_candidates_card_retired_on_v8_contract(self):
+        # C (obsolete surface): the pre-V8 "Lowest Retail-harm placement candidates" card (fed by
+        # best_available_placement) is retired. In the accepted V8 architecture the manager execution board
+        # carries the placement action ("Service Loaner - Manager Action" / "NEXT PLACEMENT - IF NEEDED"),
+        # identifying each candidate by Stock#/Vehicle — it has no VIN column, so a raw serial can never
+        # masquerade as a VIN (the 1D data-integrity rule is preserved by construction). The ranked economic
+        # placement is Strategy depth; the placement ENGINE stays covered by TestPlacementEngine above and by
+        # test_phase12_sl_optimizer.
+        with patch("elite.loaner.intelligence.build_intelligence", return_value=INTEL._fake_intel()):
             b = self.full.get("/service-loaner", add="1").body
-        self.assertIn("lowest Retail-harm", b)                 # honest framing — not the economic optimum
-        self.assertIn("Lowest Retail-harm placement candidates", b)
-        self.assertNotIn("Best available placement candidates", b)   # the overclaim is gone
-        self.assertIn("Service-Loaner economics pending", b)
-        self.assertIn("Q26043", b)                        # Stock #
-        self.assertIn("PC900001", b)                      # authoritative VIN tail shown
-        self.assertIn("QX80", b)
-        self.assertIn("protected", b)                     # short-coverage protection surfaced
-        # 1D: a serial-only candidate never shows the serial as a VIN
-        self.assertIn("no VIN", b)
-        self.assertNotIn("TC348756</td>", b.replace(" ", ""))   # serial not placed in the VIN cell as a VIN
+        self.assertIn("Service Loaner - Manager Action", b)              # V8 execution placement surface
+        self.assertNotIn("Lowest Retail-harm placement candidates", b)   # the retired pre-V8 card is gone
+        self.assertNotIn("Best available placement candidates", b)       # and its overclaimed predecessor
 
     def test_certified_unchanged(self):
         with patch("elite.loaner.intelligence.build_intelligence", return_value=INTEL._fake_intel()):

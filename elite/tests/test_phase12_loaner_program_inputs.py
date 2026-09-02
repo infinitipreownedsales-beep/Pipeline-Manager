@@ -194,12 +194,13 @@ class TestProgramInputsPage(unittest.TestCase):
         self.assertEqual(self._store().applicable("icv", "QX55", "2026-04").value, 0)
         self.assertIn("$0", self.full.get("/program-inputs").body)
 
-    def test_board_shows_coverage_and_stays_gated(self):
+    def test_board_reaches_program_inputs(self):
+        # A (execution invariant preserved) + C (surface): the pre-V8 "Program coverage / Undetermined / Pending
+        # Economics" summary was a page section retired with the V8 execution board (program coverage is Strategy/
+        # Proof depth). The surviving execution invariant is that Program Inputs stays reachable from the Service
+        # Loaner board (via the Program maintenance card).
         b = self.full.get("/service-loaner").body
-        self.assertIn("Program coverage", b)                    # coverage summary on the command board
         self.assertIn("/program-inputs", b)                     # reachable from Service Loaners
-        self.assertIn("Undetermined", b)                        # still Phase-4 gated
-        self.assertIn("Pending Economics", b)
 
     def test_reachable_from_data(self):
         self.assertIn("/program-inputs", self.full.get("/data").body)

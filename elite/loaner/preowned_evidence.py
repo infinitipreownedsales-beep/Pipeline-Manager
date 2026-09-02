@@ -764,9 +764,20 @@ def _pe_import_epoch(conn, scope):
         return ""
 
 
+def _pe_db_main(conn):
+    """The main database file path — part of the cache key so a cached value can never bleed across distinct
+    connections/databases that happen to share a scope and import epoch (isolated temp DBs in tests). In the
+    live runtime the main database path is constant, so this contributes nothing new to production keys."""
+    try:
+        rows = conn.execute("PRAGMA database_list").fetchall()
+        return next((str(r[2] or "") for r in rows if str(r[1] or "") == "main"), "")
+    except Exception:
+        return ""
+
+
 def _pe_cached(name, conn, scope, extra, loader):
     now = _pe_time.monotonic()
-    key = (name, str(scope), _pe_import_epoch(conn, scope), extra)
+    key = (name, _pe_db_main(conn), str(scope), _pe_import_epoch(conn, scope), extra)
     hit = _PE_RUNTIME_CACHE.get(key)
     if hit is not None and now - hit[0] <= _PE_RUNTIME_TTL:
         return hit[1]

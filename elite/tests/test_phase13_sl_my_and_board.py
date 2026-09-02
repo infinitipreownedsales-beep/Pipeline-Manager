@@ -104,7 +104,9 @@ class TestSurfacesConsistent(unittest.TestCase):
                  patch("elite.loaner.self_balancing.source_label", return_value="src"):
                 html = _fleet_position_card(p.app, UI_SCOPE, decisions)
             flat = html.replace(" ", "").replace("\n", "")
-            self.assertIn('<divclass="v">2</div><divclass="l">Releasingnow</div>', flat)   # 2 PULL/SWAP exits
+            # A (execution invariant preserved): V8 renamed the "Releasing now" metric to "Pulling"; the
+            # reconciliation itself is unchanged — 2 PULL/SWAP exits -> 25 expected to remain -> 0 add.
+            self.assertIn('<divclass="v">2</div><divclass="l">Pulling</div>', flat)         # 2 PULL/SWAP exits
             self.assertIn('<divclass="v">25</div><divclass="l">Expectedtoremain</div>', flat)  # 27 - 2
             self.assertIn('<divclass="v">0</div><divclass="l">Add(calculated)</div>', flat)    # 20 - 25 -> 0
         finally:

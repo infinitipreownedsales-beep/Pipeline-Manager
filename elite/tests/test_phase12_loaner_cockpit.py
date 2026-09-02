@@ -61,16 +61,18 @@ class TestLoanerCockpit(unittest.TestCase):
         ck2 = build_cockpit(self.conn, SCOPE, self.p.app.prefs, nxt, held=held, candidates=cands)
         self.assertIsNone(ck2.requirement)
 
-    # the UI page renders the three distinct fleet counts (Intelligence Layer) and does not crash
+    # the V8 manager execution board renders and surfaces the operating fleet position, without crashing
     def test_service_loaner_page_renders(self):
+        # C (V8 contract): the pre-V8 "Program state / Current fleet / Ideal (Pending Economics)" page was
+        # replaced by the V8 manager execution board. The surviving invariant is that the board renders and
+        # surfaces the operating fleet position (target = the governed desired fleet) without crashing.
         set_desired_fleet(MetaPrefs(self.p.app.prefs, SCOPE), 20)
         r = self.full.get("/service-loaner")
         self.assertEqual(r.status, 200)
-        self.assertIn("Program state", r.body)
-        self.assertIn("Current fleet", r.body)
-        self.assertIn("Ideal (Pending Economics)", r.body)
-        self.assertIn("Undetermined", r.body)                # Ideal stays Undetermined
-        self.assertIn("20", r.body)                          # desired fleet shown
+        self.assertIn("Service Loaner Command Board", r.body)
+        self.assertIn("Fleet position", r.body)
+        self.assertIn("Target", r.body)
+        self.assertIn("20", r.body)                          # governed desired fleet surfaced as the target
 
     def test_preowned_evidence_summarizes_dts_without_inventing_economics(self):
         rows = [
@@ -88,10 +90,12 @@ class TestLoanerCockpit(unittest.TestCase):
         self.assertEqual(ev[0].median_dts, 34.0)
 
     def test_service_loaner_page_keeps_ideal_undetermined(self):
-        # the Intelligence Layer page never determines an economic mix; cockpit stays undetermined
+        # A (engine invariant preserved): the cockpit never fabricates an economic mix. C (surface): the pre-V8
+        # "Undetermined / Pending Economics" page copy was retired with that page; the V8 execution board simply
+        # never renders a fabricated economic ideal on the manager surface.
         r = self.full.get("/service-loaner")
         self.assertEqual(r.status, 200)
-        self.assertIn("Undetermined", r.body)
+        self.assertNotIn("Ideal Mix", r.body)                # no fabricated economic ideal on the execution board
         ck = build_cockpit(self.conn, SCOPE, self.p.app.prefs, self._month())
         self.assertFalse(ck.economically_determined)
         self.assertIsNone(ck.ideal_fleet)

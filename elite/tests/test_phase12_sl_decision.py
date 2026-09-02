@@ -152,7 +152,8 @@ class TestBoardSurface(unittest.TestCase):
         import elite.tests.test_phase12_loaner_intelligence as INTEL
         intel = INTEL._fake_intel()
         with patch("elite.loaner.intelligence.build_intelligence", return_value=intel):
-            b = self.full.get("/service-loaner").body
+            # B (migrated): per-unit KEEP/PULL/SWAP with economics is Strategy depth, not the manager execution board.
+            b = self.full.get("/service-loaner/strategy").body
         self.assertIn("Recommended action per unit", b)
         self.assertIn("KEEP / PULL / SWAP", b)
         self.assertIn("already-earned ICV is sunk", b)      # incremental-from-now framing on the surface
