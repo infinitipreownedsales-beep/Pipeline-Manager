@@ -2578,6 +2578,12 @@ def _ctp_board(app, scope, descriptions=None):
                       # drivetrain kept separate). '' when unresolved — the same-trim rule then gates, never
                       # guessing a trim from the free-text line ('QX60 AUTOGRAPH AWD SUV AUTO' -> not 'AUTO').
                       "trim": (getattr(d, "trim", "") or "").strip() if d else "",
+                      # GOVERNED GENERATION / planning segment = first two digits of the governed order code
+                      # (fallback: the planning model code). '86' current-gen QX80, '83' prior-gen. The CTP
+                      # evaluator forbids a CHANGE from crossing generations without explicit supply-substitution
+                      # authority (supply is generation-specific).
+                      "generation": "".join(ch for ch in (order_code or (getattr(d, "model_code", "") if d else ""))
+                                            if ch.isdigit())[:2],
                       "drivetrain": drivetrain, "order_code": order_code,
                       "exterior_code": ext_code, "interior_code": int_code,
                       "exterior_name": ext_name, "interior_name": int_name,

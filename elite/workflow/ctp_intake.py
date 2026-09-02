@@ -467,6 +467,26 @@ def _norm_trim(v):
     return " ".join(str(v or "").split()).upper()
 
 
+def _gen2(code):
+    """Governed GENERATION / planning-segment id for a model code = its first two digits — the SAME definition the
+    identity layer uses (translation.VariantRow.generation_id; seed_infiniti: 'Generation = first two digits of
+    the code'). For QX80: '86' = current generation, '83' = prior generation. '' when no digits are present
+    (generation then unknown, and the cross-generation gate does not fire — it never guesses)."""
+    return "".join(ch for ch in str(code or "") if ch.isdigit())[:2]
+
+
+def _cross_gen_substitution_authorized(source_generation, target_generation):
+    """Is redirecting an existing order's PHYSICAL/ORDER supply across generation segments governed today?
+
+    No. There is currently NO governed supply-substitution relationship type: supply is counted per generation
+    segment and a CTP CHANGE can only redirect an order to a production-compatible (same-generation) target.
+    This is a deliberate, explicit fail-closed extension point — a future governed supply-substitution authority
+    (distinct from demand lineage) would be consulted HERE. It intentionally does NOT consult the
+    SAME_FAMILY_CROSS_GEN demand-lineage approval: that relationship governs how DEMAND EVIDENCE is shared, never
+    whether one generation's order can be physically substituted for another's. Never fabricate a substitution."""
+    return False
+
+
 def order_key(order_number, vin):
     """Stable per-order/context key (normalized Order #, else VIN). It keys the 'Not available configuration'
     store so each mark keeps its provenance — which order first hit the OEM rejection — but that provenance no
@@ -528,6 +548,10 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
                    "model": (b.get("model") or _model_of(b.get("line", ""))).upper(),
                    "trim": _norm_trim(b.get("trim", "")),    # AUTHORITATIVE governed trim supplied by the caller
                    "drivetrain": (b.get("drivetrain", "") or "").strip().upper(),
+                   # GOVERNED GENERATION / planning segment (e.g. '86' current, '83' prior QX80). Supply is
+                   # counted per generation segment and NEVER crosses generations without an explicit governed
+                   # supply-substitution authority — the CTP evaluator enforces this on every CHANGE candidate.
+                   "generation": (b.get("generation", "") or "").strip() or _gen2(b.get("order_code", "")),
                    # GOVERNED TARGET CONTRACT: executable == the caller resolved a fully governed, orderable
                    # production identity for this position (order code + family + governed exterior/interior).
                    # Default True so existing callers/engine-level board dicts are unaffected; a non-executable
@@ -656,6 +680,10 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
         # falling back to the order's Candidate trim only if the board lacks it. Never a positional slice of the
         # display line (which would read 'AUTO' out of 'QX60 AUTOGRAPH AWD SUV AUTO').
         source_trim = pos.get("trim", "") or _norm_trim(getattr(c, "trim", ""))
+        # source GENERATION from the AUTHORITATIVE governed identity: the source board position's generation
+        # segment, falling back to the order's own exact model code. '' when unresolvable (the cross-generation
+        # gate then does not fire — it never guesses a generation).
+        source_generation = pos.get("generation", "") or _gen2(getattr(c, "model_code", ""))
         # same-trim rule is active but the governed trim can't be established -> GATE, never guess a trim.
         if same_trim_only and not source_trim:
             recs.append(Recommendation(decision_state=CANT_EVALUATE,
@@ -694,10 +722,27 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
             if not st.get("color_complete", True):
                 return False                                  # (3) incomplete config (missing exterior/interior
                                                               #     identity) — gate, never present a partial change
+            tgt_generation = st.get("generation", "")
+            if (source_generation and tgt_generation and tgt_generation != source_generation
+                    and not _cross_gen_substitution_authorized(source_generation, tgt_generation)):
+                return False                                  # (4) CROSS-GENERATION supply substitution is not
+                                                              #     governed today — a gen-86 order may not be
+                                                              #     redirected to a gen-83 shortage (or vice versa)
+                                                              #     without an explicit supply-substitution authority.
+                                                              #     Supply is generation-specific; demand-lineage
+                                                              #     (SAME_FAMILY_CROSS_GEN) governs demand evidence,
+                                                              #     NOT physical/order supply. Fail closed.
             return True
         eligible = [(tcid, st) for tcid, st in all_targets if _eligible_target(tcid, st)]
         cross_trim_blocked = bool(same_trim_only and source_trim and all_targets and not eligible
                                   and any(st.get("trim", "") != source_trim for _t, st in all_targets))
+        # a superior target existed but was excluded ONLY because it is a DIFFERENT governed generation than the
+        # source order and no supply-substitution authority permits crossing generations: keep honestly.
+        cross_gen_blocked = bool(source_generation and all_targets and not eligible
+                                 and any(st.get("generation", "") and st.get("generation", "") != source_generation
+                                         and not _cross_gen_substitution_authorized(source_generation,
+                                                                                    st.get("generation", ""))
+                                         for _t, st in all_targets))
         # a superior target existed but was excluded ONLY because its production identity is not fully governed:
         # keep honestly (never invent a target / a mapping to fill the slot).
         ungoverned_blocked = bool(all_targets and not eligible
@@ -716,6 +761,11 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
                 reason = (f"Keep it — best available outcome. This CTP session is same-trim only (a learned OEM "
                           f"rule), so only another {source_trim} configuration could be substituted, and none is "
                           f"available or superior.")
+            elif cross_gen_blocked:
+                reason = ("Keep it — no eligible same-generation shortage improves the position. The only superior "
+                          "target is a different vehicle generation, and Elite has no governed authority to "
+                          "substitute one generation's order for another's supply. Leave the existing order in "
+                          "place rather than crossing generations.")
             elif ungoverned_blocked:
                 reason = ("Keep it — no governed, orderable alternative currently improves the position. A candidate "
                           "exists but its production identity is not fully governed (an unresolved model code or "
@@ -731,6 +781,7 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
                         proof={"current_combination": pos["canonical"], "current_excess": pos["excess"],
                                "eligible_targets": len(eligible), "targets_marked_unavailable": session_ban_count,
                                "same_trim_only": same_trim_only, "source_trim": source_trim,
+                               "source_generation": source_generation, "cross_generation_blocked": cross_gen_blocked,
                                "best_available_after_exhaustion": exhausted},
                         rejected_targets=rejected, **base))
             continue
