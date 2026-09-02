@@ -976,17 +976,21 @@ def _program_coverage(app, scope, intel=None, decisions=None):
         return ""
 
 
-# Strategy/Proof is the Kyle/GSM decision-and-economics layer. Authorization reuses the EXISTING governed
-# definition of store-operating authority — a principal holding ANY of these capabilities is the manager/admin
-# operating authority (identity.provision.PILOT_OPERATOR_ANCHORS; provision.py documents Kyle's live GSM/admin
-# principal as holding authority.grant). A pure view-only user (workspace.view only) holds none, so restricted
-# economics stay hidden by real authorization, not merely by an unlinked URL.
-from ...identity.provision import PILOT_OPERATOR_ANCHORS as _SL_STRATEGY_CAPS
+# Strategy/Proof is the Kyle/GSM DECISION-AUTHORITY-and-economics layer. Access reuses EXISTING governed
+# capabilities, narrowed to decision authority: the ability to grant authority (authority.grant — Kyle's live
+# GSM/admin principal, per identity.provision) or to approve a decision (decision.approve). This is a strict
+# subset of PILOT_OPERATOR_ANCHORS that deliberately EXCLUDES execution.authorize: authority to EXECUTE a
+# decision is not permission to INSPECT restricted dealership economics. A pure execution manager
+# (execution.authorize alone) and a view-only user (workspace.view only) both hold neither, so restricted
+# economics stay hidden by real authorization — not merely by an unlinked URL. No new role/capability is
+# introduced; the existing model already distinguishes decision authority from execution authority.
+_SL_STRATEGY_CAPS = ("authority.grant", "decision.approve")
 
 
 def _can_strategy(app, s):
-    """True when the signed-in principal holds a store-operating-authority capability at the active scope (the
-    Kyle/GSM operating authority). Non-raising — used to decide whether to render the Strategy link."""
+    """True when the signed-in principal holds DECISION AUTHORITY at the active scope (authority.grant or
+    decision.approve) — the Kyle/GSM authority to inspect restricted Strategy/Proof economics. execution.authorize
+    alone does NOT qualify. Non-raising — used to decide whether to render the Strategy link."""
     try:
         return any(app.stack.authz.decide(s.principal_id, cap, s.scope).allowed for cap in _SL_STRATEGY_CAPS)
     except Exception:   # noqa: BLE001 — an authz hiccup must never expose the link or break the board
