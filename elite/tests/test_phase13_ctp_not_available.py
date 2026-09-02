@@ -25,6 +25,8 @@ from elite.workflow import ctp_intake as CTP
 from elite.newinv.store import NewInvStore
 from elite.newinv.dms_identity import resolve_or_create_planning_combination
 from elite.newinv.models import InventoryPlanResult
+from elite.identity.translation import TranslationStore
+from elite.identity import seed_infiniti as SEED
 from elite.ids import new_id
 
 
@@ -379,6 +381,7 @@ class TestNotAvailableRoutes(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.p = Phase10(os.path.join(self.tmp, "elite.db"))
         self.conn = self.p.stack.db.conn
+        SEED.seed(TranslationStore(self.p.app.prefs, SCOPE))    # governed identity (as the live system always is)
         st = NewInvStore(self.conn, self.p.clock)
         self.src = self._combo(st, "8511", "GAT", "G")          # QX65 SPORT AWD — over-supplied
         self.qbe = self._combo(st, "8501", "QBE", "G")          # QX65 LUXE AWD — short 2
@@ -423,7 +426,7 @@ class TestNotAvailableRoutes(unittest.TestCase):
         return self.p.app.prefs.get_pref(f"scope::{SCOPE}", "ctp_infeasible", default={})
 
     def test_full_loop_qbe_then_dat_then_keep_and_confirm(self):
-        # translations aren't seeded here, so colors render as codes; assert on combination identity instead.
+        # governed identity is seeded (live-realistic); assert on combination identity for stability.
         def _change_target(body):
             """The proposed target combination id from the CHANGE card's not-available form."""
             import re
@@ -517,6 +520,7 @@ class TestConfirmedChangedRoutes(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.p = Phase10(os.path.join(self.tmp, "elite.db"))
         self.conn = self.p.stack.db.conn
+        SEED.seed(TranslationStore(self.p.app.prefs, SCOPE))    # governed identity (as the live system always is)
         st = NewInvStore(self.conn, self.p.clock)
         self.src = self._combo(st, "8511", "GAT", "G")          # QX65 SPORT AWD — excess 2
         self.qbe = self._combo(st, "8501", "QBE", "G")          # QX65 LUXE AWD — short 1

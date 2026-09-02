@@ -527,6 +527,12 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
                    "canonical": b.get("canonical", cid), "line": b.get("line", ""), "colors": b.get("colors", ""),
                    "model": (b.get("model") or _model_of(b.get("line", ""))).upper(),
                    "trim": _norm_trim(b.get("trim", "")),    # AUTHORITATIVE governed trim supplied by the caller
+                   "drivetrain": (b.get("drivetrain", "") or "").strip().upper(),
+                   # GOVERNED TARGET CONTRACT: executable == the caller resolved a fully governed, orderable
+                   # production identity for this position (order code + family + governed exterior/interior).
+                   # Default True so existing callers/engine-level board dicts are unaffected; a non-executable
+                   # position is excluded from the CHANGE candidate universe BEFORE ranking (see _eligible_target).
+                   "executable": bool(b.get("executable", True)),
                    # supply-only: real supply, NO accepted demand basis (Need/Excess not asserted). The order's
                    # own unit is redirectable to a real governed shortage, but its build is never called "needed".
                    "supply_only": bool(b.get("supply_only")),
@@ -673,6 +679,14 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
         #       trim as the order's current build (cross-trim swaps are not permitted this CTP). Within-trim
         #       optimization (model code / exterior / interior) is untouched.
         def _eligible_target(tcid, st):
+            if not st.get("executable", True):
+                return False                                  # (0) GOVERNED TARGET CONTRACT: a target whose full
+                                                              #     production identity is not governed (no orderable
+                                                              #     order code, unrecognized model, or an ungoverned
+                                                              #     exterior/interior) cannot tell the operator what
+                                                              #     to enter in Infiniti CTP — it is excluded from the
+                                                              #     candidate universe BEFORE ranking. No mapping is
+                                                              #     fabricated to rescue it.
             if tcid in session_banned or st.get("canonical") in session_banned:
                 return False                                  # (1) exact configuration rejected
             if same_trim_only and source_trim and st.get("trim", "") != source_trim:
@@ -684,6 +698,10 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
         eligible = [(tcid, st) for tcid, st in all_targets if _eligible_target(tcid, st)]
         cross_trim_blocked = bool(same_trim_only and source_trim and all_targets and not eligible
                                   and any(st.get("trim", "") != source_trim for _t, st in all_targets))
+        # a superior target existed but was excluded ONLY because its production identity is not fully governed:
+        # keep honestly (never invent a target / a mapping to fill the slot).
+        ungoverned_blocked = bool(all_targets and not eligible
+                                  and any(not st.get("executable", True) for _t, st in all_targets))
         if (pos["excess"] <= 0 and not supply_only) or not eligible:
             exhausted = bool(all_targets and not eligible)   # had superior targets, but all restricted away
             if supply_only:
@@ -698,6 +716,11 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
                 reason = (f"Keep it — best available outcome. This CTP session is same-trim only (a learned OEM "
                           f"rule), so only another {source_trim} configuration could be substituted, and none is "
                           f"available or superior.")
+            elif ungoverned_blocked:
+                reason = ("Keep it — no governed, orderable alternative currently improves the position. A candidate "
+                          "exists but its production identity is not fully governed (an unresolved model code or "
+                          "colour), so Elite cannot tell you exactly what to order and will not fabricate it. Leave "
+                          "the existing order in place.")
             elif exhausted:
                 reason = ("Keep it — best available outcome. Every superior configuration for this slot was marked "
                           "not available by the OEM.")
@@ -718,12 +741,28 @@ def evaluate(reconciled, board, *, now="", infeasible=None, confirmed=None, sess
         if not supply_only:
             pos["excess"] -= 1                            # a demand-certified excess source loses one surplus unit
         tgt["short"] -= 1                                 # the certified shortage is consumed (both source kinds)
+        # CROSS-CONFIGURATION: a fully governed target whose trim OR drivetrain differs from the current build is
+        # legitimate (it may carry the stronger governed shortage), but the operator card must SAY SO plainly —
+        # Elite is deliberately redirecting the order to a different configuration; it is NEVER a silent
+        # model-year/code translation and drivetrain is never collapsed silently.
+        _src_dt = (pos.get("drivetrain", "") or "").strip().upper()
+        _tgt_dt = (tgt.get("drivetrain", "") or "").strip().upper()
+        _tgt_trim = tgt.get("trim", "")
+        _is_config_change = bool((source_trim and _tgt_trim and source_trim != _tgt_trim)
+                                 or (_src_dt and _tgt_dt and _src_dt != _tgt_dt))
+        config_prefix = ""
+        if _is_config_change:
+            _src = " ".join(x for x in (source_trim, _src_dt) if x) or "current build"
+            _tgt = " ".join(x for x in (_tgt_trim, _tgt_dt) if x) or "target"
+            config_prefix = (f"CONFIGURATION CHANGE — {_src} → {_tgt}. Elite is deliberately redirecting this "
+                             f"production order to a different configuration because the target has the stronger "
+                             f"governed shortage — this is NOT a model-year/code translation. ")
         if supply_only:
-            change_reason = (f"Change it to {tgt['colors'] or tgt['line']}. This build has no established demand "
-                             f"basis; {tgt['colors'] or tgt['line']} has a governed shortage supported by "
-                             f"accepted demand evidence.")
+            change_reason = (config_prefix + f"Change it to {tgt['colors'] or tgt['line']}. This build has no "
+                             f"established demand basis; {tgt['colors'] or tgt['line']} has a governed shortage "
+                             f"supported by accepted demand evidence.")
         else:
-            change_reason = (f"Change it to {tgt['colors'] or tgt['line']}. Elite projects enough "
+            change_reason = (config_prefix + f"Change it to {tgt['colors'] or tgt['line']}. Elite projects enough "
                              f"{colors or line} supply by arrival, while {tgt['colors'] or tgt['line']} "
                              f"remains short.")
         recs.append(Recommendation(decision_state=CHANGE, proposed_line=tgt["line"], proposed_colors=tgt["colors"],

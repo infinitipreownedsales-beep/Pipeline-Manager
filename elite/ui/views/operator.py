@@ -2548,8 +2548,9 @@ def _ctp_board(app, scope, descriptions=None):
         line = d.vehicle if d else _model_of(_readable(canonical))
         # surface the authoritative reviewed ORDER code (e.g. 84217), so a CHANGE target is orderable with its
         # exact model code — the canonical identity carries only the 4-digit planning code (e.g. 8421).
+        order_code = ""
         if d and getattr(d, "model_code", ""):
-            order_code = xlat.order_code_for_code(d.model_code)
+            order_code = xlat.order_code_for_code(d.model_code) or ""
             if order_code and order_code not in line:
                 line = f"{order_code} {line}"
         # A CTP CHANGE must be a COMPLETE, actionable configuration: BOTH color dimensions shown with their codes
@@ -2559,13 +2560,29 @@ def _ctp_board(app, scope, descriptions=None):
         colors = d.colours(with_code=True, drop_unmapped=False) if d else ""
         ext_code = (getattr(d, "exterior_code", "") or "").strip() if d else ""
         int_code = (getattr(d, "interior_code", "") or "").strip() if d else ""
+        ext_name = (getattr(d, "exterior_name", "") or "").strip() if d else ""
+        int_name = (getattr(d, "interior_name", "") or "").strip() if d else ""
+        drivetrain = (getattr(d, "drivetrain", "") or "").strip() if d else ""
+        # GOVERNED TARGET CONTRACT: a CTP CHANGE target is EXECUTABLE only when its full production identity is
+        # governed well enough to tell the operator exactly what to enter in Infiniti CTP — an orderable order
+        # code, a recognized model family, and governed exterior AND interior (code + human name), with no
+        # unresolved/`(unmapped)` component. This is computed from real translation governance; NO mapping is
+        # fabricated (an ungoverned code/colour simply stays executable=False). The CTP evaluator excludes
+        # non-executable positions from the candidate universe BEFORE final ranking, then reranks the remainder.
+        executable = bool(d and order_code and getattr(d, "has_family", False)
+                          and ext_code and ext_name and int_code and int_name
+                          and not getattr(d, "unresolved", ()))
         board[cid] = {"canonical": canonical, "line": line, "colors": colors,
                       "model": _model_of(_readable(canonical)),
                       # AUTHORITATIVE governed trim from the model-code family / translation (clean 'AUTOGRAPH',
                       # drivetrain kept separate). '' when unresolved — the same-trim rule then gates, never
                       # guessing a trim from the free-text line ('QX60 AUTOGRAPH AWD SUV AUTO' -> not 'AUTO').
                       "trim": (getattr(d, "trim", "") or "").strip() if d else "",
+                      "drivetrain": drivetrain, "order_code": order_code,
                       "exterior_code": ext_code, "interior_code": int_code,
+                      "exterior_name": ext_name, "interior_name": int_name,
+                      # executable == fully-governed, orderable identity (see GOVERNED TARGET CONTRACT above).
+                      "executable": executable,
                       "color_complete": bool(ext_code and int_code),
                       # supply-only: the position is authoritative but asserts no Need/Excess (0/0); the flag lets
                       # the CTP evaluator use honest no-demand-basis language instead of "at/below needed supply".
