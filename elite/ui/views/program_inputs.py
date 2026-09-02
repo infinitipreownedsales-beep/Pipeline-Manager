@@ -217,6 +217,15 @@ def register(app):
                         '<label>Mileage cap</label><input name=mile_cap type=number style="max-width:140px">'
                         '<label>Provenance / source (optional)</label><input name=provenance style="max-width:320px">',
                         csrf=s.csrf_token, submit="Add Velocity terms")
+        recon_form = form("/program-inputs/recon",
+                          month_field + '<label>Model</label>' + model_opts + my_field
+                          + '<label>Trim / scope (optional — blank = all trims)</label>'
+                          '<input name=trim style="max-width:220px">'
+                          '<label>Expected reconditioning $ (blank = unresolved; never stored as $0). This is the '
+                          'business-approved expected recon that feeds the placement front-end gross.</label>'
+                          '<input name=value type=number style="max-width:160px">'
+                          '<label>Provenance / source (optional)</label><input name=provenance style="max-width:320px">',
+                          csrf=s.csrf_token, submit="Add recon value")
 
         parts = [workspace_header("Service Loaner — Program Inputs",
                                   safe('<a href="/service-loaner">← Command Board</a> · <a href="/data">Data</a>'))]
@@ -231,6 +240,12 @@ def register(app):
                      + disclosure("Add ICV value", icv_form) + '</div>')
         parts.append('<div class="card"><h2>Velocity program history</h2>' + _history_table(store, "velocity", cur, s)
                      + disclosure("Add Velocity terms", vel_form) + '</div>')
+        parts.append('<div class="card"><h2>Recon program history</h2>'
+                     '<p class="muted">Governed expected reconditioning $ per model, effective-dated (the placement '
+                     'economics use this — a higher recon lowers front-end gross and can change which candidates '
+                     'stay commandable). Absent → an explicit governed default band, never a silent constant. '
+                     'Unresolved is never $0.</p>' + _history_table(store, "recon", cur, s)
+                     + disclosure("Add recon value", recon_form) + '</div>')
         parts.append(_policy_card(app, s))
         flash, s.flash = s.flash, None
         return Response(page("Program Inputs", "".join(parts), ctx=app.ctx(s), active_path="/service-loaner",
@@ -327,6 +342,10 @@ def register(app):
     @app.post("/program-inputs/velocity")
     def program_velocity(app, req):
         return _add(app, req, "velocity")
+
+    @app.post("/program-inputs/recon")
+    def program_recon(app, req):
+        return _add(app, req, "recon")
 
     @app.post("/program-inputs/writedown")
     def program_writedown(app, req):

@@ -278,9 +278,27 @@ SERVICE_LOANER_RECON_DEFAULTS = {
 }
 
 
-def _recon_assumption(model, override=None):
+def _recon_assumption(model, override=None, *, governed_expected=None):
+    """The expected/low/high reconditioning planning band for a model. Precedence:
+      1. a GOVERNED Program Input recon value (the authoritative business-approved expected recon $ — its band
+         is derived proportionally from the model's default band so the sensitivity display stays consistent);
+      2. a scenario what-if override dict (unchanged — never persisted);
+      3. the explicit governed DEFAULT band for the model (labelled, surfaced in Proof — never silent intuition).
+    The decision-material value is `expected`; `source` records which of the three supplied it."""
     m=(model or '').upper().strip()
     base=dict(SERVICE_LOANER_RECON_DEFAULTS.get(m, {"low": 750.0, "expected": 1250.0, "high": 2000.0}))
+    source="governed default band (no recon recorded in Program Inputs)"
+    if governed_expected is not None:
+        try:
+            e=float(governed_expected)
+            if e >= 0:
+                de=float(base["expected"]) or 1.0
+                lo_r=float(base["low"])/de
+                hi_r=float(base["high"])/de
+                base={"low": round(e*lo_r, 2), "expected": e, "high": round(e*hi_r, 2)}
+                source="governed Program Input (recon)"
+        except Exception:
+            pass
     if isinstance(override, dict):
         for k in ("low","expected","high"):
             try:
@@ -289,8 +307,9 @@ def _recon_assumption(model, override=None):
                     base[k]=v
             except Exception:
                 pass
+        source="scenario what-if override"
     vals=sorted([base["low"],base["expected"],base["high"]])
-    return {"low": vals[0], "expected": vals[1], "high": vals[2]}
+    return {"low": vals[0], "expected": vals[1], "high": vals[2], "source": source}
 
 
 def _recon_sensitivity(pre_recon_net, model, override=None):
@@ -827,8 +846,12 @@ def build_unit_decision(app, scope, unit, mi, *, today=None, swap_candidate_net=
     elif velocity_mileage["status"] == "at_cap":
         vel_future = False
 
-    recon_assumption = _recon_assumption(model)
-    recon = float(recon_assumption["expected"])              # same governed planning rail as ADD
+    # Same governed recon rail as ADD: the authoritative expected recon $ from Program Inputs (by model +
+    # in-service month + model year), else the explicit governed default band. One recon source everywhere.
+    _recon_e = pis.applicable("recon", model, in_month, model_year=my) if in_month else None
+    _governed_recon = _recon_e.value if (_recon_e is not None and _recon_e.value is not None) else None
+    recon_assumption = _recon_assumption(model, governed_expected=_governed_recon)
+    recon = float(recon_assumption["expected"])
 
     res = compare_actions(invoice=invoice, monthly_rate=rate, tenure_days_now=tenure_days_now,
                           keep_extra_days=keep_horizon_days, used_price_now=price_now,

@@ -19,7 +19,9 @@ from dataclasses import dataclass
 
 from ..ids import new_id
 
-KINDS = ("icv", "velocity")
+# icv / velocity are per-(model, model-year, month) dollar terms; recon is the governed per-model expected
+# reconditioning dollars used by the placement economics (a single effective-dated expected value — no caps).
+KINDS = ("icv", "velocity", "recon")
 _MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 
 
@@ -100,7 +102,7 @@ class ProgramInputsStore:
         return f"program_{kind}"
 
     def _legacy_key(self, kind):
-        return {"icv": "icv_program", "velocity": "velocity_program"}[kind]
+        return {"icv": "icv_program", "velocity": "velocity_program"}.get(kind)
 
     def _raw(self, kind):
         return self.prefs.get_pref(self._sk, self._key(kind), default=None)
@@ -117,7 +119,11 @@ class ProgramInputsStore:
         """Import legacy rows once. A legacy amount of 0 is AMBIGUOUS (the old form materialized blanks as 0),
         so it is imported as UNRESOLVED (value=None) with a provenance note to re-enter — never silently kept
         as an authoritative $0. Positive legacy amounts are preserved."""
-        legacy = self.prefs.get_pref(self._sk, self._legacy_key(kind), default=[]) or []
+        lk = self._legacy_key(kind)
+        if lk is None:                       # a kind introduced after the legacy format (e.g. recon) — nothing to migrate
+            self.prefs.set_pref(self._sk, self._key(kind), [])
+            return []
+        legacy = self.prefs.get_pref(self._sk, lk, default=[]) or []
         out = []
         for p in legacy:
             amt = p.get("amount")

@@ -174,7 +174,11 @@ def _evaluate_unit(app, scope, row, *, pol, pis, today, month, rate, retail_rows
     scenario = scenario or {}
     recon_map = scenario.get("recon") if isinstance(scenario.get("recon"), dict) else {}
     recon_override = recon_map.get((model or "").upper()) if isinstance(recon_map, dict) else None
-    recon = _recon_assumption(model, recon_override)
+    # Governed recon: the authoritative expected reconditioning $ from Program Inputs (same store as ICV/Velocity),
+    # resolved by the unit's model + in-service month + model year. Absent -> the explicit governed default band.
+    recon_e = pis.applicable("recon", model, month, model_year=year)
+    governed_recon = recon_e.value if (recon_e is not None and recon_e.value is not None) else None
+    recon = _recon_assumption(model, recon_override, governed_expected=governed_recon)
     expected_recon = float(recon["expected"])
     front_end_gross = round(float(price) - adjusted_basis - expected_recon, 2)
 
@@ -202,7 +206,7 @@ def _evaluate_unit(app, scope, row, *, pol, pis, today, month, rate, retail_rows
            + " with no New-Retail coverage cost (over-stocked combination).")
     retail_impact = ("Over-stocked combination — removing this VIN does NOT create a New-Retail shortage "
                      "(genuine surplus), so the New-Retail opportunity cost is $0.")
-    caveats = [f"Recon planning assumption for {model}: low ${recon['low']:,.0f} / expected ${recon['expected']:,.0f} / high ${recon['high']:,.0f}. Break-even recon is ${max(0.0, add_net + expected_recon):,.0f}."]
+    caveats = [f"Recon planning assumption for {model} [{recon.get('source', 'default')}]: low ${recon['low']:,.0f} / expected ${recon['expected']:,.0f} / high ${recon['high']:,.0f}. Break-even recon is ${max(0.0, add_net + expected_recon):,.0f}."]
     if velocity is not None and not velocity_preserved:
         caveats.append("Velocity is forfeited at this projected hold (final sale would exceed the 240-day deadline)"
                        " — counted as $0.")
