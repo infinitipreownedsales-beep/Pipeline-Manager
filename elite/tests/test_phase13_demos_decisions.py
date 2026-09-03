@@ -59,16 +59,20 @@ class TestDemosRender(unittest.TestCase):
     def test_decisions_are_separate_and_honest(self):
         b = self.full.get(f"/demos/user/{self.uid}").body
         self.assertIn("Decision A — Operating call", b)            # new operating vocabulary
-        self.assertIn("Decision B — Next ideal demo", b)
+        # the replacement plan is the SAME governed board decision, not an independent re-rank
+        self.assertIn("Replacement plan", b)
+        self.assertIn("from the Executive Demo board", b)
+        self.assertNotIn("ranks by certified need", b)            # old competing-selection copy removed
+        self.assertNotIn("Next ideal demo", b)
         # ~93 days in service with no fresh odometer -> PLAN SWAP (never a dead-end), odometer required for swap
         self.assertIn("PLAN SWAP", b)
         self.assertNotIn("NEED CURRENT MILEAGE", b)
         self.assertIn("odometer is required before final swap", b)
-        # a low current odometer keeps it operational; Decision B still shows independently
+        # a low current odometer keeps it operational; the replacement plan still shows
         self.full.post(f"/demos/user/{self.uid}/mileage", {"mi": "900"})
         b2 = self.full.get(f"/demos/user/{self.uid}").body
         self.assertTrue("PLAN SWAP" in b2 or "KEEP" in b2)
-        self.assertIn("Decision B — Next ideal demo", b2)
+        self.assertIn("Replacement plan", b2)
         # a high ACTUAL odometer authorizes SWAP NOW
         self.full.post(f"/demos/user/{self.uid}/mileage", {"mi": str(DEMO_SWAP_MILES + 100)})
         b3 = self.full.get(f"/demos/user/{self.uid}").body

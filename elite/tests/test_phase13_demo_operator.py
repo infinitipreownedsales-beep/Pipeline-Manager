@@ -70,6 +70,25 @@ class TestDemoCockpitGoverned(unittest.TestCase):
             self.full.post(f"/demos/user/{uid}/assign", {"vin": vin, "start": start or "2025-10-01", "mi": "40"})
         return uid
 
+    # CROSS-SURFACE: the roster board and the executive detail page render the SAME governed decision —
+    # same selected replacement unit and same outgoing disposition (one decision rail, two presentations).
+    def test_cross_surface_same_replacement_and_outgoing(self):
+        uid = self._add_user("Holly", "QX80", vin="ASSIGNED00000HOL1", start="2025-10-01")
+        roster = self.p.app.prefs.get_pref(f"scope::{SCOPE}", "demo_roster", default=[])
+        meta, alloc, _pools = OP._demo_cockpit(self.p.app, SCOPE, roster, "2026-01-02")   # fixture clock
+        self.assertEqual(meta[uid]["decision"].state, DB.PLAN_SWAP)
+        tag = OP._mask_vin(alloc[uid]["unit"])                     # the ONE selected replacement unit
+        board = self.full.get("/demos").body
+        detail = self.full.get(f"/demos/user/{uid}").body
+        self.assertIn(tag, board)                                 # roster shows the selected unit
+        self.assertIn(tag, detail)                                # detail shows the SAME selected unit
+        self.assertIn("Replacement plan", detail)
+        self.assertIn("from the Executive Demo board", detail)
+        self.assertIn("RETURN TO RETAIL", board)                  # same outgoing disposition on both surfaces
+        self.assertIn("RETURN TO RETAIL", detail)
+        self.assertNotIn("PENDING DEMO ECONOMICS", detail)        # no competing demo-economic selector
+        self.assertNotIn("ranks by certified need", detail)       # no independent certified-need re-rank
+
     # 10: an ungoverned / phantom combination is never a governed target -> never an executable replacement.
     def test_10_ungoverned_target_never_executable(self):
         gov_set = OP._demo_governed_combos(self.p.app, SCOPE)

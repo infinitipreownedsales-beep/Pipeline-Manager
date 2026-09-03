@@ -1547,29 +1547,64 @@ def register(app):
                      f'<p class="muted">{esc(_a_detail)}</p>'
                      + _odo_note + (mileage_form if cur else "") + '</div>')
 
-        # ---- DECISION B — what should the NEXT ideal demo be? (independent of A) ----
-        certs, _lk = _certified_positions(app, s.scope)
-        pref = (u.get("model_pref") or "").upper()
-        needy = [c for c in certs if c["acquire_units"] > 0]
-        matching = [c for c in needy if _model_of(c["label"]) == pref]
-        why_model = ""
-        if pref and matching:
-            pool = matching
+        # ---- REPLACEMENT PLAN — the SAME governed portfolio decision the Executive Demo board produced ----
+        # The detail page is a second PRESENTATION of the one decision rail: it reuses _demo_cockpit's output
+        # for this executive (same portfolio sequencing, same suitability ranking, same selected unit, same
+        # outgoing) and only adds deeper explanation. It never re-ranks by certified Need or runs a competing
+        # Demo-economic selection.
+        meta_all, alloc_all, pools_all = _demo_cockpit(app, s.scope, roster, today)
+        m = meta_all.get(u["id"])
+        if not cur or m is None:
+            decB_card = ('<div class="card"><h3>Replacement plan</h3>'
+                         + empty("No active demo — no replacement is planned.") + '</div>')
         else:
-            pool = needy
-            if not pref and needy:
-                why_model = ("No stated model preference — Elite ranks by certified need, so the model with the "
-                             "strongest current Speed-to-Sell-backed need is shown first.")
-        pool = sorted(pool, key=lambda c: -c["acquire_units"])
-        if pool:
-            top = pool[0]
-            nb = _demo_call_card(app, s.scope, top["key"], top["label"])
-            if why_model:
-                nb = f'<p class="muted">{esc(why_model)}</p>' + nb
-        else:
-            nb = empty("No certified need supports a next demo right now.")
-        decB_card = ('<div class="card"><h3>Decision B — Next ideal demo' + (f' · prefers {esc(pref)}' if pref else "")
-                     + '</h3>' + (nb if "card" in nb else nb) + '</div>')
+            a = alloc_all.get(u["id"], {})
+            path, unit = a.get("path", "NONE"), a.get("unit")
+            tgt = m["target"]
+            pool = pools_all.get(tgt) or {}
+            sut = pool.get("suitability")
+            if path == "USE NOW":
+                head = safe(badge("completed", "USE NOW") + " "
+                            + esc(_demo_unit_label(app, s.scope, unit, combination_id=tgt)))
+            elif path == "WAIT":
+                head = safe(badge("need", "WAIT FOR INCOMING") + " "
+                            + esc(_demo_unit_label(app, s.scope, unit, combination_id=tgt)))
+            elif path == "ORDER":
+                head = safe((badge("pending", "ORDER FOR DEMO") + " " + esc(pool.get("label", "")))
+                            if pool.get("orderable") else
+                            (badge("unresolved", "ORDER PATH — REVIEW")
+                             + ' <span class="muted">current orderability unresolved</span>'))
+            else:
+                head = safe(badge("stale", "—") + ' <span class="muted">no eligible governed replacement</span>')
+            secured = path in ("USE NOW", "WAIT")
+            outgoing = _demo_outgoing(m["decision"].state, replacement_secured=secured,
+                                      sl_need=m.get("sl_need", False))
+            out_line = (f'<p>Outgoing demo: {safe(badge("pending", outgoing))}</p>' if outgoing else "")
+            # deeper EXPLANATION of the same decision (business language; exact numbers in Technical Proof)
+            og, inc = len(pool.get("current", [])), len(pool.get("incoming", []))
+            expl = []
+            if sut is not None and sut.reasons:
+                expl.append("Why this build ranks as a good Demo: " + esc(" · ".join(sut.reasons))
+                            + (f' <span class="muted">· {esc(sut.note)}</span>' if sut.note else ""))
+            expl.append(f"Physical path: {og} on-ground · {inc} incoming.")
+            if path == "WAIT":
+                expl.append("No on-ground unit was selected — the incoming unit is the superior/retail-safe path.")
+            if og <= 1 and path in ("USE NOW",):
+                expl.append("Last retail unit of a desirable combination — protect / reorder before pulling.")
+            if m["decision"].needs_odometer:
+                expl.append("Current odometer is still required before final physical swap execution.")
+            expl_html = "".join(f'<p class="muted">{x}</p>' for x in expl)
+            proof = ""
+            if sut is not None and sut.proof:
+                pf = sut.proof
+                proof = ('<details><summary style="cursor:pointer;color:var(--accent);font-size:12px">'
+                         'Technical Proof (optional / Strategy)</summary><span class="muted" style="font-size:12px">'
+                         f'expected demand {pf.get("expected_demand")}, days-to-sell {pf.get("days_to_sell_burden")}, '
+                         f'planning depth {pf.get("planning_depth")}, certified need {pf.get("certified_need")}, '
+                         f'suitability score {pf.get("score")}</span></details>')
+            decB_card = ('<div class="card"><h3>Replacement plan '
+                         '<span class="badge">from the Executive Demo board</span></h3>'
+                         f'<p>{head}</p>' + out_line + expl_html + proof + '</div>')
 
         assign = form("/demos/user/" + u["id"] + "/assign",
                       '<label>Demo VIN</label>'

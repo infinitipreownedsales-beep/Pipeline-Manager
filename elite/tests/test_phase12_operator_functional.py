@@ -71,11 +71,10 @@ class TestOperatorFunctional(unittest.TestCase):
         self.assertEqual(roster[0]["history"][0]["miles"], 1200)     # 1300-100
         b = self.full.get(f"/demos/user/{uid}").body
         self.assertIn("Nathan", b)
-        # three-pool Demo decision (USE NOW / WAIT FOR INCOMING / ORDER FOR DEMO), physical-first
-        self.assertIn("Demo decision", b)
-        self.assertTrue(any(c in b for c in ("USE NOW", "WAIT FOR INCOMING", "ORDER FOR DEMO",
-                                             "PENDING DEMO ECONOMICS")))
-        self.assertIn("Current on-ground VINs", b)
+        # the detail page reuses the ONE governed board decision — no independent competing selector
+        self.assertIn("Replacement plan", b)
+        self.assertNotIn("ranks by certified need", b)
+        self.assertNotIn("PENDING DEMO ECONOMICS", b)
         # the /demos manager board is the operating cockpit (replacement is expressed per-executive now)
         self.assertIn("Executive Demo board", self.full.get("/demos").body)
 
