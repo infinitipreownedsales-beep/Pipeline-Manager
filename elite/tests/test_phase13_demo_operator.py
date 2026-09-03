@@ -177,6 +177,21 @@ class TestDemoCockpitGoverned(unittest.TestCase):
         # a replacement target was chosen by Demo suitability, and an outgoing disposition exists
         self.assertIsNotNone(m["target"])
 
+    # 7 (section): the Best Demo Candidates section ranks governed candidates per model with action verbs,
+    # no VINs, no economics.
+    def test_7_best_demo_candidates_section(self):
+        best = OP._demo_best_candidates(self.p.app, SCOPE)
+        self.assertIn("QX80", best)                                # the governed QX80 candidate is listed
+        self.assertTrue(all(c["build"] for c in best["QX80"]))     # human build, not a VIN
+        # the single on-ground governed unit -> REORDER BEFORE PULLING (last-safe-retail-unit protection)
+        actions = [c["action"] for c in best["QX80"]]
+        self.assertIn(DB.REORDER_BEFORE_PULLING, actions)
+        self._add_user("Holly", "QX80", vin="SECTIONVIN000001", start="2025-10-01")
+        b = self.full.get("/demos").body
+        self.assertIn("Best Demo Candidates", b)
+        self.assertNotIn("$", b)                                   # no economics on the manager surface
+        self.assertNotIn("SECTIONVIN000001", b)                    # no full VINs
+
     # 24: young July assignments remain KEEP absent other evidence.
     def test_24_young_demos_keep(self):
         a = self._add_user("Shanehan", "QX65", vin="SHANUNIT00601129", start="2026-07-18")

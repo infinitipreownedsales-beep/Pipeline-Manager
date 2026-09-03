@@ -305,3 +305,46 @@ def rank_demo_candidates(candidates, *, preferred_model=None):
                                   reasons, note))
     ranked.sort(key=lambda s: (s.eligible, s.score), reverse=True)
     return ranked
+
+
+# candidate action verbs for the "Best Demo Candidates" section
+USE_NOW = "USE NOW"
+WAIT_FOR_INCOMING = "WAIT FOR INCOMING"
+REORDER_BEFORE_PULLING = "REORDER BEFORE PULLING"
+ORDER_FOR_DEMO = "ORDER FOR DEMO"
+ORDER_REVIEW = "ORDER PATH — REVIEW"
+NOT_SAFE = "NOT CURRENTLY SAFE TO DEMO"
+
+
+def candidate_action(current_count, has_incoming, *, orderable, order_available=True):
+    """The operator action for one governed Demo candidate, from real physical availability + orderability.
+
+    Backup-depth law: 2+ safe on-ground copies → USE NOW; exactly ONE on-ground (last retail unit) → REORDER
+    BEFORE PULLING (never silently pull the last one); none on-ground but a committed incoming unit → WAIT FOR
+    INCOMING; no physical anywhere → a governed ORDER FOR DEMO, but only when current orderability is confirmed
+    — otherwise ORDER PATH — REVIEW (fail closed; deterministic identity is not proof the factory accepts an
+    order today). If there is no physical unit and no order path at all, it is NOT CURRENTLY SAFE TO DEMO."""
+    cc = int(current_count or 0)
+    if cc >= 2:
+        return USE_NOW
+    if cc == 1:
+        return REORDER_BEFORE_PULLING
+    if has_incoming:
+        return WAIT_FOR_INCOMING
+    if not order_available:
+        return NOT_SAFE
+    return ORDER_FOR_DEMO if orderable else ORDER_REVIEW
+
+
+def anticipated_returns(entries):
+    """The physical units expected to return to retail soon (active demos whose call is a swap/pull), each
+    counted ONCE by unit identity — so Ordering can represent a returning Demo as future supply exactly once and
+    not reorder a vehicle that is about to come back. `entries`: [{unit, state}]. Returns a deduped unit list."""
+    swap_states = {PLAN_SWAP, SWAP_NOW, PULL}
+    seen, out = set(), []
+    for e in entries:
+        u = _vin_of({"vin": e.get("unit")}) if isinstance(e, dict) else None
+        if u and e.get("state") in swap_states and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out

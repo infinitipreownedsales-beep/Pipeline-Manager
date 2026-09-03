@@ -137,5 +137,31 @@ class TestPortfolioAllocation(unittest.TestCase):
             {"K": {"current": [], "incoming": [], "order": True}})["u1"]["path"], "ORDER")
 
 
+class TestCandidateActions(unittest.TestCase):
+    # 8/9: last-safe-retail-unit -> REORDER BEFORE PULLING; healthy backup depth -> USE NOW
+    def test_8_9_depth_actions(self):
+        self.assertEqual(DB.candidate_action(2, False, orderable=True), DB.USE_NOW)          # backup depth
+        self.assertEqual(DB.candidate_action(1, False, orderable=True), DB.REORDER_BEFORE_PULLING)  # last on lot
+
+    # 10/11: prefer on-ground/incoming over an unnecessary order
+    def test_10_11_physical_before_order(self):
+        self.assertEqual(DB.candidate_action(3, True, orderable=True), DB.USE_NOW)           # on-ground wins
+        self.assertEqual(DB.candidate_action(0, True, orderable=True), DB.WAIT_FOR_INCOMING) # incoming path
+
+    # 12: unresolved orderability -> ORDER PATH — REVIEW (never a fabricated order)
+    def test_12_order_review_when_unresolved(self):
+        self.assertEqual(DB.candidate_action(0, False, orderable=False), DB.ORDER_REVIEW)
+        self.assertEqual(DB.candidate_action(0, False, orderable=True), DB.ORDER_FOR_DEMO)
+        self.assertEqual(DB.candidate_action(0, False, orderable=False, order_available=False), DB.NOT_SAFE)
+
+
+class TestAnticipatedReturns(unittest.TestCase):
+    # 15: a returning Demo is represented once (deduped), and only swap/pull states return
+    def test_15_returns_counted_once(self):
+        entries = [{"unit": "V1", "state": DB.PLAN_SWAP}, {"unit": "V1", "state": DB.SWAP_NOW},
+                   {"unit": "V2", "state": DB.KEEP}, {"unit": "V3", "state": DB.PULL}]
+        self.assertEqual(DB.anticipated_returns(entries), ["V1", "V3"])   # V1 once; V2 (KEEP) excluded
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

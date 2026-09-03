@@ -1441,12 +1441,39 @@ def register(app):
                    csrf=s.csrf_token, submit="Add user")
         headline = f"{n_active} active · " + " · ".join(
             f"{k} {counts[k]}" for k in (DB.KEEP, DB.PLAN_SWAP, DB.SWAP_NOW, DB.PULL, DB.REVIEW) if counts.get(k))
+        # anticipated returns — a demo about to swap comes back to retail; represent once so Ordering can see it
+        returning = DB.anticipated_returns([{"unit": (m["user"].get("current") or {}).get("vin"),
+                                             "state": m["decision"].state} for m in meta.values()])
+        ret_note = (f'<p class="muted">{len(returning)} demo(s) expected to return to retail — represented once '
+                    f'in future supply so Ordering does not replace a vehicle that is about to come back.</p>'
+                    if returning else "")
+        _act_tone = {DB.USE_NOW: "completed", DB.WAIT_FOR_INCOMING: "need", DB.REORDER_BEFORE_PULLING: "pending",
+                     DB.ORDER_FOR_DEMO: "pending", DB.ORDER_REVIEW: "unresolved", DB.NOT_SAFE: "unresolved"}
+        best = _demo_best_candidates(app, s.scope)
+        best_sections = ""
+        for model in ("QX60", "QX65", "QX80"):
+            crows = []
+            for c in best.get(model, []):
+                why = esc(c["why"]) + (f' <span class="muted">· {esc(c["note"])}</span>' if c["note"] else "")
+                crows.append([esc(f'#{c["rank"]}'), esc(c["build"]), safe(why),
+                              esc(f'{c["on_ground"]} on-ground'), esc(f'{c["incoming"]} incoming'),
+                              esc(c["inv_age"]), safe(badge(_act_tone.get(c["action"], "stale"), c["action"]))])
+            if crows:
+                best_sections += (f'<h3 style="margin:14px 0 4px">{esc(model)}</h3>'
+                                  + table(["#", "Build", "Why it's a good Demo", "On ground", "Incoming",
+                                           "Inv age", "Action"], crows))
+        best_card = ('<div class="card"><h2>Best Demo Candidates</h2>'
+                     '<p class="muted">Proven fast movers ranked by Demo suitability (Speed-to-Sell velocity, '
+                     'inventory depth, retail protection) — not the largest shortage. No VINs, no economics on '
+                     'this surface.</p>' + (best_sections or '<p class="muted">No governed Demo candidates in '
+                     'the current certified plan.</p>') + '</div>') if best else ""
         body = (f'<div class="card"><h2>Executive Demo board</h2><p><strong>{esc(headline)}</strong></p>'
                 '<p class="muted">Firmed swap decisions are sequenced as one portfolio — a replacement unit is '
                 'never assigned to two executives. Replacement paths protect the retail position first; '
                 'replacements are ranked by Demo suitability (proven fast movers), not the largest shortage.</p>'
                 + table(["Executive", "Current demo", "Inv age", "Demo days", "Mileage / learning", "Forecast",
-                         "Decision", "Replacement", "Outgoing"], rows) + '</div>'
+                         "Decision", "Replacement", "Outgoing"], rows) + ret_note + '</div>'
+                + best_card
                 + '<div class="card"><h3>Add a demo user</h3>' + add + '</div>')
         return _resp(app, s, "Demos", body, "/demos")
 
@@ -3115,6 +3142,51 @@ def _demo_cockpit(app, scope, roster, today):
         meta[u["id"]] = {"user": u, "decision": dec, "ms": ms, "target": tgt, "ranked": ranked, "sl_need": sl_need}
     alloc = DB.allocate_replacements(entries, pools)
     return meta, alloc, pools
+
+
+def _demo_best_candidates(app, scope, *, per_model=3):
+    """The 'Best Demo Candidates' management section — separate governed QX60 / QX65 / QX80 lists, top-N each,
+    ranked by Demo SUITABILITY (proven fast movers, not the largest shortage), each carrying the physical action
+    (USE NOW / WAIT FOR INCOMING / REORDER BEFORE PULLING / ORDER FOR DEMO — REVIEW). Reuses the certified plan,
+    suitability engine, governed physical pools and orderability. No VINs, no economics."""
+    from ...operatorstd import demo_board as DB
+    certs, _lk = _certified_positions(app, scope)
+    governed = _demo_governed_combos(app, scope)
+    signals = _demo_signals(app, scope)
+    label_of = {c["key"]: c["label"] for c in certs}
+    by_model = {}
+    for c in certs:
+        cid = c["key"]
+        if cid not in governed or c["acquire_units"] <= 0:
+            continue
+        model = _model_of(c["label"])
+        sig = signals.get(cid, {})
+        depth = int(sig.get("depth", 0))
+        by_model.setdefault(model, []).append({
+            "cid": cid, "label": label_of.get(cid, ""), "model": model, "need": c["acquire_units"],
+            "dts_burden": sig.get("dts_burden", 0.0), "expected_demand": sig.get("expected_demand", 0.0),
+            "depth": depth, "last_on_lot": depth <= 1, "has_incoming_or_order": True, "governed": True})
+    out = {}
+    for model in ("QX60", "QX65", "QX80"):
+        cands = by_model.get(model) or []
+        if not cands:
+            continue
+        ranked = [r for r in DB.rank_demo_candidates(cands) if r.eligible][:per_model]
+        rows = []
+        for rank, s in enumerate(ranked, start=1):
+            cur, inc, order_ok = _demo_pools(app, scope, s.cid)
+            cc = len(cur)
+            orderable = _demo_order_orderable(app, scope, s.cid)
+            action = DB.candidate_action(cc, bool(inc), orderable=orderable, order_available=order_ok)
+            inv_age = "—"
+            if cur:
+                ages = [getattr(u, "age_days", None) for u in cur if getattr(u, "age_days", None) is not None]
+                inv_age = f"{min(ages)}d (best)" if ages else "—"
+            rows.append({"rank": rank, "build": s.label, "why": ", ".join(s.reasons[:3]), "note": s.note,
+                         "on_ground": cc, "incoming": len(inc), "inv_age": inv_age, "action": action})
+        if rows:
+            out[model] = rows
+    return out
 
 
 def _demo_call_card(app, scope, cid, label):
