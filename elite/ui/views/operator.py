@@ -1410,11 +1410,11 @@ def register(app):
             path, unit = a.get("path", "NONE"), a.get("unit")
             pool = pools.get(m["target"]) or {}
             if path == "USE NOW":
-                rep = badge("completed", "USE NOW") + " " + esc(_mask_vin(unit))
+                rep = badge("completed", "USE NOW") + " " + esc(_demo_unit_label(app, s.scope, unit))
                 if len(pool.get("current", [])) <= 1:
                     rep += ' <span class="badge" style="color:var(--timing)">LAST ONE — protect/reorder first</span>'
             elif path == "WAIT":
-                rep = badge("need", "WAIT FOR INCOMING") + " " + esc(_mask_vin(unit))
+                rep = badge("need", "WAIT FOR INCOMING") + " " + esc(_demo_unit_label(app, s.scope, unit))
             elif path == "ORDER":
                 # deterministic identity is NOT proof the factory accepts an order today (CTP discipline)
                 if pool.get("orderable"):
@@ -3047,6 +3047,19 @@ def _mask_vin(v):
     collapsed Technical Proof / audit."""
     v = (v or "").strip().upper()
     return f"Unit {v[-6:]}" if len(v) >= 6 else (f"Unit {v}" if v else "—")
+
+
+def _demo_unit_label(app, scope, op_id):
+    """Presentation for a physical unit on the manager surface: the governed human build (model / trim /
+    drivetrain / exterior) + the operational unit tag, resolved from the SAME authoritative DMS identity the
+    engine already used. Falls back to just the unit tag when the build cannot be joined (never a fabricated
+    build, never a VIN)."""
+    op_id = (op_id or "").strip()
+    if not op_id:
+        return "—"
+    build = _demo_current_build(app, scope, op_id)
+    tag = _mask_vin(op_id)
+    return f"{build} · {tag}" if build else tag
 
 
 def _demo_inv_age(app, scope, vin):

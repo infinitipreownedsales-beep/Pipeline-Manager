@@ -83,6 +83,22 @@ class TestDemoPhysicalAvailability(unittest.TestCase):
     def test_inventory_age_unknown_when_not_sourced(self):
         self.assertEqual(OP._demo_inv_age(self.p.app, SCOPE, "999999"), "unknown")   # never fabricated
 
+    # PRESENTATION: a replacement/current unit shows human build + operational Unit tag (no VIN); identity is
+    # unchanged — the same unit the engine selected is what is displayed.
+    def test_unit_label_shows_build_plus_operational_tag(self):
+        self._import([_row("S3", "Q38296", "86117", "KH3", "G", "ONS", pm="2026-11")])
+        label = OP._demo_unit_label(self.p.app, SCOPE, "Q38296")
+        self.assertIn("QX80", label)                              # model / trim / drivetrain / exterior
+        self.assertTrue(any(c in label for c in ("Black Obsidian", "KH3")))
+        self.assertIn("Unit Q38296", label)                      # the operational unit tag, unchanged
+        # the incoming pool still selects exactly Q38296 (presentation did not change the selection)
+        _cur, inc, _o = OP._demo_pools(self.p.app, SCOPE, self.gov.id)
+        self.assertEqual([u.vin for u in inc], ["Q38296"])
+
+    def test_unit_label_falls_back_to_tag_when_build_unresolvable(self):
+        # no DMS row for this id -> honest unit tag only, never a fabricated build
+        self.assertEqual(OP._demo_unit_label(self.p.app, SCOPE, "331601"), "Unit 331601")
+
     # committed (active-demo) units are excluded from the pool — count-once holds over the live source too
     def test_committed_demo_unit_excluded_from_pool(self):
         self._import([_row("S1", "601129", "86117", "KH3", "G", "DLR-INV", dis="15"),
