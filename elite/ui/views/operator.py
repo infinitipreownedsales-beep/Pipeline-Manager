@@ -1454,7 +1454,14 @@ def register(app):
         for model in ("QX60", "QX65", "QX80"):
             crows = []
             for c in best.get(model, []):
-                why = esc(c["why"]) + (f' <span class="muted">· {esc(c["note"])}</span>' if c["note"] else "")
+                pf = c.get("proof") or {}
+                proof_txt = (f'expected demand {pf.get("expected_demand")}, days-to-sell {pf.get("days_to_sell_burden")}, '
+                             f'planning depth {pf.get("planning_depth")}, certified need {pf.get("certified_need")}, '
+                             f'score {pf.get("score")}')
+                why = (esc(c["why"]) + (f' <span class="muted">· {esc(c["note"])}</span>' if c["note"] else "")
+                       + f'<details><summary style="cursor:pointer;color:var(--accent);font-size:12px">'
+                         f'Technical Proof</summary><span class="muted" style="font-size:12px">{esc(proof_txt)}'
+                         f'</span></details>')
                 crows.append([esc(f'#{c["rank"]}'), esc(c["build"]), safe(why),
                               esc(f'{c["on_ground"]} on-ground'), esc(f'{c["incoming"]} incoming'),
                               esc(c["inv_age"]), safe(badge(_act_tone.get(c["action"], "stale"), c["action"]))])
@@ -2850,18 +2857,98 @@ def _ctp_pipeline_age(app, scope):
     return ""
 
 
+def _dms_dis(r):
+    """Days-in-stock (inventory age) from a DMS row, or None. Never fabricated."""
+    for k in ("dis", "days_in_stock", "DIS"):
+        v = r.get(k) if isinstance(r, dict) else None
+        if str(v or "").strip():
+            try:
+                return int(float(v))
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def _demo_op_id(vin, serial, stock):
+    """The operational unit identity for a physical unit: a real 17-char VIN, else serial, else stock. This is
+    the count-once key AND the source of the masked 'Unit ######' tag — never a fabricated VIN."""
+    for v in ((vin or "").strip().upper(), (serial or "").strip().upper(), (stock or "").strip().upper()):
+        if v:
+            return v
+    return ""
+
+
+def _demo_live_units(app, scope, plan_key):
+    """(on_ground, incoming) LIVE physical units for a combination's planning key, straight from the DMS
+    inventory snapshot the rest of Elite reads — because the certified board is recomputed from that snapshot and
+    does NOT populate current_supply_projection rows. on_ground = DLR-INV (available now, youngest DIS first for
+    Demo); incoming = ONS/SIT/NNA-INV. Each: {op_id, vin, stock, serial, dis, arrival_month}. Never fabricates."""
+    try:
+        from ...loaner.placement import read_new_retail_units, _authoritative_vin
+        from ...newinv.dms_cohort import dms_source_stage
+        from ...newinv.dms_identity import dms_planning_key
+    except Exception:   # noqa: BLE001
+        return [], []
+    on_ground, incoming = [], []
+    for r in (read_new_retail_units(app, scope) or []):
+        try:
+            if dms_planning_key(r) != plan_key:
+                continue
+            stage = dms_source_stage(r)
+        except Exception:   # noqa: BLE001
+            continue
+        vin, ok, serial = _authoritative_vin(r)
+        stock = str(r.get("stock_number") or r.get("stock") or "").strip()
+        op_id = _demo_op_id(vin if ok else "", serial, stock)
+        if not op_id:
+            continue
+        unit = {"op_id": op_id, "vin": (vin if ok else ""), "stock": stock, "serial": serial,
+                "dis": _dms_dis(r), "arrival_month": str(r.get("production_month") or r.get("pm") or "").strip()}
+        if stage == "DLR-INV":
+            on_ground.append(unit)
+        elif stage in ("ONS", "SIT", "NNA-INV"):
+            incoming.append(unit)
+    on_ground.sort(key=lambda u: (u["dis"] if u["dis"] is not None else 10 ** 9))   # youngest first for Demo
+    return on_ground, incoming
+
+
 def _demo_pools(app, scope, cid):
-    """Physical Demo candidate pools for a combination need (CORE LAW: VIN-level). Returns
-    (current, incoming, order_available): current/incoming are NormalizedSupply with the ACTUAL VIN, committed
-    VINs excluded (count-once). order_available is True when an unbuilt future path exists or no physical unit
-    is available at all (so an ORDER-FOR-DEMO fallback call can always be produced)."""
+    """Physical Demo candidate pools for a combination (CORE LAW: physical, count-once). Returns
+    (current, incoming, order_available). Reads the LIVE DMS inventory snapshot (the real source of on-ground /
+    incoming physical units) AND any Phase-4 current/future supply projections, unioned + deduped by operational
+    identity, committed units excluded. order_available is True when no eligible physical unit exists (so an
+    ORDER / REVIEW fallback can always be produced)."""
     from ...newinv.store import NewInvStore
     from ...ordering.cross_domain import committed_vins
     from ...operatorstd import supply as _S
     conn = _conn(app)
     st = NewInvStore(conn, app.stack.clock)
     committed = set(committed_vins(conn, scope, app.prefs).keys())
+    canonical = (conn.execute("SELECT canonical_identity FROM sellable_combination WHERE id=? AND store_scope=?",
+                              (cid, scope)).fetchone() or {})
+    canonical = canonical["canonical_identity"] if canonical else None
+    plan_key = _plan_key_of(canonical) if canonical else None
 
+    current, incoming, seen = [], [], set()
+
+    def _add(bucket, op_id, *, age=None, arrival=None, stock=None):
+        if not op_id or op_id in committed or op_id in seen:
+            return
+        seen.add(op_id)
+        avail = (_S.classify_availability(_S.CURRENT_INVENTORY, production_month=arrival)
+                 if arrival else (_S.ON_GROUND if bucket is current else _S.NEAR_IMMEDIATE))
+        bucket.append(_S.NormalizedSupply(_S.CURRENT_INVENTORY, avail, combination_id=cid, vin=op_id,
+                                          stock=stock, age_days=age, arrival_month=arrival))
+
+    # LIVE DMS snapshot units (the real on-ground / incoming physical inventory)
+    if plan_key:
+        og, inc = _demo_live_units(app, scope, plan_key)
+        for u in og:
+            _add(current, u["op_id"], age=u["dis"], stock=u["stock"])
+        for u in inc:
+            _add(incoming, u["op_id"], arrival=(u["arrival_month"] or None), stock=u["stock"])
+
+    # Phase-4 projections (present in tests / any environment that populates them) — unioned, deduped
     def _vin(table, key):
         try:
             r = conn.execute(f"SELECT vin FROM {table} WHERE id=? AND store_scope=?", (key, scope)).fetchone()
@@ -2869,20 +2956,13 @@ def _demo_pools(app, scope, cid):
         except Exception:   # noqa: BLE001
             return None
 
-    current = []
     for cs in st.current_supply_for(cid, scope):
-        vin = _vin("vehicle_unit", cs.vehicle_unit_id)
-        if vin and vin not in committed:
-            current.append(_S.NormalizedSupply(_S.CURRENT_INVENTORY, _S.ON_GROUND, combination_id=cid, vin=vin,
-                                               age_days=cs.age_days))
-    incoming, unbuilt = [], False
+        _add(current, (_vin("vehicle_unit", cs.vehicle_unit_id) or ""), age=cs.age_days)
+    unbuilt = False
     for fs in st.future_supply_for(cid, scope):
         vin = _vin("production_order", fs.production_order_id)
-        if vin and vin not in committed:
-            avail = _S.classify_availability(_S.CURRENT_INVENTORY, production_month=fs.arrival_month) \
-                if fs.arrival_month else _S.NEAR_IMMEDIATE
-            incoming.append(_S.NormalizedSupply(_S.CURRENT_INVENTORY, avail, combination_id=cid, vin=vin,
-                                                arrival_month=fs.arrival_month))
+        if vin:
+            _add(incoming, vin, arrival=fs.arrival_month)
         else:
             unbuilt = True
     order_available = unbuilt or not (current or incoming)
@@ -2924,27 +3004,42 @@ def _demo_replacement_due(cur, today):
                       f"{' (approaching the window)' if odo >= 1000 else ''}{cadence}."}
 
 
-def _demo_current_build(app, scope, vin):
-    """Human build (trim / drivetrain / colours) for an assigned demo VIN, from the governed DMS description —
-    never the bare VIN or an '[code] (unmapped)' string. Falls back to the VIN only when the VIN is not found."""
-    vin = (vin or "").strip().upper()
-    if not vin:
-        return ""
+def _demo_current_row(app, scope, ident):
+    """The DMS inventory row for an assigned demo, matched by VIN, serial, OR stock (a roster 'unit' may be any
+    of these). Returns the row or None. Real snapshot only — never fabricated."""
+    ident = (ident or "").strip().upper()
+    if not ident:
+        return None
     try:
         from ...loaner.placement import read_new_retail_units, _authoritative_vin
-        from ...newinv.dms_identity import dms_planning_identity
-        from .domains import _describe
         for r in (read_new_retail_units(app, scope) or []):
-            rv, ok, _serial = _authoritative_vin(r)
-            if ok and rv.strip().upper() == vin:
-                d = _describe(app, scope, dms_planning_identity(r))
-                if d:
-                    line = d.vehicle or ""
-                    colours = d.colours(with_code=False, drop_unmapped=True) if hasattr(d, "colours") else ""
-                    return " — ".join(x for x in (line, colours) if x) or vin
+            rv, ok, serial = _authoritative_vin(r)
+            stock = str(r.get("stock_number") or r.get("stock") or "").strip().upper()
+            if ident in {(rv if ok else "").strip().upper(), (serial or "").strip().upper(), stock} - {""}:
+                return r
     except Exception:   # noqa: BLE001
         pass
-    return vin
+    return None
+
+
+def _demo_current_build(app, scope, vin):
+    """Human build (model / trim / drivetrain / colours) for an assigned demo, from the governed DMS description
+    — never the bare VIN or an '[code] (unmapped)' string. '' when the physical unit cannot be resolved (the
+    caller then shows only the operational unit tag; nothing is fabricated)."""
+    r = _demo_current_row(app, scope, vin)
+    if r is None:
+        return ""
+    try:
+        from ...newinv.dms_identity import dms_planning_identity
+        from .domains import _describe
+        d = _describe(app, scope, dms_planning_identity(r))
+        if d:
+            line = d.vehicle or ""
+            colours = d.colours(with_code=False, drop_unmapped=True) if hasattr(d, "colours") else ""
+            return " — ".join(x for x in (line, colours) if x)
+    except Exception:   # noqa: BLE001
+        pass
+    return ""
 
 
 def _mask_vin(v):
@@ -2955,21 +3050,27 @@ def _mask_vin(v):
 
 
 def _demo_inv_age(app, scope, vin):
-    """Inventory age (days in stock) for a physical unit — a SEPARATE clock from Demo days. Best-effort from the
-    governed current-supply projection; '—' when unknown (never guessed)."""
-    vin = (vin or "").strip().upper()
-    if not vin:
+    """Inventory age (days in stock) for a physical unit — a SEPARATE clock from Demo days. Sourced from the live
+    DMS snapshot (days-in-stock), else a current-supply projection; '—/unknown' when it genuinely cannot be
+    sourced (never fabricated)."""
+    ident = (vin or "").strip().upper()
+    if not ident:
         return "—"
+    r = _demo_current_row(app, scope, ident)                 # live DMS row (days-in-stock)
+    if r is not None:
+        dis = _dms_dis(r)
+        if dis is not None:
+            return f"{dis}d"
     try:
-        r = _conn(app).execute(
+        row = _conn(app).execute(
             "SELECT c.age_days AS a FROM current_supply_projection c JOIN vehicle_unit v ON v.id=c.vehicle_unit_id "
             "WHERE UPPER(v.vin)=? AND c.store_scope=? ORDER BY c.calculation_timestamp DESC LIMIT 1",
-            (vin, scope)).fetchone()
-        if r and r["a"] is not None:
-            return f"{int(r['a'])}d"
+            (ident, scope)).fetchone()
+        if row and row["a"] is not None:
+            return f"{int(row['a'])}d"
     except Exception:   # noqa: BLE001
         pass
-    return "—"
+    return "unknown"
 
 
 def _demo_governed_combos(app, scope):
@@ -3182,8 +3283,9 @@ def _demo_best_candidates(app, scope, *, per_model=3):
             if cur:
                 ages = [getattr(u, "age_days", None) for u in cur if getattr(u, "age_days", None) is not None]
                 inv_age = f"{min(ages)}d (best)" if ages else "—"
-            rows.append({"rank": rank, "build": s.label, "why": ", ".join(s.reasons[:3]), "note": s.note,
-                         "on_ground": cc, "incoming": len(inc), "inv_age": inv_age, "action": action})
+            rows.append({"rank": rank, "build": s.label, "why": " · ".join(s.reasons[:3]), "note": s.note,
+                         "on_ground": cc, "incoming": len(inc), "inv_age": inv_age, "action": action,
+                         "proof": s.proof or {}})
         if rows:
             out[model] = rows
     return out

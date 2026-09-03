@@ -255,8 +255,9 @@ class Suitability:
     model: str
     score: float
     eligible: bool
-    reasons: list
+    reasons: list                 # business-language phrases for the manager board (no raw numbers)
     note: str = ""
+    proof: dict = None            # exact numbers / scoring — for the collapsed Technical Proof only
 
 
 # objective weights — retail velocity dominates; a bigger shortage never wins on size alone
@@ -290,19 +291,20 @@ def rank_demo_candidates(candidates, *, preferred_model=None):
         cavity = 1.0 if (c.get("last_on_lot") and not has_path) else 0.0
         score = round(_W_VELOCITY * vel + _W_DEPTH * min(depth, 3) + _W_PREFERENCE * pref
                       - _W_CAVITY * cavity - _W_DTS * dts, 4)
+        # business language for the manager board — no raw decimals (exact numbers go in `proof`)
         reasons = []
-        reasons.append(f"retail velocity (expected demand {vel:g})")
-        if dts:
-            reasons.append(f"days-to-sell burden {dts:g}")
-        reasons.append(f"depth {depth}")
+        reasons.append("FAST MOVER · strong retail demand" if vel >= 3.0
+                       else ("steady retail demand" if vel >= 1.0 else "limited retail demand"))
+        reasons.append(f"planning depth {depth} (breadth of the plan, not on-ground stock)")
         if pref:
             reasons.append("matches executive preference")
         if cavity:
             reasons.append("would leave a retail cavity — protect/reorder first")
-        note = "" if c.get("post_demo_evidence") else \
-            "no former-Demo mileage-resilience history yet — ranked on current retail velocity/depth evidence only"
+        note = "" if c.get("post_demo_evidence") else "no former-Demo mileage-resilience history yet"
+        proof = {"expected_demand": vel, "days_to_sell_burden": dts, "planning_depth": depth,
+                 "certified_need": int(c.get("need") or 0), "preference_match": bool(pref), "score": score}
         ranked.append(Suitability(c.get("cid"), c.get("label", ""), c.get("model", ""), score, eligible,
-                                  reasons, note))
+                                  reasons, note, proof))
     ranked.sort(key=lambda s: (s.eligible, s.score), reverse=True)
     return ranked
 
