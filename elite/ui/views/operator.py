@@ -1385,36 +1385,52 @@ def register(app):
             uid = u["id"]
             if uid not in meta:
                 rows.append([safe(f'<a href="/demos/user/{esc(uid)}">{esc(u["name"])}</a>'),
-                             '<span class="muted">no demo assigned</span>', "—", "—", "—",
-                             safe(badge("stale", "NO DEMO")), "—"])
+                             '<span class="muted">no demo assigned</span>', "—", "—", "—", "—",
+                             safe(badge("stale", "NO DEMO")), "—", "—"])
                 continue
             m = meta[uid]
             cur = u.get("current") or {}
             dec, ms = m["decision"], m["ms"]
-            build = _demo_current_build(app, s.scope, cur.get("vin")) or "—"
-            # never a full VIN on the manager board: strip the raw VIN, show a short unit tag
-            build_masked = build if (cur.get("vin", "") or "").upper() not in build.upper() else _mask_vin(cur.get("vin"))
-            demo_cell = safe(f'{esc(build_masked)} <span class="muted">· {esc(_mask_vin(cur.get("vin")))}</span>')
-            fore = "—"
-            if ms.velocity is not None:
-                fore = esc(f"~{ms.estimated:,} mi @ {ms.velocity} mi/day ({ms.confidence})") if ms.estimated else \
-                       esc(f"{ms.velocity} mi/day ({ms.confidence})")
+            # human build + ONE operational unit tag (no full VIN, no "Unit X · Unit X" duplication)
+            build = _demo_current_build(app, s.scope, cur.get("vin")) or ""
+            unit_tag = _mask_vin(cur.get("vin"))
+            build_h = build if (build and (cur.get("vin", "") or "").upper() not in build.upper()) else ""
+            demo_cell = safe(f'{esc(build_h)} <span class="muted">· {esc(unit_tag)}</span>' if build_h
+                             else f'{esc(unit_tag)}')
+            inv_age = _demo_inv_age(app, s.scope, cur.get("vin"))
+            # forecast is never blank when an assignment date exists: cadence window (+ learned ETA when known)
+            cwin = DB.cadence_window_date(cur.get("start"))
+            if ms.velocity is not None and ms.estimated is not None:
+                fore = esc(f"~{ms.estimated:,} mi est · {ms.velocity} mi/day ({ms.confidence})")
+            elif cwin:
+                fore = esc(f"cadence window ~{cwin} · mileage learning")
+            else:
+                fore = '<span class="muted">—</span>'
             a = alloc.get(uid, {})
             path, unit = a.get("path", "NONE"), a.get("unit")
+            pool = pools.get(m["target"]) or {}
             if path == "USE NOW":
                 rep = badge("completed", "USE NOW") + " " + esc(_mask_vin(unit))
-                if len((pools.get(m["target"]) or {}).get("current", [])) <= 1:
+                if len(pool.get("current", [])) <= 1:
                     rep += ' <span class="badge" style="color:var(--timing)">LAST ONE — protect/reorder first</span>'
             elif path == "WAIT":
                 rep = badge("need", "WAIT FOR INCOMING") + " " + esc(_mask_vin(unit))
             elif path == "ORDER":
-                rep = badge("pending", "ORDER FOR DEMO") + " " + esc((pools.get(m["target"]) or {}).get("label", ""))
+                # deterministic identity is NOT proof the factory accepts an order today (CTP discipline)
+                if pool.get("orderable"):
+                    rep = badge("pending", "ORDER FOR DEMO") + " " + esc(pool.get("label", ""))
+                else:
+                    rep = badge("unresolved", "ORDER PATH — REVIEW") + \
+                        ' <span class="muted">current orderability unresolved</span>'
             else:
                 rep = '<span class="muted">—</span>'
+            secured = path in ("USE NOW", "WAIT")
+            outgoing = _demo_outgoing(dec.state, replacement_secured=secured, sl_need=m.get("sl_need", False))
+            out_cell = safe(badge("pending", outgoing)) if outgoing else '<span class="muted">—</span>'
             rows.append([safe(f'<a href="/demos/user/{esc(uid)}">{esc(u["name"])}</a>'),
-                         demo_cell, esc(f'{dec.days}d' if dec.days is not None else "—"),
+                         demo_cell, esc(inv_age), esc(f'{dec.days}d' if dec.days is not None else "—"),
                          esc(ms.display()), safe(fore), safe(badge(_tone.get(dec.state, "stale"), dec.state)),
-                         safe(rep)])
+                         safe(rep), out_cell])
 
         add = form("/demos/user",
                    '<label>Name</label><input name=name required style="max-width:260px">'
@@ -1423,12 +1439,14 @@ def register(app):
                    + _select("model_pref", [("", "— any —")] + [(m, m) for m in _known_models(app, s.scope)])
                    + '<label>Trim preference</label><input name=trim_pref style="max-width:200px">',
                    csrf=s.csrf_token, submit="Add user")
-        body = (f'<div class="card"><h2>Executive Demo board</h2><p><strong>{esc(n_active)} active · '
-                f'{esc(summary)}</strong></p>'
+        headline = f"{n_active} active · " + " · ".join(
+            f"{k} {counts[k]}" for k in (DB.KEEP, DB.PLAN_SWAP, DB.SWAP_NOW, DB.PULL, DB.REVIEW) if counts.get(k))
+        body = (f'<div class="card"><h2>Executive Demo board</h2><p><strong>{esc(headline)}</strong></p>'
                 '<p class="muted">Firmed swap decisions are sequenced as one portfolio — a replacement unit is '
-                'never assigned to two executives. Replacement paths protect the retail position first.</p>'
-                + table(["Executive", "Current demo", "Demo days", "Mileage state", "Forecast", "Decision",
-                         "Replacement"], rows) + '</div>'
+                'never assigned to two executives. Replacement paths protect the retail position first; '
+                'replacements are ranked by Demo suitability (proven fast movers), not the largest shortage.</p>'
+                + table(["Executive", "Current demo", "Inv age", "Demo days", "Mileage / learning", "Forecast",
+                         "Decision", "Replacement", "Outgoing"], rows) + '</div>'
                 + '<div class="card"><h3>Add a demo user</h3>' + add + '</div>')
         return _resp(app, s, "Demos", body, "/demos")
 
@@ -1461,14 +1479,17 @@ def register(app):
         from ...clock import to_utc_iso
         today = to_utc_iso(app.stack.clock.now())[:10]
         build = _demo_current_build(app, s.scope, cur.get("vin")) if cur else ""
-        obs, cycles = _demo_observations(u) if cur else ([], [])
-        ms = DB.mileage_state(cur.get("start"), obs, today, completed_cycles=cycles) if cur else DB.MileageState()
+        assignment_mi, obs, cycles = _demo_observations(u) if cur else (None, [], [])
+        ms = (DB.mileage_state(cur.get("start"), assignment_mi, obs, today, completed_cycles=cycles)
+              if cur else DB.MileageState())
         vel = ms.velocity
         info = kv([("Role", u.get("role", "")), ("Prefers", f'{u.get("model_pref","")} {u.get("trim_pref","")}'.strip()),
                    ("Current demo", (build or "—") if cur else "—"),
                    ("Current demo VIN", cur.get("vin", "—")), ("Start date", cur.get("start", "—")),
-                   ("Mileage at assignment", cur.get("mi_in", "—")),
-                   ("Last actual reading", f"{ms.actual:,} mi ({ms.actual_date})" if ms.actual is not None else "—"),
+                   ("Mileage at assignment", f"{ms.assignment_mileage:,} mi (assignment fact, not current)"
+                    if ms.assignment_mileage is not None else "—"),
+                   ("Current actual odometer", f"{ms.actual:,} mi ({ms.actual_date})"
+                    if ms.actual is not None else "not yet observed"),
                    ("Estimated today", f"~{ms.estimated:,} mi (estimate, not an odometer)"
                     if (ms.estimated is not None and ms.source != "unknown") else "—"),
                    ("Personal mileage velocity", f"{vel} mi/day ({ms.confidence})" if vel is not None else "—")])
@@ -2906,6 +2927,24 @@ def _mask_vin(v):
     return f"Unit {v[-6:]}" if len(v) >= 6 else (f"Unit {v}" if v else "—")
 
 
+def _demo_inv_age(app, scope, vin):
+    """Inventory age (days in stock) for a physical unit — a SEPARATE clock from Demo days. Best-effort from the
+    governed current-supply projection; '—' when unknown (never guessed)."""
+    vin = (vin or "").strip().upper()
+    if not vin:
+        return "—"
+    try:
+        r = _conn(app).execute(
+            "SELECT c.age_days AS a FROM current_supply_projection c JOIN vehicle_unit v ON v.id=c.vehicle_unit_id "
+            "WHERE UPPER(v.vin)=? AND c.store_scope=? ORDER BY c.calculation_timestamp DESC LIMIT 1",
+            (vin, scope)).fetchone()
+        if r and r["a"] is not None:
+            return f"{int(r['a'])}d"
+    except Exception:   # noqa: BLE001
+        pass
+    return "—"
+
+
 def _demo_governed_combos(app, scope):
     """Certified combination_ids whose PRODUCTION IDENTITY is fully governed (recognized family + governed
     exterior/interior names, no `(unmapped)` / phantom). A Demo replacement or ORDER target must be one of these
@@ -2926,15 +2965,23 @@ def _demo_governed_combos(app, scope):
 
 
 def _demo_observations(u):
-    """(observations, completed_cycles) for the driver's CURRENT assignment. Observations are DATED odometer
-    readings within the current assignment window; completed_cycles are prior whole Demo cycles (miles/days).
-    Backfills the assignment reading for legacy roster entries that predate dated observation storage."""
+    """(assignment_mileage, current_observations, completed_cycles) for the driver's CURRENT assignment.
+
+    ASSIGNMENT mileage is its own fact (mileage at assignment), returned separately — it is NEVER a current
+    odometer. current_observations are DATED post-assignment readings (a recorded reading, a return/swap, or an
+    authoritative dated exact-VIN odometer). completed_cycles are prior whole Demo cycles for this driver, so
+    learned velocity persists across Demo vehicles."""
     cur = u.get("current") or {}
     start = str(cur.get("start") or "")[:10]
-    obs = [dict(o) for o in (u.get("mileage_obs") or []) if o.get("date") and o.get("miles") is not None]
-    if start and not any(str(o.get("date"))[:10] == start for o in obs) and cur.get("mi_in") is not None:
-        obs.append({"date": start, "miles": _int_or0(cur.get("mi_in")), "source": "assignment"})
-    obs = [o for o in obs if not start or str(o["date"])[:10] >= start]     # current assignment window only
+    assignment_mi = _int_or0(cur.get("mi_in")) if cur.get("mi_in") is not None else None
+    obs = []
+    for o in (u.get("mileage_obs") or []):
+        if not (o.get("date") and o.get("miles") is not None):
+            continue
+        if (o.get("source") == "assignment") or (start and str(o["date"])[:10] < start):
+            continue                                               # the assignment reading is not a current obs
+        obs.append({"date": str(o["date"])[:10], "miles": _int_or0(o["miles"]), "source": o.get("source", "")})
+    obs.sort(key=lambda o: o["date"])
     cycles = []
     for h in u.get("history", []):
         try:
@@ -2944,39 +2991,128 @@ def _demo_observations(u):
             cycles.append({"miles": _int_or0(h.get("miles")), "days": max(1, (d1 - d0).days)})
         except Exception:   # noqa: BLE001
             pass
-    return obs, cycles
+    return assignment_mi, obs, cycles
+
+
+def _demo_signals(app, scope):
+    """Per-combination Demo-suitability signals from the certified plan evidence (real Speed-to-Sell velocity,
+    days-to-sell burden, inventory depth) — so 'best Demo' means a proven fast mover, not the largest shortage."""
+    conn = _conn(app)
+    out = {}
+    for r in conn.execute("SELECT * FROM inventory_plan_result WHERE store_scope=? AND status='issued'",
+                          (scope,)).fetchall():
+        try:
+            dec = (json.loads(r["evidence"]) if r["evidence"] else {}).get("decision") or {}
+        except Exception:   # noqa: BLE001
+            dec = {}
+        dts = dec.get("dts_burden")
+        out[r["combination_id"]] = {
+            "need": int(dec.get("acquire_units", 0) or 0),
+            "dts_burden": float(dts) if isinstance(dts, (int, float)) else 0.0,
+            "expected_demand": float(r["expected_demand"] or 0.0),
+            "depth": int(r["current_supply"] or 0) + int(r["future_supply"] or 0)}
+    return out
+
+
+def _demo_order_orderable(app, scope, cid):
+    """Governed CURRENT orderability for a combination's family (reuses the CTP resolve_order discipline): a
+    deterministic identity is NOT proof the factory will accept an order today. Returns True only when the
+    family resolves to a currently-orderable order version, else False (-> honest REVIEW, never false ORDER)."""
+    try:
+        from ...identity.translation import TranslationStore
+        from ...newinv.dms_identity import code4
+        conn = _conn(app)
+        row = conn.execute("SELECT canonical_identity FROM sellable_combination WHERE id=? AND store_scope=?",
+                           (cid, scope)).fetchone()
+        if not row:
+            return False
+        from .domains import _describe
+        d = _describe(app, scope, row["canonical_identity"] or cid)
+        code = code4(getattr(d, "model_code", "") or "") if d else ""
+        xlat = TranslationStore(app.prefs, scope)
+        fam = xlat.family_for_code(code) if code else None
+        if fam is None:
+            return False
+        return xlat.resolve_order(fam).get("status") == "order"
+    except Exception:   # noqa: BLE001
+        return False
+
+
+def _sl_has_add_need(app, scope):
+    """Does the EXISTING Service-Loaner self-balancing engine actually require a unit right now? Reused, never
+    duplicated — the Demo->SL bridge only surfaces SL REVIEW when SL genuinely needs a unit."""
+    try:
+        from ...loaner.self_balancing import build_requirement
+        sb = build_requirement(_conn(app), scope, app.prefs)
+        return bool(sb.desired is not None and int(sb.calculated_need) > 0)
+    except Exception:   # noqa: BLE001
+        return False
+
+
+def _demo_outgoing(decision_state, *, replacement_secured, sl_need):
+    """Operational disposition for the OUTGOING demo when a swap/pull is called. No economics, no full VIN. The
+    returned demo becomes normal retail supply once unless a real governed current-use destination is superior;
+    Demo->SL is never automatic — only SERVICE LOANER REVIEW when SL actually needs a unit."""
+    from ...operatorstd import demo_board as DB
+    if decision_state in (DB.KEEP, DB.REVIEW):
+        return ""
+    if not replacement_secured:
+        return "HOLD UNTIL REPLACEMENT"
+    if sl_need:
+        return "SERVICE LOANER REVIEW"
+    return "RETURN TO RETAIL"
 
 
 def _demo_cockpit(app, scope, roster, today):
     """The manager operating board: for every active demo, the KEEP/PLAN SWAP/SWAP NOW/PULL/REVIEW decision, the
-    observed/estimated mileage state, and a portfolio-allocated replacement path (one physical unit never
-    assigned twice). Reuses the governed physical pools + demo_board engine; no economics, no full VINs."""
+    correct mileage/learning state, a Demo-suitability-ranked + portfolio-allocated replacement path (one
+    physical unit never assigned twice), and the outgoing disposition. Reuses the governed physical pools +
+    demo_board engine + SL self-balancing; no economics, no full VINs."""
     from ...operatorstd import demo_board as DB
     certs, label_to_key = _certified_positions(app, scope)
     governed = _demo_governed_combos(app, scope)
-    needy = [c for c in certs if c["acquire_units"] > 0 and c["key"] in governed]   # governed targets only
+    signals = _demo_signals(app, scope)
     label_of = {c["key"]: c["label"] for c in certs}
+    model_of = {c["key"]: _model_of(c["label"]) for c in certs}
 
-    def target_for(pref):
-        pool = [c for c in needy if _model_of(c["label"]) == pref] if pref else []
-        pool = pool or needy
-        pool = sorted(pool, key=lambda c: -c["acquire_units"])
-        return pool[0]["key"] if pool else None
+    def _candidates(pref):
+        cands = []
+        for c in certs:
+            cid = c["key"]
+            if cid not in governed or c["acquire_units"] <= 0:
+                continue
+            sig = signals.get(cid, {})
+            depth = int(sig.get("depth", 0))
+            cands.append({"cid": cid, "label": label_of.get(cid, ""), "model": model_of.get(cid, ""),
+                          "need": c["acquire_units"], "dts_burden": sig.get("dts_burden", 0.0),
+                          "expected_demand": sig.get("expected_demand", 0.0), "depth": depth,
+                          "last_on_lot": depth <= 1, "has_incoming_or_order": True, "governed": True})
+        ranked = DB.rank_demo_candidates(cands, preferred_model=(pref or None))
+        # honor a stated preference as a filter when at least one preferred candidate is eligible
+        if pref:
+            pref_hits = [r for r in ranked if r.model == pref and r.eligible]
+            if pref_hits:
+                return pref_hits[0], ranked
+        elig = [r for r in ranked if r.eligible]
+        return (elig[0] if elig else (ranked[0] if ranked else None)), ranked
 
+    sl_need = _sl_has_add_need(app, scope)
     entries, meta, pools = [], {}, {}
     for u in roster:
         cur = u.get("current") or {}
         if not cur.get("vin"):
             continue
-        obs, cycles = _demo_observations(u)
-        ms = DB.mileage_state(cur.get("start"), obs, today, completed_cycles=cycles)
+        assignment_mi, obs, cycles = _demo_observations(u)
+        ms = DB.mileage_state(cur.get("start"), assignment_mi, obs, today, completed_cycles=cycles)
         dec = DB.decide(cur.get("start"), today, ms, pull_reason=u.get("pull_reason", ""))
-        tgt = target_for((u.get("model_pref") or "").upper())
+        best, ranked = _candidates((u.get("model_pref") or "").upper())
+        tgt = best.cid if best else None
         if tgt is not None and tgt not in pools:
             c, i, order_ok = _demo_pools(app, scope, tgt)
-            pools[tgt] = {"current": c, "incoming": i, "order": order_ok, "label": label_of.get(tgt, "")}
+            pools[tgt] = {"current": c, "incoming": i, "order": order_ok, "label": label_of.get(tgt, ""),
+                          "orderable": _demo_order_orderable(app, scope, tgt), "suitability": best}
         entries.append({"id": u["id"], "decision": dec, "pool_key": tgt})
-        meta[u["id"]] = {"user": u, "decision": dec, "ms": ms, "target": tgt}
+        meta[u["id"]] = {"user": u, "decision": dec, "ms": ms, "target": tgt, "ranked": ranked, "sl_need": sl_need}
     alloc = DB.allocate_replacements(entries, pools)
     return meta, alloc, pools
 

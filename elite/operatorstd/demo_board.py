@@ -42,19 +42,22 @@ def _days_between(a, b):
 # ---------------- mileage learning (observed only) --------------------------------------------------------
 @dataclass
 class MileageState:
-    actual: Optional[int] = None            # the latest OBSERVED odometer (never an estimate)
+    actual: Optional[int] = None            # the latest CURRENT observed odometer (post-assignment); never an estimate
     actual_date: Optional[str] = None
-    estimated: Optional[int] = None         # forecast from last actual + velocity*elapsed — clearly labeled
+    assignment_mileage: Optional[int] = None  # mileage AT ASSIGNMENT — its own fact, NOT a current odometer
+    estimated: Optional[int] = None         # forecast from last known point + velocity*elapsed — clearly labeled
     velocity: Optional[float] = None        # learned miles/day (observed points only)
     confidence: str = "none"                # none / low / moderate / high
-    source: str = "unknown"                 # observed / estimated / unknown
+    source: str = "unknown"                 # observed (a current reading exists) / assignment_only / unknown
 
     def display(self) -> str:
+        # a real CURRENT observation is the only thing shown as an actual odometer
         if self.actual is not None and self.source == "observed":
             return f"{self.actual:,} mi (actual, {self.actual_date})"
-        if self.estimated is not None:
-            return f"~{self.estimated:,} mi (estimated)"
-        return "mileage not recently observed"
+        # assignment mileage is explicitly labeled as such — never presented as current actual mileage
+        if self.assignment_mileage is not None:
+            return f"Assigned {self.assignment_mileage:,} mi · current unknown · driver velocity learning"
+        return "current mileage unknown · driver velocity learning"
 
 
 def learn_velocity(observations, completed_cycles=()):
@@ -86,30 +89,48 @@ def learn_velocity(observations, completed_cycles=()):
     return velocity, confidence
 
 
-def mileage_state(assignment_date, observations, today, *, completed_cycles=()):
-    """Resolve the driver's mileage picture WITHOUT ever presenting an estimate as an actual reading."""
-    velocity, conf = learn_velocity(observations, completed_cycles)
-    obs = sorted([o for o in observations if o.get("miles") is not None and o.get("date")],
+def mileage_state(assignment_date, assignment_mileage, current_observations, today, *, completed_cycles=()):
+    """Resolve the driver's mileage picture. ASSIGNMENT mileage is its own fact and is NEVER presented as a
+    current actual odometer. A CURRENT actual reading comes only from a post-assignment observation (a recorded
+    reading, a return/swap, or an authoritative dated exact-VIN odometer). Velocity is learned from observed
+    intervals only: the assignment reading plus a later reading is ONE observed interval; completed cycles add
+    evidence. An estimate is always a distinct forecast, never an odometer."""
+    am = int(assignment_mileage) if assignment_mileage is not None else None
+    cur = sorted([o for o in (current_observations or []) if o.get("miles") is not None and o.get("date")],
                  key=lambda o: str(o["date"]))
-    if obs:
-        last = obs[-1]
+    # velocity learns from ALL observed points: the assignment reading anchors the first interval
+    points = ([{"date": str(assignment_date)[:10], "miles": am}] if (am is not None and assignment_date) else []) + cur
+    velocity, conf = learn_velocity(points, completed_cycles)
+    if cur:                                          # a genuine CURRENT observation exists
+        last = cur[-1]
         actual, actual_date = int(last["miles"]), str(last["date"])[:10]
         est = actual
         if velocity is not None:
             elapsed = _days_between(actual_date, today)
             if elapsed and elapsed > 0:
                 est = int(round(actual + velocity * elapsed))
-        return MileageState(actual=actual, actual_date=actual_date,
-                            estimated=est if est != actual else actual,
-                            velocity=velocity, confidence=conf if velocity is not None else "low",
-                            source="observed")
-    # no observation at all: forecast only from age if a velocity was learned from prior cycles
+        return MileageState(actual=actual, actual_date=actual_date, assignment_mileage=am,
+                            estimated=est, velocity=velocity,
+                            confidence=conf if velocity is not None else "low", source="observed")
+    # only the assignment reading (or nothing): current odometer is UNKNOWN; forecast from velocity if learned
+    est = None
     if velocity is not None:
-        elapsed = _days_between(assignment_date, today)
+        base_mi, base_date = (am if am is not None else 0), (assignment_date if am is not None else None)
+        elapsed = _days_between(base_date, today) if base_date else None
         if elapsed and elapsed > 0:
-            return MileageState(estimated=int(round(velocity * elapsed)), velocity=velocity,
-                                confidence=conf, source="estimated")
-    return MileageState(source="unknown", velocity=velocity, confidence="none")
+            est = int(round(base_mi + velocity * elapsed))
+    return MileageState(assignment_mileage=am, estimated=est, velocity=velocity,
+                        confidence=conf if velocity is not None else ("low" if am is not None else "none"),
+                        source="assignment_only" if am is not None else "unknown")
+
+
+def cadence_window_date(assignment_date):
+    """The ~cadence swap-planning date from the assignment date (age-based; always available when an assignment
+    date exists, so the Forecast is never blank merely because mileage has not been learned)."""
+    d = _date(assignment_date)
+    if d is None:
+        return None
+    return (d + _dt.timedelta(days=CADENCE_DAYS)).isoformat()
 
 
 # ---------------- decision vocabulary --------------------------------------------------------------------
@@ -221,3 +242,66 @@ def _vin_of(u):
         return None
     v = u.get("vin") if isinstance(u, dict) else getattr(u, "vin", None)
     return (str(v).strip().upper() or None) if v else None
+
+
+# ---------------- Demo-suitability ranking (proven fast movers, not the largest shortage) -----------------
+from dataclasses import dataclass as _dc  # noqa: E402
+
+
+@_dc
+class Suitability:
+    cid: str
+    label: str
+    model: str
+    score: float
+    eligible: bool
+    reasons: list
+    note: str = ""
+
+
+# objective weights — retail velocity dominates; a bigger shortage never wins on size alone
+_W_VELOCITY, _W_DEPTH, _W_PREFERENCE, _W_CAVITY, _W_DTS = 3.0, 0.4, 2.0, 2.0, 0.01
+
+
+def rank_demo_candidates(candidates, *, preferred_model=None):
+    """Rank governed Demo replacement combinations by DEMO SUITABILITY — a Demo removes a unit from retail and
+    adds miles, so the best asset is a proven fast mover that still protects the retail position, NOT simply the
+    largest certified shortage.
+
+    Each candidate: {cid, label, model, need, dts_burden, expected_demand, depth, last_on_lot,
+    has_incoming_or_order, governed, post_demo_evidence(optional bool)}. Eligibility gates FIRST (governed +
+    physically placeable or a defensible incoming/order path); then real-evidence scoring: retail velocity
+    (Speed-to-Sell expected demand / days-to-sell), inventory depth, executive preference, minus a retail-cavity
+    penalty. Where no former-Demo mileage-resilience history exists, that limitation is STATED, not fabricated."""
+    ranked = []
+    for c in candidates:
+        if not c.get("governed"):
+            continue                                    # ungoverned/phantom identity can never be a Demo asset
+        depth = int(c.get("depth") or 0)
+        has_path = bool(c.get("has_incoming_or_order"))
+        eligible = bool(depth > 0 or has_path)          # placeable now, or a defensible incoming/order path
+        if preferred_model and c.get("model") != preferred_model:
+            # preference is honored as a hard filter only when at least one preferred candidate exists (caller
+            # decides); here we keep it but heavily deprioritize non-preferred so a preferred match ranks above.
+            pass
+        vel = float(c.get("expected_demand") or 0.0)
+        dts = float(c.get("dts_burden") or 0.0)
+        pref = 1.0 if (preferred_model and c.get("model") == preferred_model) else 0.0
+        cavity = 1.0 if (c.get("last_on_lot") and not has_path) else 0.0
+        score = round(_W_VELOCITY * vel + _W_DEPTH * min(depth, 3) + _W_PREFERENCE * pref
+                      - _W_CAVITY * cavity - _W_DTS * dts, 4)
+        reasons = []
+        reasons.append(f"retail velocity (expected demand {vel:g})")
+        if dts:
+            reasons.append(f"days-to-sell burden {dts:g}")
+        reasons.append(f"depth {depth}")
+        if pref:
+            reasons.append("matches executive preference")
+        if cavity:
+            reasons.append("would leave a retail cavity — protect/reorder first")
+        note = "" if c.get("post_demo_evidence") else \
+            "no former-Demo mileage-resilience history yet — ranked on current retail velocity/depth evidence only"
+        ranked.append(Suitability(c.get("cid"), c.get("label", ""), c.get("model", ""), score, eligible,
+                                  reasons, note))
+    ranked.sort(key=lambda s: (s.eligible, s.score), reverse=True)
+    return ranked

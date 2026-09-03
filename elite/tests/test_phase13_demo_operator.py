@@ -13,6 +13,7 @@ from elite.identity.translation import TranslationStore
 from elite.identity import seed_infiniti as SEED
 from elite.ids import new_id
 from elite.ui.views import operator as OP
+from elite.operatorstd import demo_board as DB
 from elite.ordering.cross_domain import committed_vins
 
 
@@ -132,6 +133,58 @@ class TestDemoCockpitGoverned(unittest.TestCase):
         self.assertNotIn("FULLVIN000000HOL1", b)                   # full VIN never on the manager board
         self.assertIn("Unit", b)                                   # masked unit tag instead
         self.assertNotIn("$", b)                                   # no economics dollars on execution board
+
+    # 21: the current-demo cell is a human build + ONE operational unit — no "Unit X · Unit X" duplication.
+    def test_21_no_duplicate_unit_label(self):
+        self._add_user("Holly", "QX80", vin="DEMOVIN0000GOV11", start="2025-10-01")   # a VIN with a governed build
+        b = self.full.get("/demos").body
+        self.assertNotIn("Unit 0GOV11 · Unit 0GOV11", b)          # the duplication bug is gone
+        self.assertNotIn("DEMOVIN0000GOV11", b)                   # never the full VIN
+
+    # 15/16/18: outgoing disposition — return-to-retail default; SL REVIEW only on real SL need; no auto Demo->SL.
+    def test_15_16_18_outgoing_disposition(self):
+        self.assertEqual(OP._demo_outgoing(DB.KEEP, replacement_secured=True, sl_need=True), "")
+        self.assertEqual(OP._demo_outgoing(DB.PLAN_SWAP, replacement_secured=False, sl_need=False),
+                         "HOLD UNTIL REPLACEMENT")
+        # 16: returns to retail once when a replacement is secured and SL has no need
+        self.assertEqual(OP._demo_outgoing(DB.SWAP_NOW, replacement_secured=True, sl_need=False),
+                         "RETURN TO RETAIL")
+        # 17/18: SL REVIEW only when SL actually needs a unit — never an automatic Demo->SL mutation
+        self.assertEqual(OP._demo_outgoing(DB.SWAP_NOW, replacement_secured=True, sl_need=True),
+                         "SERVICE LOANER REVIEW")
+
+    # 15 (order honesty): unresolved current orderability never yields a false ORDER FOR DEMO command.
+    def test_15_unresolved_orderability_no_false_order(self):
+        # 86117 KH3/G BASE is orderability-unresolved in the seed chart -> not a currently-orderable order version
+        self.assertFalse(OP._demo_order_orderable(self.p.app, SCOPE, self.gov.id))
+
+    # 23: Holly live case — ~91d, assignment mileage only, no preference -> PLAN SWAP, honest mileage + forecast.
+    def test_23_holly_live_case(self):
+        uid = self._add_user("Holly", "", vin="HOLLYUNIT0331601", start="2026-06-04")
+        roster = self.p.app.prefs.get_pref(f"scope::{SCOPE}", "demo_roster", default=[])
+        for u in roster:                                          # assignment mileage 17, no current observation
+            if u["id"] == uid:
+                u["current"]["mi_in"] = 17
+        self.p.app.prefs.set_pref(f"scope::{SCOPE}", "demo_roster", roster)
+        meta, alloc, pools = OP._demo_cockpit(self.p.app, SCOPE, roster, "2026-09-03")
+        m = meta[uid]
+        self.assertEqual(m["decision"].state, DB.PLAN_SWAP)      # cadence-based, no odometer needed to PLAN
+        self.assertTrue(m["decision"].needs_odometer)            # odometer required only before final swap
+        self.assertEqual(m["ms"].assignment_mileage, 17)
+        self.assertIsNone(m["ms"].actual)                        # current odometer unknown, never fabricated
+        self.assertIn("Assigned 17 mi", m["ms"].display())
+        self.assertIsNotNone(DB.cadence_window_date("2026-06-04"))
+        # a replacement target was chosen by Demo suitability, and an outgoing disposition exists
+        self.assertIsNotNone(m["target"])
+
+    # 24: young July assignments remain KEEP absent other evidence.
+    def test_24_young_demos_keep(self):
+        a = self._add_user("Shanehan", "QX65", vin="SHANUNIT00601129", start="2026-07-18")
+        b = self._add_user("Howell", "QX80", vin="HOWEUNIT00640790", start="2026-07-21")
+        roster = self.p.app.prefs.get_pref(f"scope::{SCOPE}", "demo_roster", default=[])
+        meta, _alloc, _pools = OP._demo_cockpit(self.p.app, SCOPE, roster, "2026-09-03")
+        self.assertEqual(meta[a]["decision"].state, DB.KEEP)     # ~47d — not overdue on age alone
+        self.assertEqual(meta[b]["decision"].state, DB.KEEP)     # ~44d
 
 
 if __name__ == "__main__":
