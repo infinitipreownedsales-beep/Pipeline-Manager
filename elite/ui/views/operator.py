@@ -1362,20 +1362,60 @@ def register(app):
         s.flash = "Our-trade session saved."
         return Response.redirect("/dealer-trade?tab=our")
 
-    # ---- Demos — user-first roster + call-up board ----------------------------------------------------
+    # ---- Demos — manager operating board (KEEP / PLAN SWAP / SWAP NOW / PULL) --------------------------
     @app.get("/demos")
     def demos(app, req):
+        from ...operatorstd import demo_board as DB
+        from ...clock import to_utc_iso
         s = req.session
         app.require(s, "workspace.view")
         roster = _ws_get(app, s.scope, "demo_roster", []) or []
-        short, _over = _short_over(app, s.scope)
+        today = to_utc_iso(app.stack.clock.now())[:10]
+        meta, alloc, pools = _demo_cockpit(app, s.scope, roster, today)
+        _tone = {DB.KEEP: "completed", DB.PLAN_SWAP: "need", DB.SWAP_NOW: "need", DB.PULL: "pending",
+                 DB.REVIEW: "unresolved"}
+        n_active = len(meta)
+        counts = {}
+        for m in meta.values():
+            counts[m["decision"].state] = counts.get(m["decision"].state, 0) + 1
+        summary = " · ".join(f"{k} {v}" for k, v in counts.items()) or "no active demos"
+
         rows = []
         for u in roster:
+            uid = u["id"]
+            if uid not in meta:
+                rows.append([safe(f'<a href="/demos/user/{esc(uid)}">{esc(u["name"])}</a>'),
+                             '<span class="muted">no demo assigned</span>', "—", "—", "—",
+                             safe(badge("stale", "NO DEMO")), "—"])
+                continue
+            m = meta[uid]
             cur = u.get("current") or {}
-            vel = _mileage_velocity(u)
-            rows.append([safe(f'<a href="/demos/user/{esc(u["id"])}">{esc(u["name"])}</a>'),
-                         esc(u.get("role", "")), esc(u.get("model_pref", "")),
-                         esc(cur.get("vin", "—")), esc(vel if vel is not None else "—")])
+            dec, ms = m["decision"], m["ms"]
+            build = _demo_current_build(app, s.scope, cur.get("vin")) or "—"
+            # never a full VIN on the manager board: strip the raw VIN, show a short unit tag
+            build_masked = build if (cur.get("vin", "") or "").upper() not in build.upper() else _mask_vin(cur.get("vin"))
+            demo_cell = safe(f'{esc(build_masked)} <span class="muted">· {esc(_mask_vin(cur.get("vin")))}</span>')
+            fore = "—"
+            if ms.velocity is not None:
+                fore = esc(f"~{ms.estimated:,} mi @ {ms.velocity} mi/day ({ms.confidence})") if ms.estimated else \
+                       esc(f"{ms.velocity} mi/day ({ms.confidence})")
+            a = alloc.get(uid, {})
+            path, unit = a.get("path", "NONE"), a.get("unit")
+            if path == "USE NOW":
+                rep = badge("completed", "USE NOW") + " " + esc(_mask_vin(unit))
+                if len((pools.get(m["target"]) or {}).get("current", [])) <= 1:
+                    rep += ' <span class="badge" style="color:var(--timing)">LAST ONE — protect/reorder first</span>'
+            elif path == "WAIT":
+                rep = badge("need", "WAIT FOR INCOMING") + " " + esc(_mask_vin(unit))
+            elif path == "ORDER":
+                rep = badge("pending", "ORDER FOR DEMO") + " " + esc((pools.get(m["target"]) or {}).get("label", ""))
+            else:
+                rep = '<span class="muted">—</span>'
+            rows.append([safe(f'<a href="/demos/user/{esc(uid)}">{esc(u["name"])}</a>'),
+                         demo_cell, esc(f'{dec.days}d' if dec.days is not None else "—"),
+                         esc(ms.display()), safe(fore), safe(badge(_tone.get(dec.state, "stale"), dec.state)),
+                         safe(rep)])
+
         add = form("/demos/user",
                    '<label>Name</label><input name=name required style="max-width:260px">'
                    '<label>Role / title</label><input name=role style="max-width:260px">'
@@ -1383,11 +1423,13 @@ def register(app):
                    + _select("model_pref", [("", "— any —")] + [(m, m) for m in _known_models(app, s.scope)])
                    + '<label>Trim preference</label><input name=trim_pref style="max-width:200px">',
                    csrf=s.csrf_token, submit="Add user")
-        callup = _callup_board(short)
-        body = ('<div class="card"><h2>Current Roster</h2>'
-                + table(["User", "Role", "Prefers", "Current demo VIN", "Miles/day"], rows)
-                + '</div><div class="card"><h3>Add a demo user</h3>' + add + '</div>'
-                + callup)
+        body = (f'<div class="card"><h2>Executive Demo board</h2><p><strong>{esc(n_active)} active · '
+                f'{esc(summary)}</strong></p>'
+                '<p class="muted">Firmed swap decisions are sequenced as one portfolio — a replacement unit is '
+                'never assigned to two executives. Replacement paths protect the retail position first.</p>'
+                + table(["Executive", "Current demo", "Demo days", "Mileage state", "Forecast", "Decision",
+                         "Replacement"], rows) + '</div>'
+                + '<div class="card"><h3>Add a demo user</h3>' + add + '</div>')
         return _resp(app, s, "Demos", body, "/demos")
 
     @app.post("/demos/user")
@@ -1414,32 +1456,39 @@ def register(app):
         u = next((x for x in roster if x["id"] == req.params["uid"]), None)
         if u is None:
             return app._safe_page(s, "Not found", "That demo user is not on the roster.", 404)
+        from ...operatorstd import demo_board as DB
         cur = u.get("current") or {}
-        vel = _mileage_velocity(u)
         from ...clock import to_utc_iso
         today = to_utc_iso(app.stack.clock.now())[:10]
         build = _demo_current_build(app, s.scope, cur.get("vin")) if cur else ""
+        obs, cycles = _demo_observations(u) if cur else ([], [])
+        ms = DB.mileage_state(cur.get("start"), obs, today, completed_cycles=cycles) if cur else DB.MileageState()
+        vel = ms.velocity
         info = kv([("Role", u.get("role", "")), ("Prefers", f'{u.get("model_pref","")} {u.get("trim_pref","")}'.strip()),
                    ("Current demo", (build or "—") if cur else "—"),
                    ("Current demo VIN", cur.get("vin", "—")), ("Start date", cur.get("start", "—")),
                    ("Mileage at assignment", cur.get("mi_in", "—")),
-                   ("Current mileage", cur.get("mi_now", "—") if cur else "—"),
-                   ("Personal mileage velocity", f"{vel} mi/day" if vel is not None else "—")])
+                   ("Last actual reading", f"{ms.actual:,} mi ({ms.actual_date})" if ms.actual is not None else "—"),
+                   ("Estimated today", f"~{ms.estimated:,} mi (estimate, not an odometer)"
+                    if (ms.estimated is not None and ms.source != "unknown") else "—"),
+                   ("Personal mileage velocity", f"{vel} mi/day ({ms.confidence})" if vel is not None else "—")])
 
-        # ---- DECISION A — is replacement due now? (demo policy; honest about missing current mileage) ----
-        decA = _demo_replacement_due(cur, today) if cur else {"state": "no_demo"}
-        _a_badge = {"due": badge("need", "REPLACEMENT DUE"),
-                    "keep": badge("completed", "KEEP CURRENT DEMO FOR NOW"),
-                    "unknown_mileage": badge("unresolved", "NEED CURRENT MILEAGE"),
-                    "no_demo": badge("stale", "NO DEMO ASSIGNED")}.get(decA["state"], badge("stale", "—"))
+        # ---- DECISION A — the operating call (KEEP / PLAN SWAP / SWAP NOW / PULL); never a dead-end on mileage ---
+        decA = DB.decide(cur.get("start"), today, ms, pull_reason=u.get("pull_reason", "")) if cur else None
+        _a_tone = {DB.KEEP: "completed", DB.PLAN_SWAP: "need", DB.SWAP_NOW: "need", DB.PULL: "pending",
+                   DB.REVIEW: "unresolved"}
+        _a_badge = badge(_a_tone.get(decA.state, "stale"), decA.state) if decA else badge("stale", "NO DEMO ASSIGNED")
         mileage_form = (form("/demos/user/" + u["id"] + "/mileage",
                              '<label>Current odometer reading</label>'
                              '<input name=mi type=number required style="max-width:160px">',
                              csrf=s.csrf_token, submit="Record current mileage") if cur else "")
-        decA_card = ('<div class="card"><h3>Decision A — Replacement due now?</h3>'
+        _odo_note = ('<p class="muted">An actual odometer is required before final swap execution.</p>'
+                     if (decA and decA.needs_odometer) else "")
+        _a_detail = decA.detail if decA else "No demo is currently assigned."
+        decA_card = ('<div class="card"><h3>Decision A — Operating call</h3>'
                      f'<p>{safe(_a_badge)}</p>'
-                     f'<p class="muted">{esc(decA.get("detail",""))}</p>'
-                     + (mileage_form if decA["state"] in ("unknown_mileage", "keep", "due") else "") + '</div>')
+                     f'<p class="muted">{esc(_a_detail)}</p>'
+                     + _odo_note + (mileage_form if cur else "") + '</div>')
 
         # ---- DECISION B — what should the NEXT ideal demo be? (independent of A) ----
         certs, _lk = _certified_positions(app, s.scope)
@@ -1487,12 +1536,17 @@ def register(app):
 
     @app.post("/demos/user/{uid}/mileage")
     def demos_mileage(app, req):
+        from ...clock import to_utc_iso
         s = req.session
         app.require(s, "workspace.view")
         roster = _ws_get(app, s.scope, "demo_roster", []) or []
+        today = to_utc_iso(app.stack.clock.now())[:10]
         for u in roster:
             if u["id"] == req.params["uid"] and u.get("current"):
-                u["current"]["mi_now"] = _int_or0(req.form.get("mi"))
+                mi = _int_or0(req.form.get("mi"))
+                u["current"]["mi_now"] = mi
+                # store a DATED, observed odometer point (mileage learning uses only observed readings)
+                u.setdefault("mileage_obs", []).append({"date": today, "miles": mi, "source": "manual_reading"})
                 _ws_put(app, s.scope, "demo_roster", roster)
                 s.flash = "Current mileage recorded."
                 break
@@ -1505,9 +1559,14 @@ def register(app):
         roster = _ws_get(app, s.scope, "demo_roster", []) or []
         for u in roster:
             if u["id"] == req.params["uid"]:
-                u["current"] = {"vin": (req.form.get("vin") or "").strip(),
-                                "start": (req.form.get("start") or "").strip(),
-                                "mi_in": _int_or0(req.form.get("mi"))}
+                start = (req.form.get("start") or "").strip()
+                mi_in = _int_or0(req.form.get("mi"))
+                u["current"] = {"vin": (req.form.get("vin") or "").strip(), "start": start, "mi_in": mi_in}
+                # the assignment reading is a dated observation, and the assignment itself is a history event
+                if start:
+                    u.setdefault("mileage_obs", []).append({"date": start, "miles": mi_in, "source": "assignment"})
+                u.setdefault("events", []).append({"kind": "assignment", "date": start, "vin": u["current"]["vin"],
+                                                   "mileage": mi_in})
                 _ws_put(app, s.scope, "demo_roster", roster)
                 s.flash = "Demo assigned."
                 break
@@ -1522,9 +1581,14 @@ def register(app):
             if u["id"] == req.params["uid"] and u.get("current"):
                 cur = u["current"]
                 mi_out = _int_or0(req.form.get("mi"))
+                end = (req.form.get("date") or "").strip()
                 cur["mi_out"] = mi_out
-                cur["end"] = (req.form.get("date") or "").strip()
+                cur["end"] = end
                 cur["miles"] = max(0, mi_out - _int_or0(cur.get("mi_in")))
+                if end:
+                    u.setdefault("mileage_obs", []).append({"date": end, "miles": mi_out, "source": "return"})
+                u.setdefault("events", []).append({"kind": "return", "date": end, "vin": cur.get("vin"),
+                                                   "mileage": mi_out, "miles_driven": cur["miles"]})
                 u.setdefault("history", []).append(cur)
                 u["current"] = None
                 _ws_put(app, s.scope, "demo_roster", roster)
@@ -2833,6 +2897,88 @@ def _demo_current_build(app, scope, vin):
     except Exception:   # noqa: BLE001
         pass
     return vin
+
+
+def _mask_vin(v):
+    """Manager execution views never show a full VIN — only a short unit tag (last 6). Full VINs remain in the
+    collapsed Technical Proof / audit."""
+    v = (v or "").strip().upper()
+    return f"Unit {v[-6:]}" if len(v) >= 6 else (f"Unit {v}" if v else "—")
+
+
+def _demo_governed_combos(app, scope):
+    """Certified combination_ids whose PRODUCTION IDENTITY is fully governed (recognized family + governed
+    exterior/interior names, no `(unmapped)` / phantom). A Demo replacement or ORDER target must be one of these
+    — the phantom 8311/QBE/C class can never be offered (same discipline as the CTP executable gate)."""
+    from .domains import _describe
+    conn = _conn(app)
+    canon = {c["id"]: (c["canonical_identity"] or c["id"]) for c in conn.execute(
+        "SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?", (scope,)).fetchall()}
+    ok = set()
+    for cid, canonical in canon.items():
+        d = _describe(app, scope, canonical)
+        if (d and getattr(d, "has_family", False)
+                and (getattr(d, "exterior_name", "") or "").strip()
+                and (getattr(d, "interior_name", "") or "").strip()
+                and not getattr(d, "unresolved", ())):
+            ok.add(cid)
+    return ok
+
+
+def _demo_observations(u):
+    """(observations, completed_cycles) for the driver's CURRENT assignment. Observations are DATED odometer
+    readings within the current assignment window; completed_cycles are prior whole Demo cycles (miles/days).
+    Backfills the assignment reading for legacy roster entries that predate dated observation storage."""
+    cur = u.get("current") or {}
+    start = str(cur.get("start") or "")[:10]
+    obs = [dict(o) for o in (u.get("mileage_obs") or []) if o.get("date") and o.get("miles") is not None]
+    if start and not any(str(o.get("date"))[:10] == start for o in obs) and cur.get("mi_in") is not None:
+        obs.append({"date": start, "miles": _int_or0(cur.get("mi_in")), "source": "assignment"})
+    obs = [o for o in obs if not start or str(o["date"])[:10] >= start]     # current assignment window only
+    cycles = []
+    for h in u.get("history", []):
+        try:
+            import datetime as _dt
+            d0 = _dt.date.fromisoformat(str(h.get("start"))[:10])
+            d1 = _dt.date.fromisoformat(str(h.get("end"))[:10])
+            cycles.append({"miles": _int_or0(h.get("miles")), "days": max(1, (d1 - d0).days)})
+        except Exception:   # noqa: BLE001
+            pass
+    return obs, cycles
+
+
+def _demo_cockpit(app, scope, roster, today):
+    """The manager operating board: for every active demo, the KEEP/PLAN SWAP/SWAP NOW/PULL/REVIEW decision, the
+    observed/estimated mileage state, and a portfolio-allocated replacement path (one physical unit never
+    assigned twice). Reuses the governed physical pools + demo_board engine; no economics, no full VINs."""
+    from ...operatorstd import demo_board as DB
+    certs, label_to_key = _certified_positions(app, scope)
+    governed = _demo_governed_combos(app, scope)
+    needy = [c for c in certs if c["acquire_units"] > 0 and c["key"] in governed]   # governed targets only
+    label_of = {c["key"]: c["label"] for c in certs}
+
+    def target_for(pref):
+        pool = [c for c in needy if _model_of(c["label"]) == pref] if pref else []
+        pool = pool or needy
+        pool = sorted(pool, key=lambda c: -c["acquire_units"])
+        return pool[0]["key"] if pool else None
+
+    entries, meta, pools = [], {}, {}
+    for u in roster:
+        cur = u.get("current") or {}
+        if not cur.get("vin"):
+            continue
+        obs, cycles = _demo_observations(u)
+        ms = DB.mileage_state(cur.get("start"), obs, today, completed_cycles=cycles)
+        dec = DB.decide(cur.get("start"), today, ms, pull_reason=u.get("pull_reason", ""))
+        tgt = target_for((u.get("model_pref") or "").upper())
+        if tgt is not None and tgt not in pools:
+            c, i, order_ok = _demo_pools(app, scope, tgt)
+            pools[tgt] = {"current": c, "incoming": i, "order": order_ok, "label": label_of.get(tgt, "")}
+        entries.append({"id": u["id"], "decision": dec, "pool_key": tgt})
+        meta[u["id"]] = {"user": u, "decision": dec, "ms": ms, "target": tgt}
+    alloc = DB.allocate_replacements(entries, pools)
+    return meta, alloc, pools
 
 
 def _demo_call_card(app, scope, cid, label):

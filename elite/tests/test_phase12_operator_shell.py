@@ -65,8 +65,8 @@ class TestOperatorShell(unittest.TestCase):
     # Demos is an operator shell, not the backend portfolio-plan page, and does not fabricate a roster
     def test_demos_honest(self):
         b = self.full.get("/demos").body
-        self.assertIn("Current Roster", b)
-        self.assertIn("roster", b.lower())
+        self.assertIn("Executive Demo board", b)                 # the manager operating board
+        self.assertIn("active", b.lower())
 
     # certified backend untouched
     def test_backend_unchanged(self):

@@ -50,25 +50,29 @@ class TestDemosRender(unittest.TestCase):
         self.full.post("/demos/user", {"name": "Nathan", "role": "Sales", "model_pref": "QX60"})
         roster = self.p.app.prefs.get_pref(f"scope::{SCOPE}", "demo_roster", default=[])
         self.uid = roster[0]["id"]
-        self.full.post(f"/demos/user/{self.uid}/assign", {"vin": "5N1AL1HU1TC344699", "start": "2026-08-01", "mi": "40"})
+        # fixture clock is 2026-01-02; assign ~93 days earlier so the cadence window is reached
+        self.full.post(f"/demos/user/{self.uid}/assign", {"vin": "5N1AL1HU1TC344699", "start": "2025-10-01", "mi": "40"})
 
     def tearDown(self):
         self.p.close()
 
     def test_decisions_are_separate_and_honest(self):
         b = self.full.get(f"/demos/user/{self.uid}").body
-        self.assertIn("Decision A — Replacement due now?", b)
+        self.assertIn("Decision A — Operating call", b)            # new operating vocabulary
         self.assertIn("Decision B — Next ideal demo", b)
-        self.assertIn("NEED CURRENT MILEAGE", b)                   # no odometer yet -> not pretended due
-        # record a low current mileage -> KEEP CURRENT DEMO FOR NOW, while Decision B still shows independently
+        # ~93 days in service with no fresh odometer -> PLAN SWAP (never a dead-end), odometer required for swap
+        self.assertIn("PLAN SWAP", b)
+        self.assertNotIn("NEED CURRENT MILEAGE", b)
+        self.assertIn("odometer is required before final swap", b)
+        # a low current odometer keeps it operational; Decision B still shows independently
         self.full.post(f"/demos/user/{self.uid}/mileage", {"mi": "900"})
         b2 = self.full.get(f"/demos/user/{self.uid}").body
-        self.assertIn("KEEP CURRENT DEMO FOR NOW", b2)
+        self.assertTrue("PLAN SWAP" in b2 or "KEEP" in b2)
         self.assertIn("Decision B — Next ideal demo", b2)
-        # record a high current mileage -> REPLACEMENT DUE
-        self.full.post(f"/demos/user/{self.uid}/mileage", {"mi": str(40 + DEMO_SWAP_MILES + 100)})
+        # a high ACTUAL odometer authorizes SWAP NOW
+        self.full.post(f"/demos/user/{self.uid}/mileage", {"mi": str(DEMO_SWAP_MILES + 100)})
         b3 = self.full.get(f"/demos/user/{self.uid}").body
-        self.assertIn("REPLACEMENT DUE", b3)
+        self.assertIn("SWAP NOW", b3)
 
 
 if __name__ == "__main__":

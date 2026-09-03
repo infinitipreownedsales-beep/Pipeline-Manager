@@ -76,8 +76,8 @@ class TestOperatorFunctional(unittest.TestCase):
         self.assertTrue(any(c in b for c in ("USE NOW", "WAIT FOR INCOMING", "ORDER FOR DEMO",
                                              "PENDING DEMO ECONOMICS")))
         self.assertIn("Current on-ground VINs", b)
-        # call-up board answers by model
-        self.assertIn("Best available QX60 demo", self.full.get("/demos").body)
+        # the /demos manager board is the operating cockpit (replacement is expressed per-executive now)
+        self.assertIn("Executive Demo board", self.full.get("/demos").body)
 
     # Dealer Trade Their: paste inventory, best-ask ranks, Unavailable promotes next
     def test_their_trade_unavailable_promotes(self):
