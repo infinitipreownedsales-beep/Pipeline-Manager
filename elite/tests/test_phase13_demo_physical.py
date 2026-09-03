@@ -95,8 +95,20 @@ class TestDemoPhysicalAvailability(unittest.TestCase):
         _cur, inc, _o = OP._demo_pools(self.p.app, SCOPE, self.gov.id)
         self.assertEqual([u.vin for u in inc], ["Q38296"])
 
+    # ROOT-CAUSE FIX: an incoming unit whose own DMS INVENTORY row is absent (it lives in the pipeline /
+    # production-orders source, not read_new_retail_units) still shows its human build — resolved from the
+    # already-governed COMBINATION identity the engine selected. This is the live Holly `Q38296` case.
+    def test_incoming_unit_label_resolves_from_combination_when_not_in_inventory(self):
+        # NO inventory snapshot imported for Q38296 -> _demo_current_build alone cannot resolve it
+        self.assertEqual(OP._demo_current_build(self.p.app, SCOPE, "Q38296"), "")
+        label = OP._demo_unit_label(self.p.app, SCOPE, "Q38296", combination_id=self.gov.id)
+        self.assertIn("QX80", label)                              # human build from the governed combination
+        self.assertTrue(any(c in label for c in ("Black Obsidian", "KH3")))
+        self.assertIn("Unit Q38296", label)                      # exact selected unit, unchanged
+        self.assertNotIn("·  ·", label)
+
     def test_unit_label_falls_back_to_tag_when_build_unresolvable(self):
-        # no DMS row for this id -> honest unit tag only, never a fabricated build
+        # no DMS row AND no combination -> honest unit tag only, never a fabricated build
         self.assertEqual(OP._demo_unit_label(self.p.app, SCOPE, "331601"), "Unit 331601")
 
     # committed (active-demo) units are excluded from the pool — count-once holds over the live source too

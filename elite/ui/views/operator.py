@@ -1410,11 +1410,13 @@ def register(app):
             path, unit = a.get("path", "NONE"), a.get("unit")
             pool = pools.get(m["target"]) or {}
             if path == "USE NOW":
-                rep = badge("completed", "USE NOW") + " " + esc(_demo_unit_label(app, s.scope, unit))
+                rep = badge("completed", "USE NOW") + " " + esc(_demo_unit_label(app, s.scope, unit,
+                                                                                 combination_id=m["target"]))
                 if len(pool.get("current", [])) <= 1:
                     rep += ' <span class="badge" style="color:var(--timing)">LAST ONE — protect/reorder first</span>'
             elif path == "WAIT":
-                rep = badge("need", "WAIT FOR INCOMING") + " " + esc(_demo_unit_label(app, s.scope, unit))
+                rep = badge("need", "WAIT FOR INCOMING") + " " + esc(_demo_unit_label(app, s.scope, unit,
+                                                                                     combination_id=m["target"]))
             elif path == "ORDER":
                 # deterministic identity is NOT proof the factory accepts an order today (CTP discipline)
                 if pool.get("orderable"):
@@ -3049,15 +3051,40 @@ def _mask_vin(v):
     return f"Unit {v[-6:]}" if len(v) >= 6 else (f"Unit {v}" if v else "—")
 
 
-def _demo_unit_label(app, scope, op_id):
+def _demo_combo_build(app, scope, cid):
+    """The governed human build (model / trim / drivetrain / exterior · interior) for a combination, from its
+    canonical identity — the SAME governed identity the Demo candidate/replacement engine already resolved. Used
+    to label a selected physical unit whose own DMS inventory row is NOT in `read_new_retail_units` (e.g. an
+    incoming Production-Order unit lives in the pipeline/production-orders source, not the inventory snapshot).
+    '' when the combination cannot be described (never fabricated)."""
+    if not cid:
+        return ""
+    try:
+        row = _conn(app).execute("SELECT canonical_identity FROM sellable_combination WHERE id=? AND store_scope=?",
+                                 (cid, scope)).fetchone()
+        if not row:
+            return ""
+        from .domains import _describe
+        d = _describe(app, scope, row["canonical_identity"] or cid)
+        if d:
+            line = d.vehicle or ""
+            colours = d.colours(with_code=False, drop_unmapped=True) if hasattr(d, "colours") else ""
+            return " — ".join(x for x in (line, colours) if x)
+    except Exception:   # noqa: BLE001
+        pass
+    return ""
+
+
+def _demo_unit_label(app, scope, op_id, *, combination_id=None):
     """Presentation for a physical unit on the manager surface: the governed human build (model / trim /
-    drivetrain / exterior) + the operational unit tag, resolved from the SAME authoritative DMS identity the
-    engine already used. Falls back to just the unit tag when the build cannot be joined (never a fabricated
-    build, never a VIN)."""
+    drivetrain / exterior) + the operational unit tag. The build resolves from the unit's own DMS inventory row
+    when present, ELSE from its already-governed COMBINATION identity — so an incoming Production-Order unit
+    (which the candidate engine selected from the pipeline, not the inventory snapshot) still shows its human
+    build. Falls back to the unit tag alone when neither resolves (never a fabricated build, never a VIN)."""
     op_id = (op_id or "").strip()
     if not op_id:
         return "—"
-    build = _demo_current_build(app, scope, op_id)
+    build = _demo_current_build(app, scope, op_id) or _demo_combo_build(app, scope, combination_id)
     tag = _mask_vin(op_id)
     return f"{build} · {tag}" if build else tag
 
