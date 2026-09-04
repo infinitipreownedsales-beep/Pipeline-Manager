@@ -1530,9 +1530,12 @@ def register(app):
                                            - _dt.date.fromisoformat(str(cur["start"])[:10])).days)
             except Exception:   # noqa: BLE001
                 _days_in_service = None
+        _prov = ctx.get("age_provenance", "")
+        _prov_txt = f' ({_prov})' if _prov and _prov != "live inventory" else ""
         _inv_line = (f'{ctx.get("in_stock_date")} in stock'
                      + (f' · ~{ctx.get("inv_age")} inventory age' if ctx.get("inv_age") not in ("—", "unknown", "") else "")
-                     if ctx.get("in_stock_date") else (ctx.get("inv_age") or "—"))
+                     + _prov_txt
+                     if ctx.get("in_stock_date") else ((ctx.get("inv_age") or "—") + _prov_txt))
         info = kv([("Role", u.get("role", "")), ("Prefers", f'{u.get("model_pref","")} {u.get("trim_pref","")}'.strip()),
                    ("Current demo", (build or "—") if cur else "—"),
                    ("Operational unit", ctx.get("unit_tag", "—") if cur else "—"),
@@ -1590,7 +1593,8 @@ def register(app):
             model_filter = (req.q("rep") or "").strip().upper() or None
             if model_filter not in ("QX60", "QX65", "QX80"):
                 model_filter = None
-            all_cards = _demo_candidate_cards(app, s.scope, preferred_model=pref, reserved_exclude_uid=u["id"])
+            all_cards = _demo_candidate_cards(app, s.scope, preferred_model=pref, reserved_exclude_uid=u["id"],
+                                              urgency=_demo_urgency(m["decision"].state), today=today)
             cards = [c for c in all_cards if (not model_filter or c["model"] == model_filter)]
 
             tabs = []
@@ -1623,9 +1627,9 @@ def register(app):
                                  + f' <span class="muted">({c["on_ground"]} available)</span>')
                 if c["inc_unit"]:
                     ic = c["inc_unit"]
-                    lines.append(f'Incoming: {esc(ic["tag"])}'
+                    lines.append(f'Incoming: Pipeline unit {esc(ic["pipeline_unit"])}'
                                  + (f' · stock {esc(ic["stock"])}' if ic["stock"] else "")
-                                 + (f' · production/order #{esc(ic["order_number"])}' if ic["order_number"] else "")
+                                 + (f' · Production/order #{esc(ic["order_number"])}' if ic["order_number"] else "")
                                  + (f' · ETA {esc(ic["eta"])}' if ic["eta"] else "")
                                  + f' <span class="muted">({c["incoming"]} incoming)</span>')
                 if not c["og_unit"] and not c["inc_unit"]:
@@ -1643,10 +1647,16 @@ def register(app):
                         f'days-to-sell {esc(pf.get("days_to_sell_burden"))}, '
                         f'planning depth {esc(pf.get("planning_depth"))}, '
                         f'certified need {esc(pf.get("certified_need"))}, score {esc(pf.get("score"))}</span></details>')
-                sel_btn = ("" if c["cid"] == selected_cid else
-                           form("/demos/user/" + u["id"] + "/select",
-                                f'<input type=hidden name=cid value="{esc(c["cid"])}">',
-                                csrf=s.csrf_token, submit="Select this replacement"))
+                if c["cid"] == selected_cid:
+                    sel_btn = ""
+                elif not c.get("executable"):
+                    # EXECUTION GATE: an unresolved order path stays visible but is NOT selectable/reservable
+                    sel_btn = ('<p><span class="badge" style="color:var(--timing)">Review order path — not '
+                               'selectable until the order is governed / executable</span></p>')
+                else:
+                    sel_btn = form("/demos/user/" + u["id"] + "/select",
+                                   f'<input type=hidden name=cid value="{esc(c["cid"])}">',
+                                   csrf=s.csrf_token, submit="Select this replacement")
                 body_lines = "".join(f'<p style="margin:2px 0">{ln}</p>' for ln in lines)
                 crows += f'<div class="card" style="margin:8px 0"><p>{head}</p>{safe(body_lines)}{sel_btn}</div>'
             if not cards:
@@ -1688,22 +1698,30 @@ def register(app):
             if sc and sc["inc_unit"] and (sc["inc_unit"]["order_number"] or sc["inc_unit"]["eta"]):
                 ic = sc["inc_unit"]
                 plan_lines.append('Availability: incoming'
-                                  + (f' · production/order #{esc(ic["order_number"])}' if ic["order_number"] else "")
+                                  + (f' · Production/order #{esc(ic["order_number"])}' if ic["order_number"] else "")
                                   + (f' · ETA {esc(ic["eta"])}' if ic["eta"] else ""))
             if outgoing:
                 plan_lines.append('Outgoing demo: ' + safe(badge("pending", outgoing)))
             plan_lines.append('Final required observation: the outgoing vehicle\'s actual odometer, entered when '
                               'you complete the swap.')
             plan_html = "".join(f'<p style="margin:3px 0">{x}</p>' for x in plan_lines)
+            sel_executable = bool(sc and sc.get("executable"))
             if not res:
-                exec_html = form("/demos/user/" + u["id"] + "/plan",
-                                 f'<input type=hidden name=cid value="{esc(selected_cid)}">',
-                                 csrf=s.csrf_token, submit="PLAN SWAP — reserve this replacement")
+                if sel_executable:
+                    exec_html = form("/demos/user/" + u["id"] + "/plan",
+                                     f'<input type=hidden name=cid value="{esc(selected_cid)}">',
+                                     csrf=s.csrf_token, submit="PLAN SWAP — reserve this replacement")
+                else:
+                    # EXECUTION GATE: no on-ground/incoming unit and no governed executable order — cannot reserve
+                    exec_html = ('<p><span class="badge" style="color:var(--timing)">PLAN SWAP unavailable — the '
+                                 'selected path has no on-ground / incoming unit or governed executable order yet. '
+                                 'Choose a candidate with an available unit, or resolve the order path first.'
+                                 '</span></p>')
             else:
                 held = _demo_unit_label(app, s.scope, res.get("op_id", ""), combination_id=res.get("cid")) \
                     if res.get("op_id") else (res.get("build") or "order path")
                 res_line = ('<p>' + safe(badge("completed", "RESERVED")) + f' {esc(held)}'
-                            + (f' · production/order #{esc(res.get("order_number"))}' if res.get("order_number") else "")
+                            + (f' · Production/order #{esc(res.get("order_number"))}' if res.get("order_number") else "")
                             + (f' · ETA {esc(res.get("eta"))}' if res.get("eta") else "") + '</p>')
                 complete_form = form("/demos/user/" + u["id"] + "/complete",
                                      '<label>Final actual odometer (outgoing)</label>'
@@ -1726,10 +1744,28 @@ def register(app):
                     '<label>Return / swap mileage</label><input name=mi type=number required style="max-width:160px">'
                     '<label>Swap date</label><input name=date type=date style="max-width:180px">',
                     csrf=s.csrf_token, submit="Record return / swap") if cur else "")
+        # Record known vehicle context — the one-time governed backfill for an active demo whose context cannot
+        # be sourced from any authoritative snapshot / history (operator-observed provenance, never guessed).
+        ctx_record = ""
+        if cur and ctx.get("incomplete"):
+            ctx_record = ('<div class="card"><h3>Record known vehicle context</h3>'
+                          '<p class="muted">No authoritative snapshot or inventory history was found for this '
+                          'active demo. Enter source-backed known values so fleet context is not left blank — '
+                          'this is recorded as operator-observed, not system-derived. Inventory age is taken from '
+                          'the in-stock date you provide, never from the Demo start date.</p>'
+                          + form("/demos/user/" + u["id"] + "/context",
+                                 '<label>Build — model · trim · drivetrain · colours</label>'
+                                 f'<input name=build value="{esc(ctx.get("build",""))}" style="max-width:420px">'
+                                 '<label>Stock #</label>'
+                                 f'<input name=stock value="{esc(ctx.get("stock",""))}" style="max-width:160px">'
+                                 '<label>Original in-stock date (source-backed)</label>'
+                                 '<input name=in_stock_date type=date style="max-width:180px">',
+                                 csrf=s.csrf_token, submit="Record known context")
+                          + '</div>')
         hrows = [[esc(h.get("vin", "")), esc(h.get("mi_in", "")), esc(h.get("mi_out", "")),
                   esc(h.get("miles", "")), esc(h.get("start", "")), esc(h.get("end", ""))] for h in u.get("history", [])]
         body = (f'<p><a href="/demos">← Roster</a></p><div class="card"><h2>{esc(u["name"])}</h2>{info}</div>'
-                + decA_card + decB_card + swap_card
+                + ctx_record + decA_card + decB_card + swap_card
                 + '<div class="card"><h3>Assign / swap</h3>' + assign + ret + '</div>'
                 '<div class="card"><h3>Demo history</h3>'
                 + table(["VIN", "Miles in", "Miles out", "Driven", "Start", "End"], hrows) + '</div>')
@@ -1848,16 +1884,24 @@ def register(app):
                                inv_age=(f'{best.age_days}d' if getattr(best, "age_days", None) is not None else ""))
                 elif inc:
                     u0 = inc[0]
-                    ref = order_idx.get((u0.vin or "").strip().upper()) or {}
-                    res.update(op_id=(u0.vin or ""), path="WAIT", stock=getattr(u0, "stock", "") or "",
-                               order_number=ref.get("order_number", ""),
+                    op_id = (u0.vin or "").strip()
+                    ref = order_idx.get(op_id.upper()) or {}
+                    onum = (ref.get("order_number") or "").strip()
+                    res.update(op_id=op_id, path="WAIT", stock=getattr(u0, "stock", "") or "",
+                               order_number=(onum if onum and onum.upper() != op_id.upper() else ""),
                                eta=ref.get("eta", "") or (getattr(u0, "arrival_month", "") or ""))
                 else:
+                    # EXECUTION GATE: no on-ground/incoming unit — a reservation is allowed ONLY against a
+                    # governed executable order commitment, never an unresolved order path.
+                    if not _demo_order_orderable(app, s.scope, cid):
+                        s.flash = ("Cannot reserve — the order path is not yet governed / executable. "
+                                   "Review the order path first.")
+                        return Response.redirect("/demos/user/" + req.params["uid"])
                     res.update(op_id="", path="ORDER")
                 u["current"]["reservation"] = res
                 _ws_put(app, s.scope, "demo_roster", roster)
                 s.flash = ("Replacement reserved — held for this executive." if res.get("op_id")
-                           else "Order path planned — no physical unit to hold yet.")
+                           else "Governed order commitment planned — no physical unit to hold yet.")
                 break
         return Response.redirect("/demos/user/" + req.params["uid"])
 
@@ -1872,6 +1916,36 @@ def register(app):
                 u["current"].pop("reservation", None)
                 _ws_put(app, s.scope, "demo_roster", roster)
                 s.flash = "Reservation released."
+                break
+        return Response.redirect("/demos/user/" + req.params["uid"])
+
+    @app.post("/demos/user/{uid}/context")
+    def demos_context(app, req):
+        # GAP 1: one-time governed "Record known vehicle context" for an active demo with no authoritative
+        # snapshot / history. Stored as operator-OBSERVED provenance (never system-derived). Inventory age is
+        # taken from the recorded in-stock date, NEVER inferred from the Demo start date.
+        from ...clock import to_utc_iso
+        s = req.session
+        app.require(s, "workspace.view")
+        roster = _ws_get(app, s.scope, "demo_roster", []) or []
+        today = to_utc_iso(app.stack.clock.now())[:10]
+        for u in roster:
+            if u["id"] == req.params["uid"] and u.get("current"):
+                oc = {"provenance": "operator_observed", "recorded_by": s.principal_id, "recorded_at": today}
+                build = (req.form.get("build") or "").strip()
+                stock = (req.form.get("stock") or "").strip()
+                in_stock = (req.form.get("in_stock_date") or "").strip()
+                if build:
+                    oc["build"] = build
+                    oc["model"] = _model_of(build)
+                if stock:
+                    oc["stock"] = stock
+                if in_stock:
+                    oc["in_stock_date"] = in_stock
+                if len(oc) > 3:                       # something beyond the provenance stamp was actually entered
+                    u["current"]["observed_context"] = oc
+                    _ws_put(app, s.scope, "demo_roster", roster)
+                    s.flash = "Known vehicle context recorded (operator-observed)."
                 break
         return Response.redirect("/demos/user/" + req.params["uid"])
 
@@ -3368,35 +3442,161 @@ def _demo_assignment_snapshot(app, scope, ident, *, today=None):
     return {k: v for k, v in snap.items() if v not in (None, "")}
 
 
+def _demo_historical_context(app, scope, ident):
+    """Recover an active Demo unit's context from the AUTHORITATIVE inventory-snapshot HISTORY when it is no
+    longer in the current retail feed: scan prior snapshots (newest first) for a row matching the unit's
+    VIN / serial / stock and rebuild model / trim / colours, stock, production month, and the original in-stock
+    date (a matching snapshot's observed date − that row's days-in-stock). Provenance is the snapshot lineage,
+    never a guess. Returns {} when no historical row exists. Inventory age is NEVER inferred from the Demo start
+    date — only from a snapshot's own DIS."""
+    ident_u = (ident or "").strip().upper()
+    if not ident_u:
+        return {}
+    try:
+        from ...loaner.placement import _authoritative_vin, INVENTORY_CONTRACTS
+        from ...newinv.snapshots import SnapshotReader
+        from ...newinv.dms_identity import dms_planning_identity
+        from .domains import _describe
+        ops = _ops_stack(app)
+        ops_store = getattr(ops, "ops", None) if ops else None
+        if ops_store is None:
+            return {}
+        reader = SnapshotReader(ops_store, ops.data)
+    except Exception:   # noqa: BLE001
+        return {}
+
+    def _matches(r):
+        rv, ok, serial = _authoritative_vin(r)
+        stock = str(r.get("stock_number") or r.get("stock") or "").strip().upper()
+        return ident_u in ({(rv if ok else "").strip().upper(), (serial or "").strip().upper(), stock} - {""})
+
+    out = {"provenance": "historical_snapshot"}
+    import datetime as _dt
+    for key in INVENTORY_CONTRACTS:
+        try:
+            snaps = reader.list_snapshots(ops.source_id(key), scope)
+        except Exception:   # noqa: BLE001
+            snaps = []
+        for s in reversed(snaps):                       # newest snapshot first
+            try:
+                rows = reader.snapshot_rows(s)
+            except Exception:   # noqa: BLE001
+                continue
+            match = next((r for r in rows if _matches(r)), None)
+            if match is None:
+                continue
+            if "build" not in out:
+                try:
+                    d = _describe(app, scope, dms_planning_identity(match))
+                    if d:
+                        line = d.vehicle or ""
+                        colours = d.colours(with_code=False, drop_unmapped=True) if hasattr(d, "colours") else ""
+                        b = " — ".join(x for x in (line, colours) if x)
+                        if b:
+                            out["build"] = b
+                        out["model"] = _model_of(line) or ""
+                except Exception:   # noqa: BLE001
+                    pass
+                rv, ok, serial = _authoritative_vin(match)
+                st = str(match.get("stock_number") or match.get("stock") or "").strip()
+                out["op_id"] = _demo_op_id(rv if ok else "", serial, st)
+                if st:
+                    out["stock"] = st
+                pm = str(match.get("production_month") or match.get("pm") or "").strip()
+                if pm:
+                    out["production_month"] = pm
+            if "in_stock_date" not in out:
+                dis = _dms_dis(match)
+                obs = (getattr(s, "business_date", "") or (getattr(s, "observed_time", "") or "")[:10])
+                if dis is not None and obs:
+                    try:
+                        out["in_stock_date"] = (_dt.date.fromisoformat(obs[:10])
+                                                - _dt.timedelta(days=dis)).isoformat()
+                    except Exception:   # noqa: BLE001
+                        pass
+            if "build" in out and "in_stock_date" in out:
+                break
+        if "build" in out and "in_stock_date" in out:
+            break
+    return out if (out.get("build") or out.get("in_stock_date") or out.get("stock")) else {}
+
+
 def _demo_current_context(app, scope, u, today):
-    """Current-demo context for the operator surfaces. Reads the PERSISTED assignment snapshot first (so build,
-    operational unit, stock and inventory age / in-stock date survive the unit leaving the current-retail feed),
-    with a LIVE retail-feed fallback for demos assigned before snapshots existed (backfill ONLY where the unit is
-    still provable in an authoritative source — never guessed). Returns display-ready fields; '' / 'unknown' where
-    a fact genuinely cannot be sourced."""
+    """Current-demo context for the operator surfaces, resolved through authoritative tiers (highest provenance
+    wins, never a guess): (1) the PERSISTED assignment snapshot; (2) the LIVE retail feed; (3) the inventory
+    SNAPSHOT HISTORY (for demos assigned before snapshots existed); (4) an operator-RECORDED known-vehicle
+    context. Inventory age is NEVER inferred from the Demo start date. Returns display-ready fields plus an
+    `incomplete` flag (True when core context still cannot be sourced) and the age provenance."""
+    import datetime as _dt
     cur = u.get("current") or {}
     snap = cur.get("snapshot") or {}
+    obs = cur.get("observed_context") or {}
     ident = cur.get("vin", "")
-    build = snap.get("build") or _demo_current_build(app, scope, ident)
+
+    def _age_from(in_stock):
+        try:
+            days = (_dt.date.fromisoformat(str(today)[:10]) - _dt.date.fromisoformat(str(in_stock)[:10])).days
+            return max(0, days)
+        except Exception:   # noqa: BLE001
+            return None
+
     op_id = snap.get("op_id") or (ident or "").strip().upper()
     unit_tag = _mask_vin(op_id)
+    build = snap.get("build") or _demo_current_build(app, scope, ident)
     stock = snap.get("stock") or ""
     in_stock_date = snap.get("in_stock_date") or ""
-    # inventory age: live snapshot row first (still in feed), else compute forward from the persisted assignment age
+    model = snap.get("model", "")
+    production_month = snap.get("production_month", "")
+
+    # tier 2 — live retail feed inventory age (still in feed)
     inv_age = _demo_inv_age(app, scope, ident)
+    age_provenance = "live inventory" if inv_age not in ("—", "unknown") else ""
+    # tier 1 — forward from the persisted assignment snapshot DIS
     if inv_age in ("—", "unknown") and snap.get("dis") is not None:
         age = snap["dis"]
         try:
-            import datetime as _dt
             if snap.get("captured_at"):
                 age = int(snap["dis"]) + max(0, (_dt.date.fromisoformat(str(today)[:10])
                                                  - _dt.date.fromisoformat(snap["captured_at"])).days)
         except Exception:   # noqa: BLE001
             age = snap["dis"]
-        inv_age = f"{age}d (from assignment snapshot)"
-    return {"build": build, "op_id": op_id, "unit_tag": unit_tag, "stock": stock,
-            "inv_age": inv_age, "in_stock_date": in_stock_date, "model": snap.get("model", ""),
-            "production_month": snap.get("production_month", "")}
+        inv_age, age_provenance = f"{age}d", "assignment snapshot"
+
+    # tier 3 — inventory SNAPSHOT HISTORY (only scanned when context is still missing)
+    if not build or not stock or (inv_age in ("—", "unknown") and not in_stock_date):
+        hist = _demo_historical_context(app, scope, ident)
+        if hist:
+            build = build or hist.get("build", "")
+            stock = stock or hist.get("stock", "")
+            model = model or hist.get("model", "")
+            production_month = production_month or hist.get("production_month", "")
+            op_id = op_id or hist.get("op_id", "")
+            if not in_stock_date and hist.get("in_stock_date"):
+                in_stock_date = hist["in_stock_date"]
+                a = _age_from(in_stock_date)
+                if a is not None:
+                    inv_age, age_provenance = f"{a}d", "historical snapshot"
+
+    # tier 4 — operator-RECORDED known-vehicle context (provenance: operator-observed, not system-derived)
+    if obs:
+        build = build or obs.get("build", "")
+        stock = stock or obs.get("stock", "")
+        model = model or obs.get("model", "")
+        if not in_stock_date and obs.get("in_stock_date"):
+            in_stock_date = obs["in_stock_date"]
+        if inv_age in ("—", "unknown"):
+            if obs.get("in_stock_date"):
+                a = _age_from(obs["in_stock_date"])
+                if a is not None:
+                    inv_age, age_provenance = f"{a}d", "operator-observed"
+            elif obs.get("inv_age_days") not in (None, ""):
+                inv_age, age_provenance = f'{int(obs["inv_age_days"])}d', "operator-observed"
+
+    incomplete = (not build) or (not stock) or (inv_age in ("—", "unknown") and not in_stock_date)
+    return {"build": build, "op_id": op_id, "unit_tag": _mask_vin(op_id) if op_id else unit_tag,
+            "stock": stock, "inv_age": inv_age, "age_provenance": age_provenance,
+            "in_stock_date": in_stock_date, "model": model, "production_month": production_month,
+            "incomplete": incomplete}
 
 
 def _demo_current_build(app, scope, vin):
@@ -3606,6 +3806,57 @@ def _demo_outgoing(decision_state, *, replacement_secured, sl_need):
     return "RETURN TO RETAIL"
 
 
+def _demo_eta_days(eta, today):
+    """Days from `today` to an ETA expressed as YYYY-MM-DD or YYYY-MM (month -> first of month). None when it
+    cannot be parsed. Never negative-clamped here (caller decides)."""
+    import datetime as _dt
+    s = str(eta or "").strip()
+    if not s:
+        return None
+    try:
+        t = _dt.date.fromisoformat(str(today)[:10])
+        if len(s) >= 10:
+            d = _dt.date.fromisoformat(s[:10])
+        elif len(s) == 7:
+            d = _dt.date.fromisoformat(s + "-01")
+        else:
+            return None
+        return (d - t).days
+    except Exception:   # noqa: BLE001
+        return None
+
+
+def _demo_urgency(decision_state):
+    """How urgently this executive must move, 0..1 — scales the availability-timing factor only. A firm swap is
+    pressing; a young/kept demo is not. Never changes the machine ranking's other factors."""
+    from ...operatorstd import demo_board as DB
+    return {DB.SWAP_NOW: 1.0, DB.PULL: 0.8, DB.PLAN_SWAP: 0.6, DB.REVIEW: 0.4, DB.KEEP: 0.2}.get(
+        decision_state, 0.4)
+
+
+def _demo_timing_days(app, scope, cid, today, *, order_idx=None):
+    """Days until this combination's SOONEST placeable Demo unit: 0 when a unit is on the ground now, else the
+    days to the earliest incoming ETA (day- or month-level, whichever the Pipeline knows), else None when there
+    is no on-ground/incoming physical unit (order-only / maximally distant). Reuses the governed physical pools
+    and the authoritative order index; never fabricated."""
+    try:
+        cur, inc, _order_ok = _demo_pools(app, scope, cid)
+    except Exception:   # noqa: BLE001
+        return None
+    if cur:
+        return 0
+    if not inc:
+        return None
+    idx = order_idx if order_idx is not None else _demo_order_index(app, scope)
+    days = []
+    for u in inc:
+        ref = idx.get((getattr(u, "vin", "") or "").strip().upper()) or {}
+        d = _demo_eta_days(ref.get("eta") or getattr(u, "arrival_month", None), today)
+        if d is not None:
+            days.append(max(0, d))
+    return min(days) if days else 21     # incoming but ETA unknown — near, but not on-ground
+
+
 def _demo_cockpit(app, scope, roster, today):
     """The manager operating board: for every active demo, the KEEP/PLAN SWAP/SWAP NOW/PULL/REVIEW decision, the
     correct mileage/learning state, a Demo-suitability-ranked + portfolio-allocated replacement path (one
@@ -3618,7 +3869,15 @@ def _demo_cockpit(app, scope, roster, today):
     label_of = {c["key"]: c["label"] for c in certs}
     model_of = {c["key"]: _model_of(c["label"]) for c in certs}
 
-    def _candidates(pref):
+    order_idx = _demo_order_index(app, scope)
+    timing_cache = {}
+
+    def _timing(cid):
+        if cid not in timing_cache:
+            timing_cache[cid] = _demo_timing_days(app, scope, cid, today, order_idx=order_idx)
+        return timing_cache[cid]
+
+    def _candidates(pref, urgency):
         cands = []
         for c in certs:
             cid = c["key"]
@@ -3629,8 +3888,9 @@ def _demo_cockpit(app, scope, roster, today):
             cands.append({"cid": cid, "label": label_of.get(cid, ""), "model": model_of.get(cid, ""),
                           "need": c["acquire_units"], "dts_burden": sig.get("dts_burden", 0.0),
                           "expected_demand": sig.get("expected_demand", 0.0), "depth": depth,
-                          "last_on_lot": depth <= 1, "has_incoming_or_order": True, "governed": True})
-        ranked = DB.rank_demo_candidates(cands, preferred_model=(pref or None))
+                          "last_on_lot": depth <= 1, "has_incoming_or_order": True, "governed": True,
+                          "timing_days": _timing(cid)})
+        ranked = DB.rank_demo_candidates(cands, preferred_model=(pref or None), urgency=urgency)
         # honor a stated preference as a filter when at least one preferred candidate is eligible
         if pref:
             pref_hits = [r for r in ranked if r.model == pref and r.eligible]
@@ -3648,7 +3908,7 @@ def _demo_cockpit(app, scope, roster, today):
         assignment_mi, obs, cycles = _demo_observations(u)
         ms = DB.mileage_state(cur.get("start"), assignment_mi, obs, today, completed_cycles=cycles)
         dec = DB.decide(cur.get("start"), today, ms, pull_reason=u.get("pull_reason", ""))
-        best, ranked = _candidates((u.get("model_pref") or "").upper())
+        best, ranked = _candidates((u.get("model_pref") or "").upper(), _demo_urgency(dec.state))
         tgt = best.cid if best else None
         if tgt is not None and tgt not in pools:
             c, i, order_ok = _demo_pools(app, scope, tgt)
@@ -3725,15 +3985,29 @@ def _demo_order_index(app, scope):
     return idx
 
 
-def _demo_candidate_cards(app, scope, *, preferred_model=None, model_filter=None, reserved_exclude_uid=None):
+def _demo_op_ref(op_id):
+    """Operational identifier for the manager surface: a real 17-char VIN is masked; a shorter serial/stock
+    (a Pipeline operational id, e.g. Q38296) is safe to show in full."""
+    v = (op_id or "").strip().upper()
+    if not v:
+        return "—"
+    return _mask_vin(v) if len(v) == 17 else v
+
+
+def _demo_candidate_cards(app, scope, *, preferred_model=None, model_filter=None, reserved_exclude_uid=None,
+                          urgency=0.0, today=None):
     """Selectable replacement candidates for the operator workspace: governed QX60/QX65/QX80 combinations ranked by
-    Demo SUITABILITY (the SAME engine the board uses — proven fast movers, not the largest shortage), each carrying
-    the full human build, the physical path (USE NOW / WAIT FOR INCOMING / ORDER), the best on-ground and incoming
-    operational units (stock + manufacturer production/order id + ETA), retail-protection context, and the
-    combination id so the operator can SELECT it. `preferred_model` lifts the exec's stated preference in ranking
-    without narrowing the list; `model_filter` (QX60/QX65/QX80) narrows to one model when the operator picks a tab.
-    No VINs. Reuses rank_demo_candidates, _demo_pools, orderability and the order index — never a new ranking."""
+    Demo SUITABILITY (the SAME engine the board uses — proven fast movers weighed against retail protection AND
+    availability timing), each carrying the full human build, the physical path (USE NOW / WAIT FOR INCOMING /
+    ORDER), the best on-ground and incoming operational units (stock + Pipeline unit id + manufacturer
+    production/order id + ETA), retail-protection context, whether it is SELECTABLE/EXECUTABLE, and the
+    combination id. `preferred_model` lifts the exec's stated preference; `urgency`/`today` feed the bounded
+    availability-timing factor; `model_filter` narrows to one model. No full VINs. Reuses rank_demo_candidates,
+    _demo_pools, orderability and the order index — never a new ranking."""
     from ...operatorstd import demo_board as DB
+    from ...clock import to_utc_iso
+    if today is None:
+        today = to_utc_iso(app.stack.clock.now())[:10]
     certs, _lk = _certified_positions(app, scope)
     governed = _demo_governed_combos(app, scope)
     signals = _demo_signals(app, scope)
@@ -3751,8 +4025,10 @@ def _demo_candidate_cards(app, scope, *, preferred_model=None, model_filter=None
         depth = int(sig.get("depth", 0))
         cands.append({"cid": cid, "label": label_of.get(cid, ""), "model": model, "need": c["acquire_units"],
                       "dts_burden": sig.get("dts_burden", 0.0), "expected_demand": sig.get("expected_demand", 0.0),
-                      "depth": depth, "last_on_lot": depth <= 1, "has_incoming_or_order": True, "governed": True})
-    ranked = [r for r in DB.rank_demo_candidates(cands, preferred_model=(preferred_model or None)) if r.eligible]
+                      "depth": depth, "last_on_lot": depth <= 1, "has_incoming_or_order": True, "governed": True,
+                      "timing_days": _demo_timing_days(app, scope, cid, today, order_idx=order_idx)})
+    ranked = [r for r in DB.rank_demo_candidates(cands, preferred_model=(preferred_model or None),
+                                                 urgency=urgency) if r.eligible]
     cards = []
     for rank, sut in enumerate(ranked, start=1):
         cur, inc, order_ok = _demo_pools(app, scope, sut.cid, reserved_exclude_uid=reserved_exclude_uid)
@@ -3768,17 +4044,25 @@ def _demo_candidate_cards(app, scope, *, preferred_model=None, model_filter=None
         inc_unit = None
         if inc:
             u0 = inc[0]
-            ref = order_idx.get((u0.vin or "").strip().upper()) or {}
-            inc_unit = {"tag": _mask_vin(u0.vin), "stock": getattr(u0, "stock", "") or "",
-                        "order_number": ref.get("order_number", ""),
+            op_id = (getattr(u0, "vin", "") or "").strip()
+            ref = order_idx.get(op_id.upper()) or {}
+            onum = (ref.get("order_number") or "").strip()
+            inc_unit = {"pipeline_unit": _demo_op_ref(op_id), "stock": getattr(u0, "stock", "") or "",
+                        # a distinct manufacturer production/order number (only when it differs from the unit id)
+                        "order_number": (onum if onum and onum.upper() != op_id.upper() else ""),
                         "eta": ref.get("eta", "") or (getattr(u0, "arrival_month", "") or "")}
         path = ("USE NOW" if action in (DB.USE_NOW, DB.REORDER_BEFORE_PULLING)
                 else "WAIT" if action == DB.WAIT_FOR_INCOMING else "ORDER")
+        # EXECUTION GATE (Gap 3): an unresolved order path (ORDER PATH — REVIEW / NOT SAFE) is a visible
+        # alternative but is NOT selectable/reservable. A physical on-ground/incoming unit OR a governed
+        # executable ORDER FOR DEMO is required to select and PLAN SWAP.
+        executable = bool(cur or inc) or action == DB.ORDER_FOR_DEMO
         cards.append({"rank": rank, "cid": sut.cid, "model": sut.model, "build": sut.label,
                       "why": " · ".join(sut.reasons[:3]), "note": sut.note or "", "on_ground": cc, "incoming": ic,
                       "order_available": order_ok, "orderable": orderable, "action": action, "path": path,
                       "og_unit": og_unit, "inc_unit": inc_unit, "proof": sut.proof or {},
-                      "last_unit": 0 < cc <= 1})
+                      "last_unit": 0 < cc <= 1, "executable": executable,
+                      "timing_days": sut.proof.get("timing_days")})
     return cards
 
 

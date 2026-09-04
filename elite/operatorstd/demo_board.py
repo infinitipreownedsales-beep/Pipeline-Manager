@@ -262,19 +262,29 @@ class Suitability:
 
 # objective weights — retail velocity dominates; a bigger shortage never wins on size alone
 _W_VELOCITY, _W_DEPTH, _W_PREFERENCE, _W_CAVITY, _W_DTS = 3.0, 0.4, 2.0, 2.0, 0.01
+# availability-timing weight — BOUNDED so it breaks near-ties (on-ground > near incoming > distant) without
+# overpowering a materially better retail position: the largest timing swing (1.0) is below the cavity penalty
+# (2.0) and below a single retail-velocity tier (3.0). Scaled by how urgently the executive must move.
+_W_TIMING = 1.0
+_TIMING_CAP_DAYS = 60         # beyond ~2 months out, the timing disadvantage saturates
 
 
-def rank_demo_candidates(candidates, *, preferred_model=None):
+def rank_demo_candidates(candidates, *, preferred_model=None, urgency=0.0):
     """Rank governed Demo replacement combinations by DEMO SUITABILITY — a Demo removes a unit from retail and
     adds miles, so the best asset is a proven fast mover that still protects the retail position, NOT simply the
     largest certified shortage.
 
     Each candidate: {cid, label, model, need, dts_burden, expected_demand, depth, last_on_lot,
-    has_incoming_or_order, governed, post_demo_evidence(optional bool)}. Eligibility gates FIRST (governed +
-    physically placeable or a defensible incoming/order path); then real-evidence scoring: retail velocity
-    (Speed-to-Sell expected demand / days-to-sell), inventory depth, executive preference, minus a retail-cavity
-    penalty. Where no former-Demo mileage-resilience history exists, that limitation is STATED, not fabricated."""
+    has_incoming_or_order, governed, timing_days(optional), post_demo_evidence(optional bool)}. Eligibility gates
+    FIRST (governed + physically placeable or a defensible incoming/order path); then real-evidence scoring:
+    retail velocity (Speed-to-Sell expected demand / days-to-sell), inventory depth, executive preference, minus
+    a retail-cavity penalty and a BOUNDED availability-timing penalty. `urgency` (0..1) is how urgently this
+    executive must move — it scales the timing factor only, so timing matters when a swap is pressing and is
+    inert otherwise. `timing_days` is days until the candidate's soonest placeable unit (0 = on-ground, None =
+    no placeable physical unit / order-only = maximally distant). Where no former-Demo mileage-resilience history
+    exists, that limitation is STATED, not fabricated."""
     ranked = []
+    u = min(max(float(urgency or 0.0), 0.0), 1.0)
     for c in candidates:
         if not c.get("governed"):
             continue                                    # ungoverned/phantom identity can never be a Demo asset
@@ -289,8 +299,12 @@ def rank_demo_candidates(candidates, *, preferred_model=None):
         dts = float(c.get("dts_burden") or 0.0)
         pref = 1.0 if (preferred_model and c.get("model") == preferred_model) else 0.0
         cavity = 1.0 if (c.get("last_on_lot") and not has_path) else 0.0
+        # availability timing: 0d (on-ground) → no penalty; farther out → more penalty, scaled by urgency, capped
+        td = c.get("timing_days")
+        t_norm = 1.0 if td is None else min(max(float(td), 0.0), _TIMING_CAP_DAYS) / _TIMING_CAP_DAYS
+        timing_penalty = _W_TIMING * u * t_norm
         score = round(_W_VELOCITY * vel + _W_DEPTH * min(depth, 3) + _W_PREFERENCE * pref
-                      - _W_CAVITY * cavity - _W_DTS * dts, 4)
+                      - _W_CAVITY * cavity - _W_DTS * dts - timing_penalty, 4)
         # business language for the manager board — no raw decimals (exact numbers go in `proof`)
         reasons = []
         reasons.append("FAST MOVER · strong retail demand" if vel >= 3.0
@@ -298,11 +312,19 @@ def rank_demo_candidates(candidates, *, preferred_model=None):
         reasons.append(f"planning depth {depth} (breadth of the plan, not on-ground stock)")
         if pref:
             reasons.append("matches executive preference")
+        if u > 0:
+            if td == 0:
+                reasons.append("available now")
+            elif td is not None:
+                reasons.append(f"arrives in ~{int(td)}d")
+            else:
+                reasons.append("no on-ground/near unit — furthest to place")
         if cavity:
             reasons.append("would leave a retail cavity — protect/reorder first")
         note = "" if c.get("post_demo_evidence") else "no former-Demo mileage-resilience history yet"
         proof = {"expected_demand": vel, "days_to_sell_burden": dts, "planning_depth": depth,
-                 "certified_need": int(c.get("need") or 0), "preference_match": bool(pref), "score": score}
+                 "certified_need": int(c.get("need") or 0), "preference_match": bool(pref),
+                 "timing_days": td, "urgency": round(u, 2), "score": score}
         ranked.append(Suitability(c.get("cid"), c.get("label", ""), c.get("model", ""), score, eligible,
                                   reasons, note, proof))
     ranked.sort(key=lambda s: (s.eligible, s.score), reverse=True)

@@ -106,7 +106,7 @@ class TestDemoWorkspace(unittest.TestCase):
         ctx = OP._demo_current_context(self.p.app, SCOPE, u, "2026-01-02")
         self.assertIn("QX80", ctx["build"])                        # build survives the unit leaving the feed
         self.assertEqual(ctx["stock"], "S9")
-        self.assertIn("from assignment snapshot", ctx["inv_age"])  # honestly labelled as snapshot-derived
+        self.assertEqual(ctx["age_provenance"], "assignment snapshot")  # provenance is its own honest field
         self.assertEqual(ctx["in_stock_date"], "2025-09-01")
 
     # ---- B. replacement choice workspace (ALL | QX60 | QX65 | QX80) ---------------------------------------
@@ -184,7 +184,7 @@ class TestDemoWorkspace(unittest.TestCase):
         uid = self._add_user("Holly", "QX80")
         self.full.post(f"/demos/user/{uid}/assign", {"vin": "HOLLY80", "start": "2025-10-01", "mi": "40"})
         b = self.full.get(f"/demos/user/{uid}").body
-        self.assertIn("production/order #Q38296", b)              # the actionable manufacturer identifier
+        self.assertIn("Pipeline unit Q38296", b)                  # the internal operational identifier, labelled
         self.assertIn("ETA 2026-11", b)                           # ...with its timing
 
 
