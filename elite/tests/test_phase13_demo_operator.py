@@ -77,7 +77,7 @@ class TestDemoCockpitGoverned(unittest.TestCase):
         roster = self.p.app.prefs.get_pref(f"scope::{SCOPE}", "demo_roster", default=[])
         meta, alloc, _pools = OP._demo_cockpit(self.p.app, SCOPE, roster, "2026-01-02")   # fixture clock
         self.assertEqual(meta[uid]["decision"].state, DB.PLAN_SWAP)
-        tag = OP._mask_vin(alloc[uid]["unit"])                     # the ONE selected replacement unit
+        tag = OP._demo_op_ref(alloc[uid]["unit"])                  # the ONE selected replacement unit (canonical id)
         board = self.full.get("/demos").body
         detail = self.full.get(f"/demos/user/{uid}").body
         self.assertIn(tag, board)                                 # roster shows the selected unit
@@ -150,7 +150,7 @@ class TestDemoCockpitGoverned(unittest.TestCase):
         self._add_user("Holly", "QX80", vin="FULLVIN000000HOL1", start="2025-10-01")
         b = self.full.get("/demos").body
         self.assertNotIn("FULLVIN000000HOL1", b)                   # full VIN never on the manager board
-        self.assertIn("Unit", b)                                   # masked unit tag instead
+        self.assertIn("00HOL1", b)                                 # masked VIN tail shown instead of the full VIN
         self.assertNotIn("$", b)                                   # no economics dollars on execution board
 
     # 21: the current-demo cell is a human build + ONE operational unit — no "Unit X · Unit X" duplication.

@@ -90,7 +90,7 @@ class TestDemoPhysicalAvailability(unittest.TestCase):
         label = OP._demo_unit_label(self.p.app, SCOPE, "Q38296")
         self.assertIn("QX80", label)                              # model / trim / drivetrain / exterior
         self.assertTrue(any(c in label for c in ("Black Obsidian", "KH3")))
-        self.assertIn("Unit Q38296", label)                      # the operational unit tag, unchanged
+        self.assertIn("Pipeline unit Q38296", label)                      # the operational unit tag, unchanged
         # the incoming pool still selects exactly Q38296 (presentation did not change the selection)
         _cur, inc, _o = OP._demo_pools(self.p.app, SCOPE, self.gov.id)
         self.assertEqual([u.vin for u in inc], ["Q38296"])
@@ -104,12 +104,12 @@ class TestDemoPhysicalAvailability(unittest.TestCase):
         label = OP._demo_unit_label(self.p.app, SCOPE, "Q38296", combination_id=self.gov.id)
         self.assertIn("QX80", label)                              # human build from the governed combination
         self.assertTrue(any(c in label for c in ("Black Obsidian", "KH3")))
-        self.assertIn("Unit Q38296", label)                      # exact selected unit, unchanged
+        self.assertIn("Pipeline unit Q38296", label)                      # exact selected unit, unchanged
         self.assertNotIn("·  ·", label)
 
     def test_unit_label_falls_back_to_tag_when_build_unresolvable(self):
         # no DMS row AND no combination -> honest unit tag only, never a fabricated build
-        self.assertEqual(OP._demo_unit_label(self.p.app, SCOPE, "331601"), "Unit 331601")
+        self.assertEqual(OP._demo_unit_label(self.p.app, SCOPE, "331601"), "Pipeline unit 331601")
 
     # committed (active-demo) units are excluded from the pool — count-once holds over the live source too
     def test_committed_demo_unit_excluded_from_pool(self):

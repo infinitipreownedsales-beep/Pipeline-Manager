@@ -313,10 +313,15 @@ def rank_demo_candidates(candidates, *, preferred_model=None, urgency=0.0):
         if pref:
             reasons.append("matches executive preference")
         if u > 0:
-            if td == 0:
+            # the timing REASON comes from the caller's honest, format-aware label (a specific date gives a day
+            # count; a month-only ETA stays month-level and never fabricates a day). Fall back to a coarse phrase.
+            tlabel = c.get("timing_label")
+            if tlabel:
+                reasons.append(tlabel)
+            elif td == 0:
                 reasons.append("available now")
             elif td is not None:
-                reasons.append(f"arrives in ~{int(td)}d")
+                reasons.append("near-term arrival")
             else:
                 reasons.append("no on-ground/near unit — furthest to place")
         if cavity:

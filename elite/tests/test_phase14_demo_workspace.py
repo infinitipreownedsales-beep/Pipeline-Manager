@@ -92,9 +92,9 @@ class TestDemoWorkspace(unittest.TestCase):
         self.assertTrue(snap.get("in_stock_date"))                 # authoritative in-stock date derived
         # the detail page renders that context (operational unit + demo days + in-stock/inventory age)
         b = self.full.get(f"/demos/user/{uid}").body
-        self.assertIn("Operational unit", b)
+        self.assertIn("Pipeline/Elite unit", b)
         self.assertIn("Demo days", b)
-        self.assertIn("Unit OLLY80", b)                            # masked operational unit tag (last 6)
+        self.assertIn("HOLLY80", b)                                # short serial shown in full (never truncated)
         self.assertNotIn("Current demo VIN", b)                    # no VINs on the manager surface
 
     def test_a_context_survives_unit_leaving_feed(self):
