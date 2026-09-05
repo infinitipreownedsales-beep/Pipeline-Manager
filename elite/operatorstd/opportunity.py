@@ -172,7 +172,9 @@ def evaluate_portfolio(offers, positions, *, sort_offers=None) -> PortfolioResul
 
     result = PortfolioResult(offered=sum(max(1, int(o.quantity or 1)) for o in ordered))
     for offer in ordered:
-        pos = pos_map.get(offer.combination_key) or Position(offer.combination_key, 0.0, 0.0, True, offer.label)
+        # A combination with NO certified position has UNKNOWN demand — never assume zero. An unknown-demand
+        # position returns REVIEW (evidence-honest), never a false "already covered" DENY.
+        pos = pos_map.get(offer.combination_key) or Position(offer.combination_key, 0.0, 0.0, False, offer.label)
         pos_map.setdefault(offer.combination_key, pos)
         verdict = evaluate_offer(offer, pos)
         if verdict.recommendation == FIRM and verdict.recommended_qty > 0:

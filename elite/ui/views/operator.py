@@ -1063,21 +1063,25 @@ def register(app):
         if window:
             from ...ordering.ppo_commitments import evaluate_window
             certs, label_to_key = _certified_positions(app, s.scope)
-            key_for = lambda o: label_to_key.get(o.get("combo", ""), o.get("combo", ""))
+            cert_keys = {c["key"] for c in certs}
+            key_for = lambda o: _ppo_offer_key(o, label_to_key, cert_keys)
             res = evaluate_window(offers, certs, key_for_offer=key_for)
             verdicts, worked = res["verdicts"], res["worked"]
             combos = [lbl for _cid, lbl in _known_combos(app, s.scope)]
             entry = form("/ordering/ppo/offer",
                          f'<input type=hidden name=window value="{esc(window)}">'
-                         '<label>Offered combination (select a known combination; type only for a truly external one)</label>'
-                         + _datalist_input("combo", "ppo_combos", combos, placeholder="select or type external")
+                         '<label>Offered combination — select a known one, or type a manufacturer-offered '
+                         'governed identity (e.g. <code>86417 GAT/G</code>); Elite resolves the governed '
+                         'combination even if it has no planning row yet</label>'
+                         + _datalist_input("combo", "ppo_combos", combos, placeholder="select or type e.g. 86417 GAT/G")
                          + '<label>Quantity offered</label>'
                          '<input name=quantity type=number min=1 value=1 style="max-width:90px">'
                          '<label>VIN (optional — names the physical unit when known)</label>'
                          '<input name=vin placeholder="VIN" style="max-width:240px" autocomplete=off>'
                          '<label>Stock # (optional)</label><input name=stock placeholder="stock" style="max-width:140px">'
                          '<label class=mut><input type=checkbox name=external value=1> Truly external offer '
-                         '(orderability unknown → REVIEW)</label>',
+                         '(a non-governed identity with unknown orderability → REVIEW). A governed manufacturer '
+                         'offer does NOT need this.</label>',
                          csrf=s.csrf_token, submit="Add offer (Elite will evaluate)")
 
             # top summary: Offered N · Firmed N · Denied N · Review N · Unworked N
@@ -1150,11 +1154,18 @@ def register(app):
         except (TypeError, ValueError):
             qty = 1
         if window and combo:
+            external = bool(req.form.get("external"))
             offers = _ws_get(app, s.scope, f"ppo_offers::{window}", []) or []
-            offers.append({"id": new_id("ppo"), "combo": combo, "quantity": qty,
+            # resolve/create the GOVERNED manufacturer-offered identity (no supply / order / vehicle / demand);
+            # a governed offer is available/allocatable for THIS PPO event and needs no "external" marking.
+            resolved = None if external else _ppo_resolve_offer(app, s.scope, combo)
+            offers.append({"id": new_id("ppo"),
+                           "combo": (resolved["label"] if resolved else combo), "quantity": qty,
+                           "combination_id": (resolved["combination_id"] if resolved else None),
+                           "governed": bool(resolved),
                            "vin": (req.form.get("vin") or "").strip().upper() or None,
                            "stock": (req.form.get("stock") or "").strip() or None,
-                           "external": bool(req.form.get("external")),
+                           "external": external,
                            "at": to_utc_iso(app.stack.clock.now())[:10]})
             _ws_put(app, s.scope, f"ppo_offers::{window}", offers)
             _ws_put(app, s.scope, "ppo_current_window", window)
@@ -1183,7 +1194,8 @@ def register(app):
             aqty = 0
         offers = _ws_get(app, s.scope, f"ppo_offers::{window}", []) or []
         certs, label_to_key = _certified_positions(app, s.scope)
-        key_for = lambda o: label_to_key.get(o.get("combo", ""), o.get("combo", ""))
+        cert_keys = {c["key"] for c in certs}
+        key_for = lambda o: _ppo_offer_key(o, label_to_key, cert_keys)
         # preserve the machine recommendation AT THIS MOMENT (against the other worked offers' disposable state)
         rec = machine_recommendation_at(offers, certs, oid, key_for_offer=key_for) or {}
         for o in offers:
@@ -2958,6 +2970,74 @@ def _certified_positions(app, scope):
         label_to_key[human] = cid
         label_to_key[_readable(canonical)] = cid       # older offers stored the compact code label
     return certs, label_to_key
+
+
+def _ppo_combo_governed(app, scope, canonical):
+    """Governed-identity gate for a PPO offer combination (same discipline as the Demo/CTP executable gate):
+    a recognized family AND governed exterior + interior names, with nothing unresolved. A phantom / unmapped
+    identity is never resolved into a sellable combination."""
+    try:
+        from .domains import _describe
+        d = _describe(app, scope, canonical)
+        return bool(d and getattr(d, "has_family", False)
+                    and (getattr(d, "exterior_name", "") or "").strip()
+                    and (getattr(d, "interior_name", "") or "").strip()
+                    and not getattr(d, "unresolved", ()))
+    except Exception:   # noqa: BLE001
+        return False
+
+
+def _ppo_resolve_offer(app, scope, combo_text):
+    """Resolve a PPO offer's combination text to a GOVERNED sellable-combination identity, RESOLVING or CREATING
+    the identity row on demand — WITHOUT creating Supply, a Production Order, a Vehicle Unit, or any demand. This
+    lets Kyle enter a current manufacturer-offered governed identity (e.g. `86417 GAT/G` -> QX80 SPORT 4WD 8641
+    GAT/G) even when that exact combination has never previously acquired a planning/database row.
+
+    Accepts either an existing known human label, or a compact `CODE ... EXT/INT` manufacturer offer. Returns
+    {combination_id, canonical, label, governed} or None when the text cannot be resolved to a governed identity
+    (the caller then keeps it as a free-text/external offer)."""
+    txt = (combo_text or "").strip()
+    if not txt:
+        return None
+    conn = _conn(app)
+    # 1) an already-known combination (the offer text matches an existing sellable_combination label)
+    for r in conn.execute("SELECT id, canonical_identity FROM sellable_combination WHERE store_scope=?",
+                          (scope,)).fetchall():
+        canonical = r["canonical_identity"] or r["id"]
+        if txt in (_readable_h(app, scope, canonical), _readable(canonical)):
+            return {"combination_id": r["id"], "canonical": canonical,
+                    "label": _readable_h(app, scope, canonical),
+                    "governed": _ppo_combo_governed(app, scope, canonical)}
+    # 2) a compact manufacturer offer: an OEM/model CODE (4-5 digits) plus an EXTERIOR/INTERIOR token
+    import re
+    mcode = next(iter(re.findall(r"\b\d{4,5}\b", txt)), None)
+    m = re.search(r"\b([A-Za-z0-9]{2,4})\s*/\s*([A-Za-z0-9]{1,3})\b", txt)
+    if not (mcode and m):
+        return None
+    ext, inte = m.group(1).upper(), m.group(2).upper()
+    from ...newinv.dms_identity import dms_planning_identity, resolve_or_create_planning_combination
+    row = {"model_code": mcode, "exterior": ext, "interior": inte}
+    canonical = dms_planning_identity(row)
+    if not _ppo_combo_governed(app, scope, canonical):
+        return None                                    # ungoverned/phantom identity — never auto-created
+    # resolve/create the GOVERNED combination identity only (no supply / order / vehicle / demand)
+    from ...newinv.store import NewInvStore
+    comb = resolve_or_create_planning_combination(NewInvStore(conn, app.stack.clock), app.stack.clock, row,
+                                                  scope, source_ref="ppo-offer")
+    if comb is None:
+        return None
+    return {"combination_id": comb.id, "canonical": comb.canonical_identity,
+            "label": _readable_h(app, scope, comb.canonical_identity), "governed": True}
+
+
+def _ppo_offer_key(offer, label_to_key, cert_keys):
+    """Certified-position key for a PPO offer: prefer its resolved combination_id when that combination actually
+    carries a certified position, else the label->key map, else the raw label. Keeps FIRM/DENY on a real
+    certified position and lets an offer with no certified position fall through to REVIEW (never a false DENY)."""
+    cidv = offer.get("combination_id")
+    if cidv and cidv in cert_keys:
+        return cidv
+    return label_to_key.get(offer.get("combo", ""), offer.get("combo", ""))
 
 
 def _ctp_norm_key(v):
